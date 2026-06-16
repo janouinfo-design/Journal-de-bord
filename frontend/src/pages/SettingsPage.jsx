@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Shield, Eye, EyeOff, Briefcase, Loader2, Save, Truck } from "lucide-react";
+import { Shield, Eye, EyeOff, Briefcase, Loader2, Save, Truck, RefreshCw, Cloud, CloudOff } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 const MODE_OPTIONS = [
@@ -30,18 +30,37 @@ export default function SettingsPage() {
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [navixy, setNavixy] = useState({ configured: false });
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [syncDays, setSyncDays] = useState(30);
 
   async function load() {
     setLoading(true);
     try {
-      const [s, v] = await Promise.all([
+      const [s, v, n] = await Promise.all([
         api.get("/livre/settings").then(r => r.data),
         api.get("/livre/vehicles").then(r => r.data),
+        api.get("/livre/navixy/status").then(r => r.data).catch(() => ({ configured: false })),
       ]);
-      setSettings(s); setVehicles(v);
+      setSettings(s); setVehicles(v); setNavixy(n);
     } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  async function syncNavixy() {
+    setSyncing(true);
+    try {
+      const { data } = await api.post(`/livre/navixy/sync?days=${syncDays}`);
+      setLastSync(data);
+      toast.success(
+        `Navixy : ${data.trips_new} nouveaux trajets, ${data.trips_updated} mis à jour · ${data.trackers_with_data}/${data.trackers} véhicules actifs`
+      );
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Synchronisation impossible");
+    } finally { setSyncing(false); }
+  }
 
   async function save() {
     setSaving(true);
@@ -84,6 +103,55 @@ export default function SettingsPage() {
           Politique de confidentialité, moteur de règles automatiques et modes véhicules.
         </p>
       </div>
+
+      {/* Navixy live sync */}
+      <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex-1 min-w-[280px]">
+            <h3 className="text-sm font-semibold text-slate-800 mb-1 flex items-center gap-2">
+              {navixy.configured ? <Cloud className="w-4 h-4 text-[#2196F3]" /> : <CloudOff className="w-4 h-4 text-slate-400" />}
+              Synchronisation Navixy
+            </h3>
+            <p className="text-xs text-slate-500 max-w-xl leading-relaxed">
+              {navixy.configured
+                ? "Connecté à l'API Navixy. La synchronisation importe les véhicules (tracker/list), les chauffeurs (employee/list), les zones (zone/list) et les trajets (track/list) sur la période sélectionnée."
+                : "NAVIXY_HASH non configuré. Renseignez la clé API dans /app/backend/.env pour activer la synchronisation en temps réel."}
+            </p>
+            {lastSync && (
+              <div className="mt-3 text-xs bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-slate-700 font-mono inline-flex gap-4 flex-wrap">
+                <span>✓ {lastSync.trackers} véhicules</span>
+                <span>· {lastSync.drivers} chauffeurs</span>
+                <span>· {lastSync.zones} zones</span>
+                <span>· {lastSync.trips_new} nouveaux</span>
+                <span>· {lastSync.trips_updated} màj</span>
+                {lastSync.reclassified !== undefined && <span>· {lastSync.reclassified} reclassifiés</span>}
+              </div>
+            )}
+          </div>
+          <div className="flex items-end gap-2">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Période (jours)</p>
+              <Input
+                type="number" min="1" max="365"
+                data-testid="settings-navixy-days"
+                disabled={!navixy.configured || syncing || user?.role !== "admin"}
+                value={syncDays}
+                onChange={(e) => setSyncDays(parseInt(e.target.value, 10) || 30)}
+                className="w-24"
+              />
+            </div>
+            <Button
+              disabled={!navixy.configured || syncing || user?.role !== "admin"}
+              onClick={syncNavixy}
+              data-testid="settings-navixy-sync"
+              className="bg-[#2196F3] hover:bg-[#1E88E5] text-white"
+            >
+              {syncing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              Synchroniser
+            </Button>
+          </div>
+        </div>
+      </Card>
 
       {/* Privacy modes */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">

@@ -10,6 +10,8 @@ from app.auth import get_current_user, require_roles
 from app.db import get_db
 from app.rules import classify_trip, apply_rules_to_all, default_settings
 from app.reports import trips_to_csv, trips_to_xlsx, trips_to_pdf, swiss_tax_report_pdf
+from app.navixy_client import is_configured as navixy_configured, NavixyError
+from app.navixy_sync import sync_navixy
 
 
 router = APIRouter(prefix="/livre", tags=["livre-de-bord"])
@@ -24,7 +26,8 @@ async def _get_settings(db) -> dict:
     s = await db.settings.find_one({"id": "default"}, {"_id": 0})
     if not s:
         s = default_settings()
-        await db.settings.insert_one(s)
+        await db.settings.insert_one(dict(s))
+    s.pop("_id", None)
     return s
 
 
@@ -81,6 +84,27 @@ async def bootstrap(force: bool = False, user=Depends(require_roles("admin"))):
     await _get_settings(db)
     updated = await apply_rules_to_all(db)
     return {"ok": True, "trips_reclassified": updated}
+
+
+# ---------- Navixy live sync ----------
+@router.get("/navixy/status")
+async def navixy_status(user=Depends(require_roles("admin", "manager"))):
+    return {"configured": navixy_configured()}
+
+
+@router.post("/navixy/sync")
+async def navixy_sync_endpoint(days: int = 30, user=Depends(require_roles("admin"))):
+    """Pull live data from Navixy: trackers, employees, zones, tracks."""
+    if not navixy_configured():
+        raise HTTPException(400, "NAVIXY_HASH non configuré dans .env")
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days doit être entre 1 et 365")
+    try:
+        return await sync_navixy(days=days, force_reclassify=True)
+    except NavixyError as e:
+        raise HTTPException(502, f"Navixy API: {e}")
+    except Exception as e:
+        raise HTTPException(500, f"Erreur de synchronisation: {e}")
 
 
 # ---------- Settings ----------
