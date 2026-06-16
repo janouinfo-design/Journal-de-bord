@@ -8,6 +8,26 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+// Global 401 handler — fires the redirect once, lets callers handle their own errors.
+let _redirecting = false;
+api.interceptors.response.use(
+  (resp) => resp,
+  (err) => {
+    const status = err?.response?.status;
+    const url = err?.config?.url || "";
+    // /auth/me 401 is expected (= not logged in); don't redirect from it
+    if (status === 401 && !url.includes("/auth/me") && !url.includes("/auth/login")) {
+      if (!_redirecting && typeof window !== "undefined") {
+        _redirecting = true;
+        if (window.location.pathname !== "/login") {
+          window.location.replace("/login");
+        }
+      }
+    }
+    return Promise.reject(err);
+  },
+);
+
 export function formatApiErrorDetail(detail) {
   if (detail == null) return "Une erreur est survenue. Veuillez réessayer.";
   if (typeof detail === "string") return detail;
