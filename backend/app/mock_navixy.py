@@ -135,14 +135,17 @@ async def seed_mock_data(force: bool = False):
         await db.trips.delete_many({})
         await db.geofences.delete_many({})
 
-    # Drivers
+    # Drivers — first driver maps to the chauffeur user account (env DRIVER_EMAIL)
+    import os
+    driver_user_email = os.environ.get("DRIVER_EMAIL", "chauffeur@logitrak.ch").lower()
     drivers = []
     for i, name in enumerate(DRIVER_NAMES):
+        email = driver_user_email if i == 0 else f"{name.lower().replace(' ', '.')}@logitrak.ch"
         drivers.append({
             "id": str(uuid.uuid4()),
             "tenant_id": "default",
             "name": name,
-            "email": f"{name.lower().replace(' ', '.')}@logitrak.ch",
+            "email": email,
             "navixy_employee_id": 1000 + i,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
