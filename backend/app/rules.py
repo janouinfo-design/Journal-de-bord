@@ -81,14 +81,22 @@ async def _get_schedule_for(db, driver_id: Optional[str]) -> dict:
 
 
 async def apply_rules_to_all(db):
-    """Reclassify auto-classified trips using the current settings + schedules."""
+    """Reclassify auto-classified trips using the current settings + schedules.
+
+    Trips belonging to vehicles in 'always_pro' / 'always_perso' mode are
+    re-evaluated unconditionally (manual overrides yield to the vehicle policy).
+    """
     settings = await db.settings.find_one({"id": "default"}, {"_id": 0}) or default_settings()
     vehicles = {v["id"]: v async for v in db.vehicles.find({}, {"_id": 0})}
+    forced_vehicle_ids = [vid for vid, v in vehicles.items() if v.get("mode") in ("always_pro", "always_perso")]
     default_sched = await _get_schedule_for(db, None)
     # Cache per-driver schedules
     cache: dict = {}
     updated = 0
-    async for trip in db.trips.find({"auto_classified": True}, {"_id": 0}):
+    query = {"$or": [{"auto_classified": True}]}
+    if forced_vehicle_ids:
+        query["$or"].append({"vehicle_id": {"$in": forced_vehicle_ids}})
+    async for trip in db.trips.find(query, {"_id": 0}):
         drv = trip.get("driver_id")
         if drv in cache:
             sched = cache[drv]
@@ -101,7 +109,7 @@ async def apply_rules_to_all(db):
         if trip.get("classification") != cls:
             await db.trips.update_one(
                 {"id": trip["id"]},
-                {"$set": {"classification": cls}},
+                {"$set": {"classification": cls, "auto_classified": True}},
             )
             updated += 1
     return updated

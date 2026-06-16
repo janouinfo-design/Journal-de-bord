@@ -54,6 +54,26 @@ affectation manuelle, droits par rôle.
   - Optimistic UI updates pour ajout/suppression
 
 ## Bug fixes
+
+### Iteration 4 — Filtres Groupe/Société + KPI complets + always_perso strict
+- Backend : nouveaux endpoints `GET /api/livre/groups` (premier token des plaques) et
+  `GET /api/livre/companies` (distinct tenant_id, label "Logitrak" pour default).
+- Backend : `/dashboard`, `/trips`, `/reports/export` propagent désormais
+  les filtres `group` et `company`.
+- Backend KPI étendus : `kpi.unclassified_km`, `kpi.pro_fuel`, `kpi.perso_fuel`.
+- Backend `rules.apply_rules_to_all()` : les véhicules en mode `always_pro` /
+  `always_perso` reclassifient TOUS leurs trajets (override manuel inclus) au lieu
+  des seuls trajets auto-classifiés — sémantique "100 % Personnel" stricte.
+- Frontend : Dashboard expose 6 filtres (Chauffeur / Véhicule / Groupe / Société /
+  Du / Au) + 8 KPI dont "Km non classifiés" et "Carburant personnel".
+- Frontend : HistoryPage Pro/Perso ajoute Groupe + Société, exports PDF/Excel/CSV
+  respectent désormais tous les filtres actifs (group/company inclus).
+- Privacy invariant validé end-to-end : en mode "Personnel Masqué" pour gestionnaires,
+  /trips renvoie {id, classification, distance_km, masked:true}, /reports/export renvoie
+  une seule ligne agrégée ("—"), et l'UI HistoryPage cache list+exports.
+- Tests : backend pytest 16/16 PASS (iteration 4), frontend e2e 100%.
+
+### Bug fixes
 - xlsx export merged-cell crash
 - Driver-user mapping (chauffeur ↔ Jean Dupont)
 - AssignmentsDialog refresh timing (optimistic insert)
