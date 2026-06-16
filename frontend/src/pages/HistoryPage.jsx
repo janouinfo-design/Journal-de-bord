@@ -22,7 +22,9 @@ export default function HistoryPage({ kind }) {
   const [loading, setLoading] = useState(true);
   const [drivers, setDrivers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
-  const [filters, setFilters] = useState({ driver_id: "all", vehicle_id: "all", start: "", end: "" });
+  const [groups, setGroups] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [filters, setFilters] = useState({ driver_id: "all", vehicle_id: "all", group: "all", company: "all", start: "", end: "" });
 
   async function fetchAll() {
     setLoading(true);
@@ -30,6 +32,8 @@ export default function HistoryPage({ kind }) {
       const params = { classification: kind === "pro" ? "professional" : "personal" };
       if (filters.driver_id && filters.driver_id !== "all") params.driver_id = filters.driver_id;
       if (filters.vehicle_id && filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+      if (filters.group && filters.group !== "all") params.group = filters.group;
+      if (filters.company && filters.company !== "all") params.company = filters.company;
       if (filters.start) params.start = new Date(filters.start).toISOString();
       if (filters.end) params.end = new Date(filters.end).toISOString();
       const { data } = await api.get("/livre/trips", { params });
@@ -40,11 +44,13 @@ export default function HistoryPage({ kind }) {
 
   useEffect(() => {
     (async () => {
-      const [d, v] = await Promise.all([
+      const [d, v, g, c] = await Promise.all([
         api.get("/livre/drivers").then(r => r.data),
         api.get("/livre/vehicles").then(r => r.data),
+        api.get("/livre/groups").then(r => r.data).catch(() => []),
+        api.get("/livre/companies").then(r => r.data).catch(() => []),
       ]);
-      setDrivers(d); setVehicles(v);
+      setDrivers(d); setVehicles(v); setGroups(g); setCompanies(c);
     })();
   }, []);
 
@@ -68,6 +74,8 @@ export default function HistoryPage({ kind }) {
       };
       if (filters.driver_id && filters.driver_id !== "all") params.driver_id = filters.driver_id;
       if (filters.vehicle_id && filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+      if (filters.group && filters.group !== "all") params.group = filters.group;
+      if (filters.company && filters.company !== "all") params.company = filters.company;
       if (filters.start) params.start = new Date(filters.start).toISOString();
       if (filters.end) params.end = new Date(filters.end).toISOString();
       const res = await api.get("/livre/reports/export", { params, responseType: "blob" });
@@ -92,6 +100,8 @@ export default function HistoryPage({ kind }) {
         if (filters.end) params.end = new Date(filters.end).toISOString();
         if (filters.driver_id && filters.driver_id !== "all") params.driver_id = filters.driver_id;
         if (filters.vehicle_id && filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+        if (filters.group && filters.group !== "all") params.group = filters.group;
+        if (filters.company && filters.company !== "all") params.company = filters.company;
         const { data } = await api.get("/livre/dashboard", { params });
         setMaskedSummary(data.kpi);
       } catch { setMaskedSummary(null); }
@@ -172,7 +182,7 @@ export default function HistoryPage({ kind }) {
       <>
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-4">
         <div className="flex items-end justify-between gap-3 flex-wrap">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 flex-1">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-3 flex-1">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Chauffeur</p>
               <Select value={filters.driver_id} onValueChange={(v) => setFilters({ ...filters, driver_id: v })}>
@@ -190,6 +200,26 @@ export default function HistoryPage({ kind }) {
                 <SelectContent>
                   <SelectItem value="all">Tous les véhicules</SelectItem>
                   {vehicles.map(v => <SelectItem key={v.id} value={v.id}>{v.plate} — {v.model}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Groupe</p>
+              <Select value={filters.group} onValueChange={(v) => setFilters({ ...filters, group: v })}>
+                <SelectTrigger data-testid={TEST_IDS.history.filterGroup}><SelectValue placeholder="Tous" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous</SelectItem>
+                  {groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Société</p>
+              <Select value={filters.company} onValueChange={(v) => setFilters({ ...filters, company: v })}>
+                <SelectTrigger data-testid={TEST_IDS.history.filterCompany}><SelectValue placeholder="Toutes" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Toutes</SelectItem>
+                  {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

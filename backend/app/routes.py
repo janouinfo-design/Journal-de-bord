@@ -388,6 +388,25 @@ async def list_geofences(user=Depends(get_current_user)):
     return rows
 
 
+@router.get("/groups")
+async def list_groups(user=Depends(get_current_user)):
+    """Distinct fleet groups derived from the first token of vehicle plates (e.g. 'GE')."""
+    db = get_db()
+    rows = await db.vehicles.find({"tenant_id": "default"}, {"_id": 0, "plate": 1}).to_list(1000)
+    groups = sorted({(r.get("plate") or "").split(" ")[0] for r in rows if r.get("plate")})
+    return [{"id": g, "name": g} for g in groups if g]
+
+
+@router.get("/companies")
+async def list_companies(user=Depends(get_current_user)):
+    """Distinct tenants/companies. Currently mono-tenant — exposed for future multi-tenant."""
+    db = get_db()
+    tenants = await db.vehicles.distinct("tenant_id")
+    companies = sorted({t for t in tenants if t})
+    label_map = {"default": "Logitrak"}
+    return [{"id": c, "name": label_map.get(c, c)} for c in companies]
+
+
 # ---------- Dashboard ----------
 @router.get("/dashboard")
 async def dashboard(

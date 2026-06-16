@@ -80,7 +80,7 @@ export default function DashboardPage() {
           <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Tableau de bord</p>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900 mt-1">Livre de Bord</h1>
           <p className="text-sm text-slate-500 mt-1.5">
-            Vue d'ensemble des kilomètres professionnels et personnels — données GPS officielles Navixy.
+            Vue d&apos;ensemble des kilomètres professionnels et personnels — données GPS officielles Navixy.
           </p>
         </div>
         <div className="text-right">
@@ -96,6 +96,65 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      <Card data-testid="dashboard-filters" className="bg-white border-slate-200 shadow-sm rounded-md p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Filter className="w-4 h-4 text-slate-500" />
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">Filtres</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Chauffeur</p>
+            <Select value={filters.driver_id} onValueChange={(v) => setFilters({ ...filters, driver_id: v })}>
+              <SelectTrigger data-testid={TEST_IDS.dashboard.filterDriver}><SelectValue placeholder="Tous" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous</SelectItem>
+                {drivers.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Véhicule</p>
+            <Select value={filters.vehicle_id} onValueChange={(v) => setFilters({ ...filters, vehicle_id: v })}>
+              <SelectTrigger data-testid={TEST_IDS.dashboard.filterVehicle}><SelectValue placeholder="Tous" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous</SelectItem>
+                {vehicles.map(v => <SelectItem key={v.id} value={v.id}>{v.plate}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Groupe</p>
+            <Select value={filters.group} onValueChange={(v) => setFilters({ ...filters, group: v })}>
+              <SelectTrigger data-testid={TEST_IDS.dashboard.filterGroup}><SelectValue placeholder="Tous" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous</SelectItem>
+                {groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Société</p>
+            <Select value={filters.company} onValueChange={(v) => setFilters({ ...filters, company: v })}>
+              <SelectTrigger data-testid={TEST_IDS.dashboard.filterCompany}><SelectValue placeholder="Toutes" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Toutes</SelectItem>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Du</p>
+            <Input type="date" data-testid={TEST_IDS.dashboard.filterStart}
+              value={filters.start} onChange={(e) => setFilters({ ...filters, start: e.target.value })} />
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Au</p>
+            <Input type="date" data-testid={TEST_IDS.dashboard.filterEnd}
+              value={filters.end} onChange={(e) => setFilters({ ...filters, end: e.target.value })} />
+          </div>
+        </div>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <KpiCard testId={TEST_IDS.dashboard.kpiProKm} label="Km professionnels" value={fmtKm(k.pro_km)} accent="pro" icon={Briefcase}
           sub={`${k.trips_count} trajets · ${fmtDuration(k.pro_time_min)}`} />
@@ -103,14 +162,14 @@ export default function DashboardPage() {
           sub={`${fmtDuration(k.perso_time_min)} de conduite`} />
         <KpiCard testId={TEST_IDS.dashboard.kpiTotalKm} label="Km totaux" value={fmtKm(k.total_km)} icon={Activity}
           sub="Toutes catégories" />
-        <KpiCard testId="kpi-unclassified-km" label="Km non classifiés" value={fmtKm(k.unclassified_km || 0)}
+        <KpiCard testId={TEST_IDS.dashboard.kpiUnclassifiedKm} label="Km non classifiés" value={fmtKm(k.unclassified_km || 0)}
           accent={(k.unclassified_km || 0) > 0 ? "warning" : "default"} icon={AlertCircle}
           sub={(k.unclassified_km || 0) > 0 ? "Trajets sans règle correspondante" : "Tout classé"} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPro} label="% professionnel" value={fmtPct(k.pct_pro)} accent="pro" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPerso} label="% personnel" value={fmtPct(k.pct_perso)} accent="perso" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiFuel} label="Carburant professionnel" value={`${k.pro_fuel.toFixed(1)} L`} accent="pro" icon={Fuel}
           sub="Consommation pro" />
-        <KpiCard testId="kpi-fuel-perso" label="Carburant personnel" value={`${k.perso_fuel.toFixed(1)} L`} accent="warning" icon={Fuel}
+        <KpiCard testId={TEST_IDS.dashboard.kpiFuelPerso} label="Carburant personnel" value={`${k.perso_fuel.toFixed(1)} L`} accent="warning" icon={Fuel}
           sub="Consommation perso" />
       </div>
 
