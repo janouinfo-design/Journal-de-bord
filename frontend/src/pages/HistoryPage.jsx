@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, fmtKm, fmtDateTime, fmtDuration } from "@/lib/api";
+import { api, fmtKm, fmtDateTime, fmtDuration, downloadBlob } from "@/lib/api";
 import { TEST_IDS } from "@/constants/testIds";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { ClassificationBadge } from "@/components/livre/Badges";
 import { toast } from "sonner";
 import {
   Loader2, ArrowLeftRight, Briefcase, User, EyeOff, Gauge,
-  MapPin, Fuel, Clock, Calendar,
+  MapPin, Fuel, Clock, Calendar, FileText, FileSpreadsheet, FileDown,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -57,6 +57,24 @@ export default function HistoryPage({ kind }) {
       fetchAll();
     } catch (e) {
       toast.error("Modification refusée");
+    }
+  }
+
+  async function exportReport(fmt) {
+    try {
+      const params = {
+        classification: kind === "pro" ? "professional" : "personal",
+        fmt,
+      };
+      if (filters.driver_id && filters.driver_id !== "all") params.driver_id = filters.driver_id;
+      if (filters.vehicle_id && filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+      if (filters.start) params.start = new Date(filters.start).toISOString();
+      if (filters.end) params.end = new Date(filters.end).toISOString();
+      const res = await api.get("/livre/reports/export", { params, responseType: "blob" });
+      downloadBlob(res.data, `rapport_${kind}_${Date.now()}.${fmt}`);
+      toast.success(`Export ${fmt.toUpperCase()} prêt`);
+    } catch (e) {
+      toast.error("Export impossible");
     }
   }
 
@@ -109,36 +127,64 @@ export default function HistoryPage({ kind }) {
       )}
 
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Chauffeur</p>
-            <Select value={filters.driver_id} onValueChange={(v) => setFilters({ ...filters, driver_id: v })}>
-              <SelectTrigger data-testid={TEST_IDS.history.filterDriver}><SelectValue placeholder="Tous" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Tous les chauffeurs</SelectItem>
-                {drivers.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 flex-1">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Chauffeur</p>
+              <Select value={filters.driver_id} onValueChange={(v) => setFilters({ ...filters, driver_id: v })}>
+                <SelectTrigger data-testid={TEST_IDS.history.filterDriver}><SelectValue placeholder="Tous" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les chauffeurs</SelectItem>
+                  {drivers.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Véhicule</p>
+              <Select value={filters.vehicle_id} onValueChange={(v) => setFilters({ ...filters, vehicle_id: v })}>
+                <SelectTrigger data-testid={TEST_IDS.history.filterVehicle}><SelectValue placeholder="Tous" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les véhicules</SelectItem>
+                  {vehicles.map(v => <SelectItem key={v.id} value={v.id}>{v.plate} — {v.model}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Du</p>
+              <Input type="date" data-testid={TEST_IDS.history.filterStart}
+                value={filters.start} onChange={(e) => setFilters({ ...filters, start: e.target.value })} />
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Au</p>
+              <Input type="date" data-testid={TEST_IDS.history.filterEnd}
+                value={filters.end} onChange={(e) => setFilters({ ...filters, end: e.target.value })} />
+            </div>
           </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Véhicule</p>
-            <Select value={filters.vehicle_id} onValueChange={(v) => setFilters({ ...filters, vehicle_id: v })}>
-              <SelectTrigger data-testid={TEST_IDS.history.filterVehicle}><SelectValue placeholder="Tous" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Tous les véhicules</SelectItem>
-                {vehicles.map(v => <SelectItem key={v.id} value={v.id}>{v.plate} — {v.model}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Du</p>
-            <Input type="date" data-testid={TEST_IDS.history.filterStart}
-              value={filters.start} onChange={(e) => setFilters({ ...filters, start: e.target.value })} />
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Au</p>
-            <Input type="date" data-testid={TEST_IDS.history.filterEnd}
-              value={filters.end} onChange={(e) => setFilters({ ...filters, end: e.target.value })} />
+        </div>
+        <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
+          <p className="text-xs text-slate-500">
+            Export selon les filtres ci-dessus · {trips.length} trajet{trips.length > 1 ? "s" : ""} concernés.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm" onClick={() => exportReport("pdf")}
+              data-testid={TEST_IDS.reports.btnPdf}
+              className="bg-[#2196F3] hover:bg-[#1E88E5] text-white"
+            >
+              <FileText className="w-4 h-4 mr-1.5" /> Télécharger PDF
+            </Button>
+            <Button
+              size="sm" variant="outline" onClick={() => exportReport("xlsx")}
+              data-testid={TEST_IDS.reports.btnXlsx}
+            >
+              <FileSpreadsheet className="w-4 h-4 mr-1.5" /> Excel
+            </Button>
+            <Button
+              size="sm" variant="outline" onClick={() => exportReport("csv")}
+              data-testid={TEST_IDS.reports.btnCsv}
+            >
+              <FileDown className="w-4 h-4 mr-1.5" /> CSV
+            </Button>
           </div>
         </div>
       </Card>

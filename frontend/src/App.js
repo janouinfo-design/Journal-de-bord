@@ -6,7 +6,6 @@ import AppLayout from "@/components/layout/AppLayout";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import HistoryPage from "@/pages/HistoryPage";
-import ReportsPage from "@/pages/ReportsPage";
 import TaxSwissPage from "@/pages/TaxSwissPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { Toaster } from "@/components/ui/sonner";
@@ -29,8 +28,8 @@ function App() {
             <Route path="dashboard" element={<DashboardPage />} />
             <Route path="history/pro" element={<HistoryPage kind="pro" />} />
             <Route path="history/perso" element={<HistoryPage kind="perso" />} />
-            <Route path="reports/pro" element={<ReportsPage kind="pro" />} />
-            <Route path="reports/perso" element={<ReportsPage kind="perso" />} />
+            <Route path="reports/pro" element={<Navigate to="/livre/history/pro" replace />} />
+            <Route path="reports/perso" element={<Navigate to="/livre/history/perso" replace />} />
             <Route path="reports/tax-swiss" element={<TaxSwissPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>

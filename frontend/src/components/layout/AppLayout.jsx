@@ -30,8 +30,6 @@ const NAV_SECTIONS = [
   {
     label: "Générer",
     items: [
-      { to: "/livre/reports/pro", label: "Générer rapport professionnel", icon: FileText, testId: TEST_IDS.layout.navReportsPro },
-      { to: "/livre/reports/perso", label: "Générer rapport personnel", icon: FileText, testId: TEST_IDS.layout.navReportsPerso },
       { to: "/livre/reports/tax-swiss", label: "Rapport fiscal suisse", icon: Receipt, testId: TEST_IDS.layout.navTaxSwiss },
     ],
   },
