@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
-import { Save, Loader2, RotateCcw, Calendar } from "lucide-react";
+import { Save, Loader2, RotateCcw, Calendar, Copy } from "lucide-react";
+import DayTimeline from "@/components/livre/DayTimeline";
 
 const DAYS_FR = [
   { idx: 0, label: "Lundi" },
@@ -87,6 +88,23 @@ export default function ScheduleEditor({ canEdit, drivers }) {
           : d,
       ),
     );
+  }
+
+  function copyMondayToWeekdays() {
+    const monday = days.find((d) => d.day === 0);
+    if (!monday) return;
+    setDays((prev) =>
+      prev.map((d) =>
+        d.day >= 1 && d.day <= 4
+          ? {
+              ...d,
+              type: monday.type,
+              periods: monday.periods.map((p) => ({ ...p })),
+            }
+          : d,
+      ),
+    );
+    toast.success("Lundi copié sur Mar → Ven");
   }
 
   async function save() {
@@ -184,6 +202,21 @@ export default function ScheduleEditor({ canEdit, drivers }) {
             </div>
           )}
         </RadioGroup>
+
+        <div className="mt-4 pt-4 border-t border-slate-200 flex items-center justify-between flex-wrap gap-2">
+          <p className="text-xs text-slate-500">
+            Astuce : configurez Lundi, puis appliquez-le à toute la semaine de travail en un clic.
+          </p>
+          <Button
+            variant="outline" size="sm"
+            disabled={!canEdit}
+            onClick={copyMondayToWeekdays}
+            data-testid="schedule-copy-monday"
+            className="text-xs h-8"
+          >
+            <Copy className="w-3.5 h-3.5 mr-1.5" /> Copier Lundi sur Mar → Ven
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -261,6 +294,11 @@ export default function ScheduleEditor({ canEdit, drivers }) {
                       </div>
                     ))
                   )}
+
+                  {/* 0-24h visual timeline */}
+                  <div className="pt-2" data-testid={`schedule-timeline-${d.idx}`}>
+                    <DayTimeline periods={dayCfg.periods} dayType={dayCfg.type} />
+                  </div>
                 </div>
               </div>
             );
