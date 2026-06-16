@@ -3,63 +3,81 @@
 ## Problem statement (verbatim)
 Créer un nouveau module "Livre de Bord Professionnel / Personnel" dans Logitrak,
 entièrement connecté à Navixy via les API de tracking et l'historique GPS.
-Permettre aux entreprises de distinguer kilomètres professionnels et personnels,
-avec rapports séparés et respect de la vie privée (3 modes : visible/masqué/100% pro),
-rapport fiscal suisse annuel, affectation manuelle pro/perso et droits par rôle.
+Distinction km pro / perso, 3 modes confidentialité, rapport fiscal suisse,
+affectation manuelle, droits par rôle.
 
 ## User choices
-- Standalone app (no existing repo)
-- Mock Navixy data based on official API structure (track/list, history/tracks, reports/trips)
-- JWT custom auth with roles (admin / manager / driver)
-- Backend Python for PDF (reportlab) + Excel (openpyxl)
-- MVP first: Dashboard + Historique pro/perso + Paramètres confidentialité + Affectation manuelle
+- Standalone app, JWT custom auth, backend Python (reportlab + openpyxl)
+- Navixy hash fourni (`a25480874b7492bd01ff1d926061e491`) — branché en prod (api.navixy.com/v2)
 
-## Architecture
-- **Backend**: FastAPI + Motor (MongoDB), `/api` prefixed router. Modules under `/app/backend/app/`:
-  `auth.py` (JWT cookies + role enforcement), `db.py`, `mock_navixy.py` (seed Navixy-shaped data),
-  `rules.py` (auto-classification engine), `reports.py` (PDF/Excel/CSV/Fiscal CH), `routes.py` (`/api/livre/*`).
-- **Frontend**: React 19 + react-router-dom + axios (withCredentials), Tailwind + shadcn/ui,
-  Recharts, IBM Plex Sans/Mono. Layout = dark primary sidebar (w-16) + white secondary sidebar (w-64)
-  + top header. Pages: Login, Dashboard, History (Pro/Perso), Reports (Pro/Perso), Tax Swiss, Settings.
-- **DB**: collections `users`, `drivers`, `vehicles`, `trips`, `geofences`, `settings`, `audit_log`.
+## Architecture (mise à jour)
+- **Backend**: FastAPI + Motor + APScheduler. Modules `/app/backend/app/` :
+  `auth.py`, `db.py`, `mock_navixy.py`, `rules.py`, `reports.py`, `routes.py`,
+  `navixy_client.py` (HTTP async httpx), `navixy_sync.py` (sync trackers/employees/zones/tracks),
+  `scheduler.py` (auto-sync), `assignments.py` (driver↔vehicle time-aware).
+- **Frontend**: React 19, sidebar dark + secondary white, IBM Plex Sans/Mono, Recharts.
+- **DB**: `users`, `drivers`, `vehicles`, `trips`, `geofences`, `settings`, `audit_log`,
+  `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
-## User personas
-1. **Admin** — full access, audit log, user management. (`admin@logitrak.ch`)
-2. **Manager / Gestionnaire** — access filtered by privacy policy modes A/B/C. (`manager@logitrak.ch`)
-3. **Driver / Chauffeur** — sees only their own trips (mapped via DRIVER_EMAIL env). (`chauffeur@logitrak.ch`)
+## Implemented — 16/06/2026
+### Iteration 1 (MVP)
+- JWT auth + 3 demo roles
+- Mock Navixy seed (6 véhicules, 6 chauffeurs, ~600 trajets)
+- Moteur de règles auto (mode véhicule → géofence → horaires)
+- Dashboard 6 KPIs + pie + line 30j + table chauffeur
+- Historique pro/perso, mode B masquant pour gestionnaires
+- Settings : 3 modes (A/B/C), règles, modes véhicules
+- Rapports PDF/Excel/CSV, rapport fiscal suisse PDF
+- Affectation manuelle (audit log)
+- Driver visibility filter
 
-## Implemented — 16/06/2026 (Iteration 1, MVP)
-- JWT auth + 3 demo roles seeded on startup
-- Mock Navixy data: 6 drivers, 6 vehicles, ~600 trips over 45 days, 7 geofences
-- Auto-classification rule engine: vehicle mode override → geofence → time-based weekday/weekend
-- Dashboard with 6 KPI cards (pro km, perso km, total, %pro, %perso, fuel) + pie chart + 30-day line chart + per-driver table
-- Historique professionnel & personnel with filters (driver, vehicle, date) and inline manual classification (Pro/Perso toggle)
-- Settings page: 3 privacy modes (A/B/C), time rules (start/end hour, weekend days), geofence toggle, per-vehicle mode (mixte/always_pro/always_perso)
-- Reports: PDF, Excel, CSV exports for pro/perso; annual Swiss fiscal PDF
-- Privacy enforcement: Mode B masks personal trip details (carte, adresses, GPS) for managers; admin always sees full
-- Driver visibility filter: chauffeur user sees only their own trips
-- Audit log of manual classification changes
+### Iteration 2 — Navixy live
+- Client async httpx, sync trackers/employees/zones/tracks (chunks 7 jours)
+- Détection auto type de zone (mots-clés sur labels)
+- Endpoint admin `POST /api/livre/navixy/sync`
+- UI Settings : carte "Synchronisation Navixy" avec bouton + période
+- Fuel estimé 8.5L/100km (Navixy ne fournit pas fuel_l dans track/list)
 
-## Bug fixes — iteration 1
-- xlsx export crash on merged title row (column_letter on merged cell) — fixed via `get_column_letter`
-- Driver-user mapping mismatch (chauffeur user not linked to Jean Dupont driver record) — fixed by using DRIVER_EMAIL env for first seeded driver
+### Iteration 3 — APScheduler + assignments
+- **APScheduler** : sync auto périodique configurable
+  (intervalle 1-1440 min, période 1-365 jours, on/off)
+  - State persisté dans `db.app_state` ; `last_run`, `last_result`, `next_run`
+  - Endpoints `GET/PUT /api/livre/navixy/scheduler`, `POST /api/livre/navixy/scheduler/run-now`
+  - UI dans Settings : toggle, inputs, "Lancer maintenant", "Appliquer"
+- **Assignments time-aware** (driver↔vehicle many-to-many)
+  - Collection `assignments` : `{vehicle_id, driver_id, from_date, to_date, is_primary, source}`
+  - `resolve_driver_for_trip()` → trajets attribués au bon chauffeur selon la fenêtre temporelle
+  - `reassign_all_trips()` appelé automatiquement après chaque ajout/suppression
+  - Endpoints `GET/POST/DELETE /api/livre/assignments`
+  - UI : bouton "Chauffeurs" par véhicule ouvre Dialog avec liste + formulaire d'ajout
+  - Visibilité chauffeur étendue : voit ses trajets + ceux des véhicules qui lui ont été assignés
+  - Optimistic UI updates pour ajout/suppression
+
+## Bug fixes
+- xlsx export merged-cell crash
+- Driver-user mapping (chauffeur ↔ Jean Dupont)
+- AssignmentsDialog refresh timing (optimistic insert)
+
+## Tests
+- Backend pytest : 19/19 PASS (iteration 3)
+- Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## P1 backlog
-- Carte Leaflet/Mapbox réelle dans l'historique (actuellement adresses textuelles uniquement)
-- Rapports programmés (cron) avec envoi email
-- Vrai connecteur Navixy (clé API + hash de session) en remplacement du mock
-- Géofences éditables UI (CRUD complet)
+- Carte Leaflet/Mapbox dans l'historique (polylignes Navixy via `track/read`)
+- Carburant réel via `tracker/get_diagnostics` au lieu de l'estimation
+- Webhook Navixy (push temps réel au lieu de polling APScheduler)
+- Page admin pour gérer utilisateurs Logitrak
+- CRUD UI pour géofences
 - Multi-tenant via header `X-Tenant-ID`
-- Page de gestion des utilisateurs (admin)
 
 ## P2 backlog
-- Notifications temps réel (WebSocket) sur nouveaux trajets
-- Export multi-période agrégée (mensuel/trimestriel)
-- Tableaux de bord chauffeur (vue self-service)
-- Tests unitaires Pytest et frontend Jest formalisés
+- Rapports programmés (email)
+- Notifications WebSocket nouveaux trajets
 - Mode sombre
+- Tests Pytest/Jest formalisés
+- Module "Avantage en nature" (calcul fiscal CHF)
 
 ## Next tasks
-- Vérifier conformité fiscale CH avec un comptable suisse
-- Implémenter la carte (Leaflet) dans l'historique
-- Brancher Navixy en prod (track/list, history/tracks, reports/trips)
+- Brancher la carte Leaflet
+- Récupérer le carburant réel
+- Investiguer un webhook Navixy

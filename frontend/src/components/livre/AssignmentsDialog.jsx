@@ -49,6 +49,16 @@ export default function AssignmentsDialog({ vehicle, drivers, onChanged, canEdit
       if (form.from_date) payload.from_date = new Date(form.from_date).toISOString();
       if (form.to_date) payload.to_date = new Date(form.to_date + "T23:59:59").toISOString();
       const { data } = await api.post(`/livre/assignments`, payload);
+      // Optimistic UI: insert the new row immediately
+      if (data?.assignment) {
+        setRows((prev) => {
+          let next = prev.slice();
+          if (data.assignment.is_primary) {
+            next = next.map((r) => ({ ...r, is_primary: false }));
+          }
+          return [data.assignment, ...next];
+        });
+      }
       toast.success(`Affectation ajoutée · ${data.trips_reassigned} trajets réattribués`);
       setForm({ driver_id: "", from_date: "", to_date: "", is_primary: false });
       load();
@@ -59,12 +69,17 @@ export default function AssignmentsDialog({ vehicle, drivers, onChanged, canEdit
   }
 
   async function remove(id) {
+    // Optimistic UI: remove immediately
+    setRows((prev) => prev.filter((r) => r.id !== id));
     try {
       const { data } = await api.delete(`/livre/assignments/${id}`);
       toast.success(`Affectation supprimée · ${data.trips_reassigned} trajets réattribués`);
       load();
       onChanged?.();
-    } catch { toast.error("Refusé"); }
+    } catch {
+      toast.error("Refusé");
+      load(); // rollback by reloading from server
+    }
   }
 
   function driverName(id) {
