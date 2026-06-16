@@ -15,6 +15,7 @@ from app.auth import router as auth_router, seed_admin
 from app.routes import router as livre_router
 from app.mock_navixy import seed_mock_data
 from app.rules import apply_rules_to_all
+from app.scheduler import init_scheduler, shutdown_scheduler
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -61,9 +62,11 @@ async def on_startup():
     await seed_admin()
     await seed_mock_data(force=False)
     await apply_rules_to_all(db)
+    await init_scheduler()
     logger.info("Startup: DB initialised, mock data seeded.")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    shutdown_scheduler()
     close_db()

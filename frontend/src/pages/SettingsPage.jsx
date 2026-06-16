@@ -10,8 +10,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Shield, Eye, EyeOff, Briefcase, Loader2, Save, Truck, RefreshCw, Cloud, CloudOff } from "lucide-react";
+import { Shield, Eye, EyeOff, Briefcase, Loader2, Save, Truck, RefreshCw, Cloud, CloudOff, Clock, Power } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import AssignmentsDialog from "@/components/livre/AssignmentsDialog";
 
 const MODE_OPTIONS = [
   { id: "A", testId: TEST_IDS.settings.modeA, icon: Eye, label: "Personnel visible",
@@ -28,22 +29,27 @@ export default function SettingsPage() {
   const { user } = useAuth();
   const [settings, setSettings] = useState(null);
   const [vehicles, setVehicles] = useState([]);
+  const [drivers, setDrivers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [navixy, setNavixy] = useState({ configured: false });
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [syncDays, setSyncDays] = useState(30);
+  const [sched, setSched] = useState(null);
+  const [schedSaving, setSchedSaving] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const [s, v, n] = await Promise.all([
+      const [s, v, n, dr, sc] = await Promise.all([
         api.get("/livre/settings").then(r => r.data),
         api.get("/livre/vehicles").then(r => r.data),
         api.get("/livre/navixy/status").then(r => r.data).catch(() => ({ configured: false })),
+        api.get("/livre/drivers").then(r => r.data),
+        api.get("/livre/navixy/scheduler").then(r => r.data).catch(() => null),
       ]);
-      setSettings(s); setVehicles(v); setNavixy(n);
+      setSettings(s); setVehicles(v); setNavixy(n); setDrivers(dr); setSched(sc);
     } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
@@ -60,6 +66,32 @@ export default function SettingsPage() {
     } catch (e) {
       toast.error(e.response?.data?.detail || "Synchronisation impossible");
     } finally { setSyncing(false); }
+  }
+
+  async function saveScheduler() {
+    if (!sched) return;
+    setSchedSaving(true);
+    try {
+      const { data } = await api.put(`/livre/navixy/scheduler`, {
+        enabled: sched.enabled, interval_min: sched.interval_min, days: sched.days,
+      });
+      setSched(data);
+      toast.success(sched.enabled
+        ? `Sync auto activée — toutes les ${data.interval_min} min`
+        : "Sync auto désactivée");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Refusé");
+    } finally { setSchedSaving(false); }
+  }
+
+  async function runNow() {
+    setSchedSaving(true);
+    try {
+      const { data } = await api.post(`/livre/navixy/scheduler/run-now`);
+      toast.success(`Sync exécutée · ${data.trips_new} nouveaux trajets`);
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || "Refusé"); }
+    finally { setSchedSaving(false); }
   }
 
   async function save() {
@@ -151,6 +183,87 @@ export default function SettingsPage() {
             </Button>
           </div>
         </div>
+
+        {sched && (
+          <div className="mt-5 pt-5 border-t border-slate-100">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex-1 min-w-[280px]">
+                <p className="text-sm font-medium text-slate-800 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-slate-500" /> Synchronisation automatique
+                </p>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Lance une sync Navixy en arrière-plan à intervalle régulier. Idempotent : ne crée pas de doublons.
+                </p>
+                {sched.last_run && (
+                  <p className="text-[11px] text-slate-500 mt-2 font-mono">
+                    Dernière exécution : {new Date(sched.last_run).toLocaleString("fr-CH")}
+                    {sched.last_result?.trips_new !== undefined && (
+                      <span className="ml-2 text-emerald-600">+{sched.last_result.trips_new} trajets</span>
+                    )}
+                  </p>
+                )}
+                {sched.next_run && sched.enabled && (
+                  <p className="text-[11px] text-slate-500 mt-1 font-mono">
+                    Prochaine : {new Date(sched.next_run).toLocaleString("fr-CH")}
+                  </p>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2 items-end">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Intervalle (min)</p>
+                  <Input type="number" min="1" max="1440"
+                    data-testid="settings-sched-interval"
+                    disabled={user?.role !== "admin"}
+                    value={sched.interval_min}
+                    onChange={(e) => setSched({ ...sched, interval_min: parseInt(e.target.value, 10) || 15 })}
+                    className="w-28" />
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Période (jours)</p>
+                  <Input type="number" min="1" max="365"
+                    data-testid="settings-sched-days"
+                    disabled={user?.role !== "admin"}
+                    value={sched.days}
+                    onChange={(e) => setSched({ ...sched, days: parseInt(e.target.value, 10) || 7 })}
+                    className="w-24" />
+                </div>
+                <div className="col-span-2 flex items-center justify-between gap-3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={!!sched.enabled}
+                      disabled={user?.role !== "admin" || !navixy.configured}
+                      data-testid="settings-sched-toggle"
+                      onCheckedChange={(v) => setSched({ ...sched, enabled: v })}
+                    />
+                    <Label className="text-sm text-slate-700 flex items-center gap-1.5">
+                      <Power className="w-3.5 h-3.5" /> {sched.enabled ? "Activée" : "Désactivée"}
+                    </Label>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm" variant="outline"
+                      disabled={user?.role !== "admin" || !navixy.configured || schedSaving}
+                      data-testid="settings-sched-run-now"
+                      onClick={runNow}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Lancer maintenant
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={user?.role !== "admin" || schedSaving}
+                      data-testid="settings-sched-save"
+                      onClick={saveScheduler}
+                      className="bg-slate-900 hover:bg-slate-800 text-white"
+                    >
+                      {schedSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
+                      Appliquer
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Privacy modes */}
@@ -275,9 +388,9 @@ export default function SettingsPage() {
       {/* Vehicles */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">
         <h3 className="text-sm font-semibold text-slate-800 mb-1 flex items-center gap-2">
-          <Truck className="w-4 h-4 text-slate-500" /> Modes véhicules
+          <Truck className="w-4 h-4 text-slate-500" /> Modes véhicules & affectations
         </h3>
-        <p className="text-xs text-slate-500 mb-5">Forçage de classification par véhicule.</p>
+        <p className="text-xs text-slate-500 mb-5">Forçage de classification par véhicule + affectations chauffeurs (multi-véhicules, plages de dates).</p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -285,6 +398,7 @@ export default function SettingsPage() {
                 <th className="text-left py-3 px-4">Plaque</th>
                 <th className="text-left py-3 px-4">Modèle</th>
                 <th className="text-right py-3 px-4">Mode</th>
+                <th className="text-right py-3 px-4">Affectations</th>
               </tr>
             </thead>
             <tbody>
@@ -306,6 +420,13 @@ export default function SettingsPage() {
                         <SelectItem value="always_perso">Toujours personnel</SelectItem>
                       </SelectContent>
                     </Select>
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <AssignmentsDialog
+                      vehicle={v} drivers={drivers}
+                      canEdit={canEdit}
+                      onChanged={load}
+                    />
                   </td>
                 </tr>
               ))}

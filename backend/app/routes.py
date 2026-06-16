@@ -12,6 +12,11 @@ from app.rules import classify_trip, apply_rules_to_all, default_settings
 from app.reports import trips_to_csv, trips_to_xlsx, trips_to_pdf, swiss_tax_report_pdf
 from app.navixy_client import is_configured as navixy_configured, NavixyError
 from app.navixy_sync import sync_navixy
+from app.scheduler import get_state as get_sched_state, reconfigure as reconfig_sched, trigger_now as trigger_sched
+from app.assignments import (
+    list_assignments, add_assignment, remove_assignment,
+    reassign_all_trips, driver_vehicle_ids,
+)
 
 
 router = APIRouter(prefix="/livre", tags=["livre-de-bord"])
@@ -67,10 +72,16 @@ async def _filter_trips_query(db, user, start: Optional[str], end: Optional[str]
     if classification:
         q["classification"] = classification
 
-    # Drivers can only see their own trips
+    # Drivers can only see their own trips (own driver_id + trips on any vehicle ever assigned to them)
     if user["role"] == "driver":
-        driver = await db.drivers.find_one({"email": user["email"]}, {"_id": 0, "id": 1})
-        q["driver_id"] = driver["id"] if driver else "__none__"
+        driver = await db.drivers.find_one({"email": user["email"]}, {"_id": 0})
+        if not driver:
+            q["driver_id"] = "__none__"
+        else:
+            vehicle_ids = await driver_vehicle_ids(db, driver["id"])
+            q["$or"] = [{"driver_id": driver["id"]}]
+            if vehicle_ids:
+                q["$or"].append({"vehicle_id": {"$in": vehicle_ids}})
     return q
 
 
@@ -105,6 +116,98 @@ async def navixy_sync_endpoint(days: int = 30, user=Depends(require_roles("admin
         raise HTTPException(502, f"Navixy API: {e}")
     except Exception as e:
         raise HTTPException(500, f"Erreur de synchronisation: {e}")
+
+
+# ---------- Scheduler ----------
+class SchedulerIn(BaseModel):
+    enabled: bool
+    interval_min: int
+    days: int
+
+
+@router.get("/navixy/scheduler")
+async def scheduler_get(user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    state = await get_sched_state(db)
+    state["configured"] = navixy_configured()
+    return state
+
+
+@router.put("/navixy/scheduler")
+async def scheduler_put(payload: SchedulerIn, user=Depends(require_roles("admin"))):
+    try:
+        new_state = await reconfig_sched(payload.enabled, payload.interval_min, payload.days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    new_state["configured"] = navixy_configured()
+    return new_state
+
+
+@router.post("/navixy/scheduler/run-now")
+async def scheduler_run_now(user=Depends(require_roles("admin"))):
+    if not navixy_configured():
+        raise HTTPException(400, "NAVIXY_HASH non configuré")
+    try:
+        return await trigger_sched()
+    except NavixyError as e:
+        raise HTTPException(502, f"Navixy API: {e}")
+
+
+# ---------- Assignments (driver ↔ vehicle, time-aware) ----------
+class AssignmentIn(BaseModel):
+    vehicle_id: str
+    driver_id: str
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    is_primary: bool = False
+
+
+@router.get("/assignments")
+async def assignments_list(vehicle_id: Optional[str] = None, driver_id: Optional[str] = None,
+                           user=Depends(get_current_user)):
+    db = get_db()
+    rows = await list_assignments(db, vehicle_id=vehicle_id)
+    if driver_id:
+        rows = [r for r in rows if r["driver_id"] == driver_id]
+    # Driver can only see assignments concerning them
+    if user["role"] == "driver":
+        own = await db.drivers.find_one({"email": user["email"]}, {"_id": 0})
+        if not own:
+            return []
+        rows = [r for r in rows if r["driver_id"] == own["id"]]
+    return rows
+
+
+@router.post("/assignments")
+async def assignments_create(payload: AssignmentIn,
+                             user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    veh = await db.vehicles.find_one({"id": payload.vehicle_id}, {"_id": 0})
+    if not veh:
+        raise HTTPException(404, "Véhicule introuvable")
+    drv = await db.drivers.find_one({"id": payload.driver_id}, {"_id": 0})
+    if not drv:
+        raise HTTPException(404, "Chauffeur introuvable")
+    if payload.from_date and payload.to_date and payload.from_date > payload.to_date:
+        raise HTTPException(400, "Plage de dates invalide")
+    doc = await add_assignment(
+        db, payload.vehicle_id, payload.driver_id,
+        from_date=payload.from_date, to_date=payload.to_date,
+        is_primary=payload.is_primary, source="manual",
+    )
+    reassigned = await reassign_all_trips(db)
+    return {"assignment": doc, "trips_reassigned": reassigned}
+
+
+@router.delete("/assignments/{assignment_id}")
+async def assignments_delete(assignment_id: str,
+                             user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    ok = await remove_assignment(db, assignment_id)
+    if not ok:
+        raise HTTPException(404, "Affectation introuvable")
+    reassigned = await reassign_all_trips(db)
+    return {"ok": True, "trips_reassigned": reassigned}
 
 
 # ---------- Settings ----------

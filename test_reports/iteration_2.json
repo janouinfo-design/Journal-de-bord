@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 3 e2e testing: APScheduler + fine-grained vehicle↔driver assignments. Backend pytest 19/19 PASS (100%). Frontend admin scheduler panel fully functional (toggle off→toast 'Sync auto désactivée', toggle on→toast with interval, run-now, save with 30 min, restore). AssignmentsDialog opens from vehicles table, driver dropdown populates 12 drivers, Add returns success toast. Driver login (chauffeur@logitrak.ch=Jean Dupont) sees 53 history-pro rows confirming iteration 1 driver-mapping fix is in place. One UI quirk: assignments-table element / delete buttons were not visible by the time we polled (~3s) right after the first add — likely a state-refresh timing issue in AssignmentsDialog.load(); the add itself reached backend (toast shown) and was visible via API.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AssignmentsDialog",
+        "issue": "After clicking 'Ajouter' the success toast is shown but [data-testid='assignments-table'] and delete buttons remained absent in DOM for 3s in our first run. Backend create succeeded (verified via GET /api/livre/assignments). Suspect: load() race vs render, or rows state reset before re-fetch. Worth reviewing load()/setRows order in AssignmentsDialog.jsx around line 27-34. Non-blocking — second open of the dialog correctly shows the row.",
+        "selector": "[data-testid='assignments-table']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/iteration3.xml"
+  ],
+  "action_items": [
+    "(Optional) Investigate AssignmentsDialog rows-state refresh after add: ensure setRows is updated after await load() and the table renders without needing dialog re-open."
+  ],
+  "critical_code_review_comments": [
+    "scheduler.py uses module-level _scheduler global — fine for single worker but be aware if backend is ever run with multiple uvicorn workers, each would maintain its own scheduler instance ⇒ duplicate sync jobs. Document or hard-pin workers=1 in supervisor.",
+    "scheduler.py:reconfigure() persists state then mutates scheduler — if reconfigure throws after DB update (e.g. ValueError thrown first, OK), state could be inconsistent. Validation done up-front, so safe.",
+    "assignments.py:reassign_all_trips() iterates all trips and calls resolve_driver_for_trip per trip — O(trips*assignments) and N+1 per trip. With real data (~95+ trips) it's still fast (~seconds), but consider batching for >10k trips: pre-load all assignments by vehicle into a dict once.",
+    "routes.py:assignments_create — allows 'manager' role even though review_request expected only admin. Currently both admin and manager can POST/DELETE assignments. Driver is correctly 403'd. Adjust if business expectation is admin-only.",
+    "scheduler endpoint POST /api/livre/navixy/scheduler/run-now blocks the request for the full sync duration (10-20s on real Navixy). For better UX, consider returning 202 + job_id and polling, or running via APScheduler add_job(next_run_time=now).",
+    "AssignmentsDialog.jsx — driver Select uses driver.id values; if drivers list is empty (e.g. fresh DB before any Navixy sync), the select shows no options and the user is stuck. Add a fallback message.",
+    "AssignmentsDialog.jsx — from_date input uses type='date' (browser native picker). The codebase uses shadcn Calendar elsewhere — inconsistent UX; consider Popover+Calendar for consistency.",
+    "routes.py: GET /api/livre/assignments has no priv filter for managers — they see all assignments. Acceptable per current product but worth confirming."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py"
+  ],
+  "success_rate": { "backend": "100% (19/19)", "frontend": "95% (scheduler 100%, assignments add+toast OK, table-refresh-after-add 1 quirk)" },
+  "test_credentials": "Used /app/memory/test_credentials.md: admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123 — all valid.",
+  "seed_data_creation": "None. Used existing seeded vehicles/drivers. Test created 2-3 manual assignments during the run; all cleaned up afterward via API. Scheduler restored to enabled=true, interval_min=15, days=7.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 3 backend is solid (19/19). The only outstanding item is a minor UI refresh quirk in AssignmentsDialog after the first Add (table may not render until dialog reopens). Real Navixy sync runs and completes in ~5-15s. Scheduler state is persisted in db.app_state collection (single doc id='scheduler'). Manual assignments table = db.assignments (tenant_id='default'). When writing future tests, use REACT_APP_BACKEND_URL from /app/frontend/.env (env var is not always exported into pytest shell).",
+  "rca of the issue": "Frontend AssignmentsDialog post-add refresh: load() is awaited inside add() AFTER setForm reset; setRows is set on resolve. If the GET /assignments call latency stacks with the trip reassignment latency (POST returns only after reassign_all_trips iterates trips ~3s), the test polled at 3000ms which equals the resolution time — possible race. Mitigation in code: set optimistic row immediately on POST success, then reconcile via load(). Backend itself is correct."
+}

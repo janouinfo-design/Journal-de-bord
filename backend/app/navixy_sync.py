@@ -18,6 +18,9 @@ from app.navixy_client import (
     list_trackers, list_employees, list_zones, list_tracks,
 )
 from app.rules import apply_rules_to_all
+from app.assignments import (
+    ensure_primary_from_navixy, resolve_driver_for_trip,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +127,9 @@ async def sync_navixy(days: int = 30, force_reclassify: bool = True) -> dict:
         summary["drivers"] += 1
         if e.get("tracker_id"):
             driver_by_tracker[e["tracker_id"]] = driver_doc
-            await db.vehicles.update_one(
-                {"navixy_tracker_id": e["tracker_id"]},
-                {"$set": {"assigned_driver_id": driver_doc["id"]}},
-            )
+            vehicle = await db.vehicles.find_one({"navixy_tracker_id": e["tracker_id"]}, {"_id": 0})
+            if vehicle:
+                await ensure_primary_from_navixy(db, vehicle["id"], driver_doc["id"])
 
     # ----- Zones -----
     zones_raw = await list_zones()
@@ -179,7 +181,6 @@ async def sync_navixy(days: int = 30, force_reclassify: bool = True) -> dict:
         vehicle = await db.vehicles.find_one({"navixy_tracker_id": tracker_id})
         if not vehicle:
             continue
-        driver_doc = driver_by_tracker.get(tracker_id)
         # Chunk by 7 days (Navixy span limit)
         cursor = start_dt
         had_any = False
@@ -209,10 +210,18 @@ async def sync_navixy(days: int = 30, force_reclassify: bool = True) -> dict:
                 length_km = float(tr.get("length", 0) or 0)
                 fuel_l = round(length_km * 0.085, 2)
 
+                # Resolve driver via assignments (time-aware many-to-many)
+                resolved_driver_id = await resolve_driver_for_trip(db, vehicle["id"], start_iso)
+                resolved_driver_name = None
+                if resolved_driver_id:
+                    dd = await db.drivers.find_one({"id": resolved_driver_id}, {"_id": 0})
+                    if dd:
+                        resolved_driver_name = dd["name"]
+
                 doc = {
                     "tenant_id": "default",
-                    "driver_id": (driver_doc or {}).get("id"),
-                    "driver_name": (driver_doc or {}).get("name") or vehicle.get("plate"),
+                    "driver_id": resolved_driver_id,
+                    "driver_name": resolved_driver_name or vehicle.get("plate"),
                     "vehicle_id": vehicle["id"],
                     "vehicle_plate": vehicle["plate"],
                     "navixy_track_id": navixy_track_id,
