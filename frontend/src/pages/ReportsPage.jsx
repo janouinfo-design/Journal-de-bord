@@ -53,7 +53,7 @@ export default function ReportsPage({ kind }) {
         <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Rapports</p>
         <h1 className="text-3xl font-semibold tracking-tight text-slate-900 mt-1 flex items-center gap-3">
           {kind === "pro" ? <Briefcase className="w-6 h-6 text-[#2196F3]" /> : <User className="w-6 h-6 text-slate-500" />}
-          {kind === "pro" ? "Rapports professionnels" : "Rapports personnels"}
+          {kind === "pro" ? "Générer rapport professionnel" : "Générer rapport personnel"}
         </h1>
         <p className="text-sm text-slate-500 mt-1.5">
           Génération de rapports PDF, Excel et CSV à partir des données Navixy.
