@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from app.auth import get_current_user, require_roles
 from app.db import get_db
-from app.rules import classify_trip, apply_rules_to_all, default_settings
+from app.rules import classify_trip, apply_rules_to_all, default_settings, default_schedule, _get_schedule_for
 from app.reports import trips_to_csv, trips_to_xlsx, trips_to_pdf, swiss_tax_report_pdf
 from app.navixy_client import is_configured as navixy_configured, NavixyError
 from app.navixy_sync import sync_navixy
@@ -213,7 +213,6 @@ async def assignments_delete(assignment_id: str,
 # ---------- Settings ----------
 class SettingsIn(BaseModel):
     mode: str  # A | B | C
-    rules: dict
 
 
 @router.get("/settings")
@@ -227,10 +226,105 @@ async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin
     if payload.mode not in ("A", "B", "C"):
         raise HTTPException(400, "Mode invalide")
     db = get_db()
-    new = {"id": "default", "mode": payload.mode, "rules": payload.rules}
+    new = {"id": "default", "mode": payload.mode}
     await db.settings.update_one({"id": "default"}, {"$set": new}, upsert=True)
     await apply_rules_to_all(db)
     return new
+
+
+# ---------- Schedules (per-day work periods) ----------
+class PeriodIn(BaseModel):
+    enabled: bool
+    from_: str = ""  # alias to avoid Python keyword
+    to: str = "00:00"
+
+    class Config:
+        fields = {"from_": "from"}
+
+
+class DayIn(BaseModel):
+    day: int  # 0..6 (Mon..Sun)
+    type: str  # 'work' | 'personal'
+    periods: list[dict] = []
+
+
+class ScheduleIn(BaseModel):
+    driver_id: Optional[str] = None  # null = default for all
+    days: list[dict]
+
+
+def _normalize_schedule(driver_id: Optional[str], days: list[dict]) -> dict:
+    """Validate and normalize a schedule payload."""
+    if not isinstance(days, list) or len(days) != 7:
+        raise HTTPException(400, "Le planning doit contenir 7 jours")
+    out_days = []
+    seen = set()
+    for d in days:
+        idx = d.get("day")
+        if idx not in range(7) or idx in seen:
+            raise HTTPException(400, f"Jour invalide: {idx}")
+        seen.add(idx)
+        dtype = d.get("type", "work")
+        if dtype not in ("work", "personal"):
+            raise HTTPException(400, "type doit être 'work' ou 'personal'")
+        periods = d.get("periods") or []
+        if len(periods) > 3:
+            raise HTTPException(400, "Maximum 3 plages par jour")
+        norm_periods = []
+        for p in periods[:3]:
+            norm_periods.append({
+                "enabled": bool(p.get("enabled")),
+                "from": str(p.get("from", "00:00")),
+                "to": str(p.get("to", "00:00")),
+            })
+        while len(norm_periods) < 3:
+            norm_periods.append({"enabled": False, "from": "00:00", "to": "00:00"})
+        out_days.append({"day": idx, "type": dtype, "periods": norm_periods})
+    out_days.sort(key=lambda x: x["day"])
+    return {
+        "id": f"sched-{driver_id or 'default'}",
+        "tenant_id": "default",
+        "driver_id": driver_id,
+        "days": out_days,
+    }
+
+
+@router.get("/schedule")
+async def get_schedule(driver_id: Optional[str] = None, user=Depends(get_current_user)):
+    db = get_db()
+    s = await _get_schedule_for(db, driver_id)
+    return s
+
+
+@router.put("/schedule")
+async def put_schedule(payload: ScheduleIn, user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    doc = _normalize_schedule(payload.driver_id, payload.days)
+    await db.schedules.update_one(
+        {"driver_id": payload.driver_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    await apply_rules_to_all(db)
+    return doc
+
+
+@router.delete("/schedule")
+async def delete_schedule(driver_id: str, user=Depends(require_roles("admin", "manager"))):
+    """Delete a per-driver override (cannot delete default)."""
+    if not driver_id:
+        raise HTTPException(400, "driver_id requis")
+    db = get_db()
+    await db.schedules.delete_one({"driver_id": driver_id})
+    await apply_rules_to_all(db)
+    return {"ok": True}
+
+
+@router.get("/schedule/drivers-with-override")
+async def drivers_with_override(user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    rows = await db.schedules.find({"driver_id": {"$ne": None}}, {"_id": 0, "driver_id": 1}).to_list(500)
+    return [r["driver_id"] for r in rows]
 
 
 # ---------- Master data ----------

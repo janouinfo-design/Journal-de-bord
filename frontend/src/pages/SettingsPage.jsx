@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Shield, Eye, EyeOff, Briefcase, Loader2, Save, Truck, RefreshCw, Cloud, CloudOff, Clock, Power } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import AssignmentsDialog from "@/components/livre/AssignmentsDialog";
+import ScheduleEditor from "@/components/livre/ScheduleEditor";
 
 const MODE_OPTIONS = [
   { id: "A", testId: TEST_IDS.settings.modeA, icon: Eye, label: "Personnel visible",
@@ -22,8 +23,6 @@ const MODE_OPTIONS = [
   { id: "C", testId: TEST_IDS.settings.modeC, icon: Briefcase, label: "100 % professionnel",
     desc: "Tous les trajets sont considérés professionnels. Aucune classification personnelle.", color: "emerald" },
 ];
-
-const WEEKDAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -97,7 +96,7 @@ export default function SettingsPage() {
   async function save() {
     setSaving(true);
     try {
-      await api.put("/livre/settings", { mode: settings.mode, rules: settings.rules });
+      await api.put("/livre/settings", { mode: settings.mode });
       toast.success("Paramètres enregistrés — règles réappliquées");
       load();
     } catch (e) {
@@ -118,11 +117,6 @@ export default function SettingsPage() {
   }
 
   const canEdit = user?.role === "admin" || user?.role === "manager";
-  const toggleWeekend = (dayIdx) => {
-    const arr = settings.rules.weekend_days || [];
-    const next = arr.includes(dayIdx) ? arr.filter(d => d !== dayIdx) : [...arr, dayIdx];
-    setSettings({ ...settings, rules: { ...settings.rules, weekend_days: next.sort() } });
-  };
 
   return (
     <div data-testid={TEST_IDS.settings.page} className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300 max-w-5xl">
@@ -297,82 +291,7 @@ export default function SettingsPage() {
             );
           })}
         </div>
-      </Card>
-
-      {/* Time rules */}
-      <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">
-        <h3 className="text-sm font-semibold text-slate-800 mb-1">Règles automatiques</h3>
-        <p className="text-xs text-slate-500 mb-5">Classification automatique des trajets non modifiés manuellement.</p>
-
-        <div className="space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-            <div>
-              <p className="text-sm font-medium text-slate-800">Règle horaire</p>
-              <p className="text-xs text-slate-500">Pendant les heures de travail = professionnel, hors heures = personnel.</p>
-            </div>
-            <Switch
-              checked={!!settings.rules.time_enabled}
-              disabled={!canEdit}
-              onCheckedChange={(v) => setSettings({ ...settings, rules: { ...settings.rules, time_enabled: v } })}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="ws" className="text-[10px] uppercase tracking-wider text-slate-400">Début journée</Label>
-              <Input id="ws" type="number" min="0" max="23"
-                data-testid={TEST_IDS.settings.timeStart}
-                disabled={!canEdit || !settings.rules.time_enabled}
-                value={settings.rules.work_start_hour}
-                onChange={(e) => setSettings({ ...settings, rules: { ...settings.rules, work_start_hour: parseInt(e.target.value, 10) || 0 } })}
-                className="mt-1.5" />
-            </div>
-            <div>
-              <Label htmlFor="we" className="text-[10px] uppercase tracking-wider text-slate-400">Fin journée</Label>
-              <Input id="we" type="number" min="0" max="23"
-                data-testid={TEST_IDS.settings.timeEnd}
-                disabled={!canEdit || !settings.rules.time_enabled}
-                value={settings.rules.work_end_hour}
-                onChange={(e) => setSettings({ ...settings, rules: { ...settings.rules, work_end_hour: parseInt(e.target.value, 10) || 0 } })}
-                className="mt-1.5" />
-            </div>
-          </div>
-
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-2">Jours considérés comme week-end</p>
-            <div className="flex flex-wrap gap-2">
-              {WEEKDAYS.map((d, i) => {
-                const active = (settings.rules.weekend_days || []).includes(i);
-                return (
-                  <button
-                    key={d} type="button"
-                    disabled={!canEdit}
-                    onClick={() => toggleWeekend(i)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                      active
-                        ? "bg-slate-800 text-white border-slate-800"
-                        : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
-                    }`}
-                  >{d}</button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between border-t border-slate-100 pt-4">
-            <div>
-              <p className="text-sm font-medium text-slate-800">Règle géofences</p>
-              <p className="text-xs text-slate-500">Départ/arrivée dans dépôt/client/chantier = pro, domicile = perso.</p>
-            </div>
-            <Switch
-              checked={!!settings.rules.geofence_enabled}
-              disabled={!canEdit}
-              onCheckedChange={(v) => setSettings({ ...settings, rules: { ...settings.rules, geofence_enabled: v } })}
-            />
-          </div>
-        </div>
-
-        <div className="mt-6 pt-6 border-t border-slate-100 flex justify-end gap-2">
+        <div className="mt-6 pt-6 border-t border-slate-100 flex justify-end">
           <Button
             disabled={!canEdit || saving}
             data-testid={TEST_IDS.settings.save}
@@ -380,10 +299,13 @@ export default function SettingsPage() {
             className="bg-[#2196F3] hover:bg-[#1E88E5] text-white"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-            Enregistrer les paramètres
+            Enregistrer la politique
           </Button>
         </div>
       </Card>
+
+      {/* Schedule editor (per-day work periods) */}
+      <ScheduleEditor canEdit={canEdit} drivers={drivers} />
 
       {/* Vehicles */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">
