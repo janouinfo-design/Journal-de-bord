@@ -1,0 +1,383 @@
+"""Logitrak Livre de Bord API routes."""
+from datetime import datetime, timezone, timedelta
+from typing import Optional, List
+from collections import defaultdict
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
+
+from app.auth import get_current_user, require_roles
+from app.db import get_db
+from app.rules import classify_trip, apply_rules_to_all, default_settings
+from app.reports import trips_to_csv, trips_to_xlsx, trips_to_pdf, swiss_tax_report_pdf
+
+
+router = APIRouter(prefix="/livre", tags=["livre-de-bord"])
+
+
+# ---------- Helpers ----------
+def _parse_iso(s: str) -> datetime:
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+async def _get_settings(db) -> dict:
+    s = await db.settings.find_one({"id": "default"}, {"_id": 0})
+    if not s:
+        s = default_settings()
+        await db.settings.insert_one(s)
+    return s
+
+
+def _apply_privacy(trip: dict, settings: dict, role: str) -> dict:
+    """Mode B masks personal trip details for managers (not admins)."""
+    if settings.get("mode") != "B":
+        return trip
+    if role == "admin":
+        return trip
+    if trip.get("classification") == "personal":
+        return {
+            "id": trip["id"],
+            "driver_name": trip.get("driver_name"),
+            "vehicle_plate": trip.get("vehicle_plate"),
+            "start_time": trip.get("start_time"),
+            "end_time": trip.get("end_time"),
+            "distance_km": trip.get("distance_km"),
+            "duration_min": trip.get("duration_min"),
+            "classification": "personal",
+            "masked": True,
+        }
+    return trip
+
+
+async def _filter_trips_query(db, user, start: Optional[str], end: Optional[str],
+                              driver_id: Optional[str], vehicle_id: Optional[str],
+                              classification: Optional[str]) -> dict:
+    q: dict = {"tenant_id": "default"}
+    if start:
+        q.setdefault("start_time", {})["$gte"] = start
+    if end:
+        q.setdefault("start_time", {})["$lte"] = end
+    if driver_id:
+        q["driver_id"] = driver_id
+    if vehicle_id:
+        q["vehicle_id"] = vehicle_id
+    if classification:
+        q["classification"] = classification
+
+    # Drivers can only see their own trips
+    if user["role"] == "driver":
+        driver = await db.drivers.find_one({"email": user["email"]}, {"_id": 0, "id": 1})
+        q["driver_id"] = driver["id"] if driver else "__none__"
+    return q
+
+
+# ---------- Bootstrap ----------
+@router.post("/bootstrap")
+async def bootstrap(force: bool = False, user=Depends(require_roles("admin"))):
+    """Seed mock data and run rule engine."""
+    from app.mock_navixy import seed_mock_data
+    db = get_db()
+    await seed_mock_data(force=force)
+    await _get_settings(db)
+    updated = await apply_rules_to_all(db)
+    return {"ok": True, "trips_reclassified": updated}
+
+
+# ---------- Settings ----------
+class SettingsIn(BaseModel):
+    mode: str  # A | B | C
+    rules: dict
+
+
+@router.get("/settings")
+async def get_settings(user=Depends(get_current_user)):
+    db = get_db()
+    return await _get_settings(db)
+
+
+@router.put("/settings")
+async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin", "manager"))):
+    if payload.mode not in ("A", "B", "C"):
+        raise HTTPException(400, "Mode invalide")
+    db = get_db()
+    new = {"id": "default", "mode": payload.mode, "rules": payload.rules}
+    await db.settings.update_one({"id": "default"}, {"$set": new}, upsert=True)
+    await apply_rules_to_all(db)
+    return new
+
+
+# ---------- Master data ----------
+@router.get("/drivers")
+async def list_drivers(user=Depends(get_current_user)):
+    db = get_db()
+    rows = await db.drivers.find({"tenant_id": "default"}, {"_id": 0}).to_list(500)
+    return rows
+
+
+@router.get("/vehicles")
+async def list_vehicles(user=Depends(get_current_user)):
+    db = get_db()
+    rows = await db.vehicles.find({"tenant_id": "default"}, {"_id": 0}).to_list(500)
+    return rows
+
+
+class VehicleModeIn(BaseModel):
+    mode: str  # always_pro | always_perso | mixte
+
+
+@router.put("/vehicles/{vehicle_id}/mode")
+async def set_vehicle_mode(vehicle_id: str, payload: VehicleModeIn,
+                           user=Depends(require_roles("admin", "manager"))):
+    if payload.mode not in ("always_pro", "always_perso", "mixte"):
+        raise HTTPException(400, "Mode invalide")
+    db = get_db()
+    res = await db.vehicles.update_one({"id": vehicle_id}, {"$set": {"mode": payload.mode}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Véhicule introuvable")
+    await apply_rules_to_all(db)
+    return {"ok": True}
+
+
+@router.get("/geofences")
+async def list_geofences(user=Depends(get_current_user)):
+    db = get_db()
+    rows = await db.geofences.find({"tenant_id": "default"}, {"_id": 0}).to_list(500)
+    return rows
+
+
+# ---------- Dashboard ----------
+@router.get("/dashboard")
+async def dashboard(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    db = get_db()
+    settings = await _get_settings(db)
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, None)
+    trips = await db.trips.find(q, {"_id": 0}).to_list(10000)
+
+    pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
+    perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")
+    total_km = pro_km + perso_km
+    pro_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "professional")
+    perso_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "personal")
+    pro_time = sum(t.get("duration_min", 0) for t in trips if t.get("classification") == "professional")
+    perso_time = sum(t.get("duration_min", 0) for t in trips if t.get("classification") == "personal")
+
+    # Daily breakdown (last 30 days)
+    daily = defaultdict(lambda: {"pro": 0, "perso": 0})
+    for t in trips:
+        try:
+            d = _parse_iso(t["start_time"]).date().isoformat()
+        except Exception:
+            continue
+        if t.get("classification") == "professional":
+            daily[d]["pro"] += t["distance_km"]
+        else:
+            daily[d]["perso"] += t["distance_km"]
+    daily_series = sorted(
+        [{"date": d, "pro": round(v["pro"], 1), "perso": round(v["perso"], 1)} for d, v in daily.items()],
+        key=lambda x: x["date"],
+    )[-30:]
+
+    # Per driver breakdown
+    per_driver = defaultdict(lambda: {"pro_km": 0, "perso_km": 0, "pro_time": 0, "perso_time": 0, "vehicle_plate": ""})
+    for t in trips:
+        key = (t["driver_id"], t.get("driver_name"))
+        d = per_driver[key]
+        d["vehicle_plate"] = t.get("vehicle_plate")
+        if t.get("classification") == "professional":
+            d["pro_km"] += t["distance_km"]
+            d["pro_time"] += t.get("duration_min", 0)
+        else:
+            d["perso_km"] += t["distance_km"]
+            d["perso_time"] += t.get("duration_min", 0)
+    table = []
+    for (driver_id_v, name), v in per_driver.items():
+        total = v["pro_km"] + v["perso_km"]
+        table.append({
+            "driver_id": driver_id_v,
+            "driver_name": name,
+            "vehicle_plate": v["vehicle_plate"],
+            "pro_km": round(v["pro_km"], 1),
+            "perso_km": round(v["perso_km"], 1),
+            "total_km": round(total, 1),
+            "pro_time": v["pro_time"],
+            "perso_time": v["perso_time"],
+            "pct_pro": round(v["pro_km"] / total * 100, 1) if total else 0,
+            "pct_perso": round(v["perso_km"] / total * 100, 1) if total else 0,
+        })
+    table.sort(key=lambda r: -r["total_km"])
+
+    return {
+        "settings_mode": settings.get("mode"),
+        "kpi": {
+            "pro_km": round(pro_km, 1),
+            "perso_km": round(perso_km, 1),
+            "total_km": round(total_km, 1),
+            "pct_pro": round(pro_km / total_km * 100, 1) if total_km else 0,
+            "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
+            "pro_fuel": round(pro_fuel, 2),
+            "perso_fuel": round(perso_fuel, 2),
+            "pro_time_min": pro_time,
+            "perso_time_min": perso_time,
+            "trips_count": len(trips),
+        },
+        "daily_series": daily_series,
+        "table": table,
+    }
+
+
+# ---------- Trips ----------
+@router.get("/trips")
+async def list_trips(
+    classification: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
+    limit: int = 500,
+    user=Depends(get_current_user),
+):
+    db = get_db()
+    settings = await _get_settings(db)
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification)
+    trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(limit)
+    trips = [_apply_privacy(t, settings, user["role"]) for t in trips]
+    return {"trips": trips, "settings_mode": settings.get("mode")}
+
+
+class ClassifyIn(BaseModel):
+    classification: str  # 'professional' | 'personal'
+
+
+@router.put("/trips/{trip_id}/classify")
+async def classify_trip_route(trip_id: str, payload: ClassifyIn,
+                              user=Depends(require_roles("admin", "manager"))):
+    if payload.classification not in ("professional", "personal"):
+        raise HTTPException(400, "Classification invalide")
+    db = get_db()
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not trip:
+        raise HTTPException(404, "Trajet introuvable")
+
+    old = trip.get("classification")
+    await db.trips.update_one(
+        {"id": trip_id},
+        {"$set": {
+            "classification": payload.classification,
+            "auto_classified": False,
+            "modified_by": user["email"],
+            "modified_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    await db.audit_log.insert_one({
+        "trip_id": trip_id,
+        "user_email": user["email"],
+        "old_classification": old,
+        "new_classification": payload.classification,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"ok": True}
+
+
+@router.get("/audit-log")
+async def audit_log(limit: int = 100, user=Depends(require_roles("admin"))):
+    db = get_db()
+    rows = await db.audit_log.find({}, {"_id": 0}).sort("at", -1).to_list(limit)
+    return rows
+
+
+# ---------- Reports ----------
+def _filename(prefix: str, fmt: str) -> str:
+    return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.{fmt}"
+
+
+@router.get("/reports/export")
+async def export_report(
+    classification: str = Query(..., regex="^(professional|personal)$"),
+    fmt: str = Query("pdf", regex="^(pdf|xlsx|csv)$"),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    db = get_db()
+    settings = await _get_settings(db)
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification)
+    trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(20000)
+
+    # Privacy mode B for managers — personal report becomes minimal
+    is_masked = (classification == "personal" and settings.get("mode") == "B" and user["role"] != "admin")
+    if is_masked:
+        trips = [{
+            "start_time": t["start_time"], "end_time": t["end_time"],
+            "driver_name": t.get("driver_name", ""), "vehicle_plate": t.get("vehicle_plate", ""),
+            "start_address": "—", "end_address": "—",
+            "distance_km": t.get("distance_km", 0), "duration_min": t.get("duration_min", 0),
+            "fuel_l": 0, "avg_speed": 0, "max_speed": 0,
+        } for t in trips]
+
+    label = "Professionnel" if classification == "professional" else "Personnel"
+    title = f"Rapport {label} — Logitrak Livre de Bord"
+    subtitle = ""
+    if start or end:
+        subtitle = f"Période : {start or '—'} → {end or '—'}"
+
+    if fmt == "csv":
+        data = trips_to_csv(trips, label)
+        return Response(data, media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="{_filename(classification, "csv")}"'})
+    if fmt == "xlsx":
+        data = trips_to_xlsx(trips, label, title)
+        return Response(data,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{_filename(classification, "xlsx")}"'})
+    data = trips_to_pdf(trips, label, title, subtitle)
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{_filename(classification, "pdf")}"'})
+
+
+@router.get("/reports/tax-swiss")
+async def tax_swiss_report(
+    year: int = Query(...),
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    db = get_db()
+    start = f"{year}-01-01T00:00:00+00:00"
+    end = f"{year}-12-31T23:59:59+00:00"
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, None)
+    trips = await db.trips.find(q, {"_id": 0}).to_list(50000)
+
+    pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
+    perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")
+    total_km = pro_km + perso_km
+    pro_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "professional")
+    perso_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "personal")
+    stats = {
+        "pro_km": round(pro_km, 1),
+        "perso_km": round(perso_km, 1),
+        "total_km": round(total_km, 1),
+        "pct_pro": round(pro_km / total_km * 100, 1) if total_km else 0,
+        "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
+        "pro_fuel": round(pro_fuel, 2),
+        "perso_fuel": round(perso_fuel, 2),
+    }
+
+    owner = ""
+    if driver_id:
+        d = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
+        if d: owner = d.get("name", "")
+    if vehicle_id:
+        v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
+        if v: owner = (owner + " — " if owner else "") + v.get("plate", "")
+
+    data = swiss_tax_report_pdf(stats, year, owner)
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="rapport_fiscal_suisse_{year}.pdf"'})
