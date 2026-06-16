@@ -337,6 +337,7 @@ export default function SettingsPage() {
                       <SelectContent>
                         <SelectItem value="mixte">Mixte</SelectItem>
                         <SelectItem value="always_pro">100 % Professionnel</SelectItem>
+                        <SelectItem value="always_perso">100 % Personnel</SelectItem>
                       </SelectContent>
                     </Select>
                   </td>

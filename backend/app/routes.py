@@ -60,8 +60,12 @@ def _apply_privacy(trip: dict, settings: dict, role: str) -> dict:
 
 async def _filter_trips_query(db, user, start: Optional[str], end: Optional[str],
                               driver_id: Optional[str], vehicle_id: Optional[str],
-                              classification: Optional[str]) -> dict:
+                              classification: Optional[str],
+                              group: Optional[str] = None,
+                              company: Optional[str] = None) -> dict:
     q: dict = {"tenant_id": "default"}
+    if company and company not in ("Logitrak", "default"):
+        q["tenant_id"] = company
     if start:
         q.setdefault("start_time", {})["$gte"] = start
     if end:
@@ -73,7 +77,18 @@ async def _filter_trips_query(db, user, start: Optional[str], end: Optional[str]
     if classification:
         q["classification"] = classification
 
-    # Drivers can only see their own trips (own driver_id + trips on any vehicle ever assigned to them)
+    if group:
+        matching = await db.vehicles.find(
+            {"plate": {"$regex": f"^{group} ", "$options": "i"}}, {"_id": 0, "id": 1},
+        ).to_list(500)
+        ids = [v["id"] for v in matching]
+        if "vehicle_id" in q and isinstance(q["vehicle_id"], str):
+            if q["vehicle_id"] not in ids:
+                q["vehicle_id"] = "__none__"
+        else:
+            q["vehicle_id"] = {"$in": ids} if ids else "__none__"
+
+    # Drivers can only see their own trips
     if user["role"] == "driver":
         driver = await db.drivers.find_one({"email": user["email"]}, {"_id": 0})
         if not driver:
@@ -380,16 +395,19 @@ async def dashboard(
     end: Optional[str] = None,
     driver_id: Optional[str] = None,
     vehicle_id: Optional[str] = None,
+    group: Optional[str] = None,
+    company: Optional[str] = None,
     user=Depends(get_current_user),
 ):
     db = get_db()
     settings = await _get_settings(db)
-    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, None)
-    trips = await db.trips.find(q, {"_id": 0}).to_list(10000)
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, None, group=group, company=company)
+    trips = await db.trips.find(q, {"_id": 0}).to_list(20000)
 
     pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
     perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")
-    total_km = pro_km + perso_km
+    unclassified_km = sum(t["distance_km"] for t in trips if t.get("classification") not in ("professional", "personal"))
+    total_km = pro_km + perso_km + unclassified_km
     pro_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "professional")
     perso_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "personal")
     pro_time = sum(t.get("duration_min", 0) for t in trips if t.get("classification") == "professional")
@@ -412,7 +430,8 @@ async def dashboard(
     )[-30:]
 
     # Per driver breakdown
-    per_driver = defaultdict(lambda: {"pro_km": 0, "perso_km": 0, "pro_time": 0, "perso_time": 0, "vehicle_plate": ""})
+    per_driver = defaultdict(lambda: {"pro_km": 0, "perso_km": 0, "pro_time": 0, "perso_time": 0,
+                                       "pro_fuel": 0, "perso_fuel": 0, "vehicle_plate": ""})
     for t in trips:
         key = (t["driver_id"], t.get("driver_name"))
         d = per_driver[key]
@@ -420,9 +439,11 @@ async def dashboard(
         if t.get("classification") == "professional":
             d["pro_km"] += t["distance_km"]
             d["pro_time"] += t.get("duration_min", 0)
-        else:
+            d["pro_fuel"] += t.get("fuel_l", 0) or 0
+        elif t.get("classification") == "personal":
             d["perso_km"] += t["distance_km"]
             d["perso_time"] += t.get("duration_min", 0)
+            d["perso_fuel"] += t.get("fuel_l", 0) or 0
     table = []
     for (driver_id_v, name), v in per_driver.items():
         total = v["pro_km"] + v["perso_km"]
@@ -435,6 +456,8 @@ async def dashboard(
             "total_km": round(total, 1),
             "pro_time": v["pro_time"],
             "perso_time": v["perso_time"],
+            "pro_fuel": round(v["pro_fuel"], 2),
+            "perso_fuel": round(v["perso_fuel"], 2),
             "pct_pro": round(v["pro_km"] / total * 100, 1) if total else 0,
             "pct_perso": round(v["perso_km"] / total * 100, 1) if total else 0,
         })
@@ -445,6 +468,7 @@ async def dashboard(
         "kpi": {
             "pro_km": round(pro_km, 1),
             "perso_km": round(perso_km, 1),
+            "unclassified_km": round(unclassified_km, 1),
             "total_km": round(total_km, 1),
             "pct_pro": round(pro_km / total_km * 100, 1) if total_km else 0,
             "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
@@ -467,12 +491,15 @@ async def list_trips(
     end: Optional[str] = None,
     driver_id: Optional[str] = None,
     vehicle_id: Optional[str] = None,
+    group: Optional[str] = None,
+    company: Optional[str] = None,
     limit: int = 500,
     user=Depends(get_current_user),
 ):
     db = get_db()
     settings = await _get_settings(db)
-    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification)
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification,
+                                  group=group, company=company)
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(limit)
     trips = [_apply_privacy(t, settings, user["role"]) for t in trips]
     return {"trips": trips, "settings_mode": settings.get("mode")}
@@ -532,11 +559,14 @@ async def export_report(
     end: Optional[str] = None,
     driver_id: Optional[str] = None,
     vehicle_id: Optional[str] = None,
+    group: Optional[str] = None,
+    company: Optional[str] = None,
     user=Depends(get_current_user),
 ):
     db = get_db()
     settings = await _get_settings(db)
-    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification)
+    q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification,
+                                  group=group, company=company)
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(20000)
 
     # Privacy mode 'masked' for managers — personal report contains no per-trip data

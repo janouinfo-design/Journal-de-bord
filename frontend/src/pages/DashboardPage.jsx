@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, fmtKm, fmtPct, fmtDuration } from "@/lib/api";
 import { KpiCard } from "@/components/livre/KpiCard";
 import { TEST_IDS } from "@/constants/testIds";
@@ -8,8 +8,12 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Legend,
 } from "recharts";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
-  Briefcase, User, Activity, PieChart as PieIcon, Fuel, Gauge, Loader2,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Briefcase, User, Activity, PieChart as PieIcon, Fuel, Gauge, Loader2, AlertCircle, Filter,
 } from "lucide-react";
 
 const COLORS = ["#2196F3", "#94A3B8"];
@@ -17,17 +21,44 @@ const COLORS = ["#2196F3", "#94A3B8"];
 export default function DashboardPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [drivers, setDrivers] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [filters, setFilters] = useState({
+    driver_id: "all", vehicle_id: "all", group: "all", company: "all", start: "", end: "",
+  });
 
   useEffect(() => {
     (async () => {
-      try {
-        const { data } = await api.get("/livre/dashboard");
-        setData(data);
-      } finally { setLoading(false); }
+      const [d, v, g, c] = await Promise.all([
+        api.get("/livre/drivers").then(r => r.data),
+        api.get("/livre/vehicles").then(r => r.data),
+        api.get("/livre/groups").then(r => r.data).catch(() => []),
+        api.get("/livre/companies").then(r => r.data).catch(() => []),
+      ]);
+      setDrivers(d); setVehicles(v); setGroups(g); setCompanies(c);
     })();
   }, []);
 
-  if (loading) {
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const params = {};
+        if (filters.driver_id !== "all") params.driver_id = filters.driver_id;
+        if (filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+        if (filters.group !== "all") params.group = filters.group;
+        if (filters.company !== "all") params.company = filters.company;
+        if (filters.start) params.start = new Date(filters.start).toISOString();
+        if (filters.end) params.end = new Date(filters.end).toISOString();
+        const { data } = await api.get("/livre/dashboard", { params });
+        setData(data);
+      } finally { setLoading(false); }
+    })();
+  }, [filters]);
+
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="w-6 h-6 animate-spin text-[#2196F3]" />
@@ -72,6 +103,9 @@ export default function DashboardPage() {
           sub={`${fmtDuration(k.perso_time_min)} de conduite`} />
         <KpiCard testId={TEST_IDS.dashboard.kpiTotalKm} label="Km totaux" value={fmtKm(k.total_km)} icon={Activity}
           sub="Toutes catégories" />
+        <KpiCard testId="kpi-unclassified-km" label="Km non classifiés" value={fmtKm(k.unclassified_km || 0)}
+          accent={(k.unclassified_km || 0) > 0 ? "warning" : "default"} icon={AlertCircle}
+          sub={(k.unclassified_km || 0) > 0 ? "Trajets sans règle correspondante" : "Tout classé"} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPro} label="% professionnel" value={fmtPct(k.pct_pro)} accent="pro" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPerso} label="% personnel" value={fmtPct(k.pct_perso)} accent="perso" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiFuel} label="Carburant professionnel" value={`${k.pro_fuel.toFixed(1)} L`} accent="pro" icon={Fuel}
