@@ -33,25 +33,26 @@ async def _get_settings(db) -> dict:
         s = default_settings()
         await db.settings.insert_one(dict(s))
     s.pop("_id", None)
+    # Migrate legacy mode codes
+    legacy = {"A": "mixte", "B": "masked", "C": "mixte"}
+    if s.get("mode") in legacy:
+        s["mode"] = legacy[s["mode"]]
+        await db.settings.update_one({"id": "default"}, {"$set": {"mode": s["mode"]}})
     return s
 
 
 def _apply_privacy(trip: dict, settings: dict, role: str) -> dict:
-    """Mode B masks personal trip details for managers (not admins)."""
-    if settings.get("mode") != "B":
+    """Mode 'masked' fully anonymises personal trips for non-admins."""
+    if settings.get("mode") != "masked":
         return trip
     if role == "admin":
         return trip
     if trip.get("classification") == "personal":
+        # Total anonymisation — no date, no map, no addresses, no duration, no speed
         return {
             "id": trip["id"],
-            "driver_name": trip.get("driver_name"),
-            "vehicle_plate": trip.get("vehicle_plate"),
-            "start_time": trip.get("start_time"),
-            "end_time": trip.get("end_time"),
-            "distance_km": trip.get("distance_km"),
-            "duration_min": trip.get("duration_min"),
             "classification": "personal",
+            "distance_km": trip.get("distance_km"),
             "masked": True,
         }
     return trip
@@ -223,10 +224,16 @@ async def get_settings(user=Depends(get_current_user)):
 
 @router.put("/settings")
 async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin", "manager"))):
-    if payload.mode not in ("A", "B", "C"):
+    mode = payload.mode
+    # Backward-compat aliases
+    if mode in ("A", "B"):
+        mode = {"A": "mixte", "B": "masked"}[mode]
+    if mode == "C":
+        raise HTTPException(400, "Mode C supprimé — utilisez le mode véhicule 'Toujours professionnel' à la place")
+    if mode not in ("mixte", "masked"):
         raise HTTPException(400, "Mode invalide")
     db = get_db()
-    new = {"id": "default", "mode": payload.mode}
+    new = {"id": "default", "mode": mode}
     await db.settings.update_one({"id": "default"}, {"$set": new}, upsert=True)
     await apply_rules_to_all(db)
     return new
@@ -532,18 +539,27 @@ async def export_report(
     q = await _filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification)
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(20000)
 
-    # Privacy mode B for managers — personal report becomes minimal
-    is_masked = (classification == "personal" and settings.get("mode") == "B" and user["role"] != "admin")
+    # Privacy mode 'masked' for managers — personal report contains no per-trip data
+    is_masked = (classification == "personal" and settings.get("mode") == "masked" and user["role"] != "admin")
     if is_masked:
+        # Return only an aggregate summary — no individual trips
+        total_km = round(sum((t.get("distance_km") or 0) for t in trips), 1)
+        pro_total = await db.trips.count_documents({**q, "classification": "professional"})
+        all_q = dict(q); all_q.pop("classification", None)
+        all_km_docs = await db.trips.find(all_q, {"_id": 0, "distance_km": 1, "classification": 1}).to_list(50000)
+        total_all = round(sum((d.get("distance_km") or 0) for d in all_km_docs), 1)
+        pct = round(total_km / total_all * 100, 1) if total_all else 0
+        # One-line summary as the "trips" content
         trips = [{
-            "start_time": t["start_time"], "end_time": t["end_time"],
-            "driver_name": t.get("driver_name", ""), "vehicle_plate": t.get("vehicle_plate", ""),
+            "start_time": start or "", "end_time": end or "",
+            "driver_name": "—", "vehicle_plate": "—",
             "start_address": "—", "end_address": "—",
-            "distance_km": t.get("distance_km", 0), "duration_min": t.get("duration_min", 0),
+            "distance_km": total_km, "duration_min": 0,
             "fuel_l": 0, "avg_speed": 0, "max_speed": 0,
-        } for t in trips]
-
-    label = "Professionnel" if classification == "professional" else "Personnel"
+        }]
+        label = f"Personnel (anonymisé · {pct}% sur la période)"
+    else:
+        label = "Professionnel" if classification == "professional" else "Personnel"
     title = f"Rapport {label} — Logitrak Livre de Bord"
     subtitle = ""
     if start or end:

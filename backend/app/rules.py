@@ -41,13 +41,7 @@ def classify_trip(trip: dict, vehicle: Optional[dict], settings: dict, schedule:
     `schedule` is a dict with shape: { days: [ {day: 0..6, type: 'work'|'personal',
     periods: [ {enabled, from, to}, ... ] }, ... ] }
     """
-    mode = settings.get("mode", "A")
-
-    # Mode C: tout est pro
-    if mode == "C":
-        return "professional"
-
-    # Vehicle mode override
+    # Vehicle mode override (highest priority)
     if vehicle:
         vmode = vehicle.get("mode")
         if vmode == "always_pro":
@@ -116,7 +110,7 @@ async def apply_rules_to_all(db):
 def default_settings() -> dict:
     return {
         "id": "default",
-        "mode": "A",  # A=visible, B=masqué, C=100% pro
+        "mode": "mixte",  # mixte = visible / masked = anonymisé
     }
 
 

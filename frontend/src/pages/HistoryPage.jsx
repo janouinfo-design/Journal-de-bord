@@ -78,8 +78,25 @@ export default function HistoryPage({ kind }) {
     }
   }
 
-  const isMasked = kind === "perso" && mode === "B" && user?.role !== "admin";
+  const isMasked = kind === "perso" && mode === "masked" && user?.role !== "admin";
   const canEdit = user?.role === "admin" || user?.role === "manager";
+
+  // KPI totals for masked perso view (computed via /dashboard which gives pct & km totals)
+  const [maskedSummary, setMaskedSummary] = useState(null);
+  useEffect(() => {
+    if (!isMasked) { setMaskedSummary(null); return; }
+    (async () => {
+      try {
+        const params = {};
+        if (filters.start) params.start = new Date(filters.start).toISOString();
+        if (filters.end) params.end = new Date(filters.end).toISOString();
+        if (filters.driver_id && filters.driver_id !== "all") params.driver_id = filters.driver_id;
+        if (filters.vehicle_id && filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+        const { data } = await api.get("/livre/dashboard", { params });
+        setMaskedSummary(data.kpi);
+      } catch { setMaskedSummary(null); }
+    })();
+  }, [isMasked, filters]);
 
   const stats = useMemo(() => {
     const km = trips.reduce((s, t) => s + (t.distance_km || 0), 0);
@@ -100,32 +117,59 @@ export default function HistoryPage({ kind }) {
             {kind === "pro"
               ? "Tous les trajets classifiés professionnels."
               : isMasked
-                ? "Mode masqué actif : seules les métriques minimales sont visibles pour le gestionnaire."
+                ? "Mode Personnel Masqué — confidentialité totale : ni dates, ni adresses, ni durées, ni vitesses."
                 : "Trajets personnels — chauffeur, dates, lieux et carte."}
           </p>
         </div>
-        <div className="flex gap-2 text-sm">
-          <div className="bg-white border border-slate-200 rounded-md px-3 py-2">
-            <p className="text-[10px] uppercase text-slate-400 tracking-wider">Total km</p>
-            <p className="font-semibold text-slate-800">{fmtKm(stats.km)}</p>
+        {!isMasked && (
+          <div className="flex gap-2 text-sm">
+            <div className="bg-white border border-slate-200 rounded-md px-3 py-2">
+              <p className="text-[10px] uppercase text-slate-400 tracking-wider">Total km</p>
+              <p className="font-semibold text-slate-800">{fmtKm(stats.km)}</p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-md px-3 py-2">
+              <p className="text-[10px] uppercase text-slate-400 tracking-wider">Trajets</p>
+              <p className="font-semibold text-slate-800">{stats.count}</p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-md px-3 py-2">
+              <p className="text-[10px] uppercase text-slate-400 tracking-wider">Durée</p>
+              <p className="font-semibold text-slate-800">{fmtDuration(stats.min)}</p>
+            </div>
           </div>
-          <div className="bg-white border border-slate-200 rounded-md px-3 py-2">
-            <p className="text-[10px] uppercase text-slate-400 tracking-wider">Trajets</p>
-            <p className="font-semibold text-slate-800">{stats.count}</p>
-          </div>
-          <div className="bg-white border border-slate-200 rounded-md px-3 py-2">
-            <p className="text-[10px] uppercase text-slate-400 tracking-wider">Durée</p>
-            <p className="font-semibold text-slate-800">{fmtDuration(stats.min)}</p>
-          </div>
-        </div>
+        )}
       </div>
 
       {isMasked && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-4 py-3 flex items-center gap-2 text-sm">
-          <EyeOff className="w-4 h-4" /> Mode B — Personnel masqué : carte, adresses et GPS désactivés pour les gestionnaires.
+          <EyeOff className="w-4 h-4" />
+          Mode Personnel Masqué : la liste des trajets, la carte, les dates, les adresses et toute donnée individuelle sont masquées. Seuls les totaux agrégés sont visibles.
         </div>
       )}
 
+      {/* Masked view: ONLY total km + percentage — nothing else */}
+      {isMasked ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-3xl">
+          <Card data-testid="masked-total-km" className="bg-white border-slate-200 shadow-sm rounded-md p-6">
+            <p className="text-xs font-semibold tracking-wider uppercase text-slate-500">Total km personnels</p>
+            <p className="mt-3 text-4xl font-semibold text-slate-700 tracking-tight">
+              {maskedSummary ? fmtKm(maskedSummary.perso_km) : "—"}
+            </p>
+            <p className="text-xs text-slate-400 mt-2">
+              Période : {filters.start || "depuis l'origine"} → {filters.end || "aujourd'hui"}
+            </p>
+          </Card>
+          <Card data-testid="masked-pct" className="bg-white border-slate-200 shadow-sm rounded-md p-6">
+            <p className="text-xs font-semibold tracking-wider uppercase text-slate-500">% personnel</p>
+            <p className="mt-3 text-4xl font-semibold text-slate-700 tracking-tight">
+              {maskedSummary ? `${maskedSummary.pct_perso.toFixed(1)} %` : "—"}
+            </p>
+            <p className="text-xs text-slate-400 mt-2">
+              Part du kilométrage privé sur la période
+            </p>
+          </Card>
+        </div>
+      ) : (
+      <>
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-4">
         <div className="flex items-end justify-between gap-3 flex-wrap">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 flex-1">
@@ -280,6 +324,8 @@ export default function HistoryPage({ kind }) {
           </div>
         )}
       </Card>
+      </>
+      )}
     </div>
   );
 }

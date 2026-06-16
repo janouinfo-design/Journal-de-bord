@@ -55,17 +55,17 @@ export default function DashboardPage() {
         <div className="text-right">
           <p className="text-[11px] uppercase tracking-[0.15em] text-slate-400">Politique</p>
           <p className="text-sm font-medium text-slate-700 mt-0.5">
-            Mode {data.settings_mode}{" "}
+            {data.settings_mode === "mixte" && "Mode Mixte"}
+            {data.settings_mode === "masked" && "Personnel Masqué"}
             <span className="text-slate-400 font-normal">
-              {data.settings_mode === "A" && "— Personnel visible"}
-              {data.settings_mode === "B" && "— Personnel masqué"}
-              {data.settings_mode === "C" && "— 100 % professionnel"}
+              {data.settings_mode === "mixte" && " — Pro et perso visibles"}
+              {data.settings_mode === "masked" && " — Trajets privés anonymisés"}
             </span>
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <KpiCard testId={TEST_IDS.dashboard.kpiProKm} label="Km professionnels" value={fmtKm(k.pro_km)} accent="pro" icon={Briefcase}
           sub={`${k.trips_count} trajets · ${fmtDuration(k.pro_time_min)}`} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPersoKm} label="Km personnels" value={fmtKm(k.perso_km)} accent="perso" icon={User}
@@ -74,8 +74,10 @@ export default function DashboardPage() {
           sub="Toutes catégories" />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPro} label="% professionnel" value={fmtPct(k.pct_pro)} accent="pro" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPerso} label="% personnel" value={fmtPct(k.pct_perso)} accent="perso" icon={PieIcon} />
-        <KpiCard testId={TEST_IDS.dashboard.kpiFuel} label="Carburant" value={`${k.pro_fuel.toFixed(1)} L`} accent="warning" icon={Fuel}
-          sub={`Pro · ${k.perso_fuel.toFixed(1)} L Perso`} />
+        <KpiCard testId={TEST_IDS.dashboard.kpiFuel} label="Carburant professionnel" value={`${k.pro_fuel.toFixed(1)} L`} accent="pro" icon={Fuel}
+          sub="Consommation pro" />
+        <KpiCard testId="kpi-fuel-perso" label="Carburant personnel" value={`${k.perso_fuel.toFixed(1)} L`} accent="warning" icon={Fuel}
+          sub="Consommation perso" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

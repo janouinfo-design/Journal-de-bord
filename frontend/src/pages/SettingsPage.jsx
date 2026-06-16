@@ -16,12 +16,10 @@ import AssignmentsDialog from "@/components/livre/AssignmentsDialog";
 import ScheduleEditor from "@/components/livre/ScheduleEditor";
 
 const MODE_OPTIONS = [
-  { id: "A", testId: TEST_IDS.settings.modeA, icon: Eye, label: "Personnel visible",
-    desc: "Le gestionnaire voit la carte, l'itinéraire, les adresses et l'historique complet.", color: "blue" },
-  { id: "B", testId: TEST_IDS.settings.modeB, icon: EyeOff, label: "Personnel masqué",
-    desc: "Seules les métriques (km, temps, carburant) sont visibles. Carte, adresses et GPS masqués.", color: "slate" },
-  { id: "C", testId: TEST_IDS.settings.modeC, icon: Briefcase, label: "100 % professionnel",
-    desc: "Tous les trajets sont considérés professionnels. Aucune classification personnelle.", color: "emerald" },
+  { id: "mixte", testId: TEST_IDS.settings.modeA, icon: Eye, label: "Mode mixte",
+    desc: "Le gestionnaire consulte les trajets professionnels et personnels (carte, adresses, horaires, vitesses, carburant). Les rapports pro et perso restent séparés." },
+  { id: "masked", testId: TEST_IDS.settings.modeB, icon: EyeOff, label: "Personnel masqué",
+    desc: "Les trajets privés sont totalement anonymisés. Le gestionnaire voit uniquement les km personnels et le pourcentage. Aucune carte, date, durée, adresse ou vitesse n'est exposée." },
 ];
 
 export default function SettingsPage() {
@@ -263,8 +261,8 @@ export default function SettingsPage() {
       {/* Privacy modes */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">
         <h3 className="text-sm font-semibold text-slate-800 mb-1">Politique de confidentialité</h3>
-        <p className="text-xs text-slate-500 mb-5">Détermine ce que voient les gestionnaires des trajets personnels.</p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <p className="text-xs text-slate-500 mb-5">Détermine ce que voient les gestionnaires des trajets personnels. Le mode « 100 % professionnel » est désormais configuré par véhicule.</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {MODE_OPTIONS.map(opt => {
             const active = settings.mode === opt.id;
             return (
@@ -282,7 +280,7 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <opt.icon className={`w-5 h-5 ${active ? "text-[#2196F3]" : "text-slate-400"}`} />
                   <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${active ? "bg-[#2196F3] text-white" : "bg-slate-100 text-slate-500"}`}>
-                    Mode {opt.id}
+                    {opt.id === "mixte" ? "Mixte" : "Masqué"}
                   </span>
                 </div>
                 <p className={`mt-3 text-sm font-semibold ${active ? "text-[#1976D2]" : "text-slate-800"}`}>{opt.label}</p>
@@ -338,8 +336,7 @@ export default function SettingsPage() {
                       ><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="mixte">Mixte</SelectItem>
-                        <SelectItem value="always_pro">Toujours professionnel</SelectItem>
-                        <SelectItem value="always_perso">Toujours personnel</SelectItem>
+                        <SelectItem value="always_pro">100 % Professionnel</SelectItem>
                       </SelectContent>
                     </Select>
                   </td>
