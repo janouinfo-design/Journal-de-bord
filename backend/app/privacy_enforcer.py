@@ -192,12 +192,12 @@ async def _enforce_one(db, vehicle: dict, simulation: bool, force: bool = False)
     # Real call
     if not is_configured():
         new_state["last_command_result"] = "error"
-        new_state["last_command_error"] = "NAVIXY_HASH non configuré"
+        new_state["last_command_error"] = "Clé d'intégration LOGITRAK non configurée"
         await _save_state(db, new_state)
         await _audit(db, vehicle["id"], "send_command_skipped",
                      {**audit_payload, "error": "no_hash"})
         return {**base, "expected_state": expected, "command": command,
-                "mode": "real", "result": "error", "error": "NAVIXY_HASH non configuré"}
+                "mode": "real", "result": "error", "error": "Clé d'intégration LOGITRAK non configurée"}
 
     try:
         resp = await send_raw_command(int(vehicle["navixy_tracker_id"]), command, reliable=True)

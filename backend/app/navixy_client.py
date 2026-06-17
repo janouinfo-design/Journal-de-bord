@@ -22,7 +22,7 @@ def _base_url() -> str:
 def _hash() -> str:
     h = os.environ.get("NAVIXY_HASH", "").strip()
     if not h:
-        raise NavixyError("NAVIXY_HASH non configuré dans .env")
+        raise NavixyError("Clé d'intégration LOGITRAK non configurée")
     return h
 
 

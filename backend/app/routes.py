@@ -127,13 +127,13 @@ async def navixy_status(user=Depends(require_roles("admin", "manager"))):
 async def navixy_sync_endpoint(days: int = 30, user=Depends(require_roles("admin"))):
     """Pull live data from Navixy: trackers, employees, zones, tracks."""
     if not navixy_configured():
-        raise HTTPException(400, "NAVIXY_HASH non configuré dans .env")
+        raise HTTPException(400, "Clé d'intégration LOGITRAK non configurée")
     if days < 1 or days > 365:
         raise HTTPException(400, "days doit être entre 1 et 365")
     try:
         return await sync_navixy(days=days, force_reclassify=True)
     except NavixyError as e:
-        raise HTTPException(502, f"Navixy API: {e}")
+        raise HTTPException(502, f"LOGITRAK : {e}")
     except Exception as e:
         raise HTTPException(500, f"Erreur de synchronisation: {e}")
 
@@ -166,11 +166,11 @@ async def scheduler_put(payload: SchedulerIn, user=Depends(require_roles("admin"
 @router.post("/navixy/scheduler/run-now")
 async def scheduler_run_now(user=Depends(require_roles("admin"))):
     if not navixy_configured():
-        raise HTTPException(400, "NAVIXY_HASH non configuré")
+        raise HTTPException(400, "Clé d'intégration LOGITRAK non configurée")
     try:
         return await trigger_sched()
     except NavixyError as e:
-        raise HTTPException(502, f"Navixy API: {e}")
+        raise HTTPException(502, f"LOGITRAK : {e}")
 
 
 # ---------- Assignments (driver ↔ vehicle, time-aware) ----------

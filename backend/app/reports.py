@@ -217,7 +217,7 @@ def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "
     flow.append(Spacer(1, 0.3 * cm))
     flow.append(Paragraph(
         f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} · "
-        f"Logitrak — Livre de Bord · Données GPS officielles Navixy",
+        f"Logitrak — Livre de Bord · Données GPS officielles LOGITRAK",
         ParagraphStyle("foot", parent=sub_style, fontSize=7.5,
                        textColor=colors.HexColor("#94A3B8")),
     ))
@@ -274,8 +274,8 @@ def swiss_tax_report_pdf(stats: dict, year: int, owner: str = "") -> bytes:
     flow.append(Spacer(1, 0.8 * cm))
     flow.append(Paragraph(
         "Ce document est généré automatiquement par Logitrak — Livre de Bord, "
-        "à partir des données GPS officielles Navixy. Les kilomètres correspondent exactement "
-        "aux distances Navixy. Conformité avec les exigences fiscales suisses (déduction privé/pro).",
+        "à partir des données GPS officielles LOGITRAK. Les kilomètres correspondent exactement "
+        "aux distances enregistrées par le système. Conformité avec les exigences fiscales suisses (déduction privé/pro).",
         body,
     ))
     flow.append(Spacer(1, 0.3 * cm))
