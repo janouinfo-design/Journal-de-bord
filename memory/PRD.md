@@ -55,6 +55,31 @@ affectation manuelle, droits par rôle.
 
 ## Bug fixes
 
+### Iteration 6 — Privacy Phase 2 (Tracker enforcement)
+- Backend `app/privacy_enforcer.py` (NOUVEAU) :
+  * `compute_expected_state(vehicle, schedule, now)` → 'tracking' | 'private'
+  * `enforce_all_vehicles(db)` : itère, skip incompatibles, envoie (ou simule) via `send_raw_command`
+  * `kill_switch(db)` : force tous les véhicules privés à revenir en tracking (réel par design)
+  * `list_states(db)` : ne retourne que les véhicules compatibles
+  * Constantes : REAFFIRM_AFTER=12h, PRIVATE_MAX_AGE=24h
+  * Commands Teltonika : `setparam 11000:4` (private/deep sleep) / `setparam 11000:0` (tracking)
+  * Commands Queclink : `AT+GTCFG=,privacy_mode=1` / `=0`
+- Backend `app/navixy_client.py` : `send_raw_command(tracker_id, command, reliable=true)` via `tracker/raw_command/send`
+- Backend `app/scheduler.py` : nouveau job `_run_privacy_enforcement` toutes les 5 min (IntervalTrigger),
+  enregistré inconditionnellement au startup ; le job lui-même no-op si `settings.privacy_enforcement_enabled=False`
+- Backend endpoints :
+  * `GET /api/livre/privacy/enforcement-config` (admin/manager)
+  * `PUT /api/livre/privacy/enforcement-config` (admin) + audit_log
+  * `GET /api/livre/privacy/state` (admin/manager) — véhicules compatibles uniquement
+  * `POST /api/livre/privacy/enforce-now` (admin)
+  * `POST /api/livre/privacy/kill-switch` (admin)
+- Frontend `PrivacyEnforcementCard.jsx` : 2 toggles (enabled / simulation), 2 boutons (Forcer / Kill switch),
+  tableau d'état par véhicule, bannière rouge si mode réel actif, confirm() avant kill switch
+- Safety nets : simulation=true par défaut, REAFFIRM 12h, expiry 24h, kill switch, skip incompatibles,
+  RBAC strict, audit_log de toute modif config
+- Tests : pytest 20/20 PASS (test_iteration6_privacy_enforcement.py), frontend e2e admin/manager/driver OK
+- État final laissé sain : enabled=false, simulation=true
+
 ### Iteration 5 — Privacy Phase 1 (Tracker compatibility scan, read-only)
 - Backend : `GET /api/livre/privacy/tracker-compatibility` et `/{vehicle_id}` (admin/manager only)
   → détection par modèle de traceur synchronisé Navixy ; aucune commande sortante
