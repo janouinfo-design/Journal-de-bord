@@ -17,6 +17,7 @@ from app.assignments import (
     list_assignments, add_assignment, remove_assignment,
     reassign_all_trips, driver_vehicle_ids,
 )
+from app.privacy_scan import scan_all_vehicles, scan_vehicle
 
 
 router = APIRouter(prefix="/livre", tags=["livre-de-bord"])
@@ -405,6 +406,29 @@ async def list_companies(user=Depends(get_current_user)):
     companies = sorted({t for t in tenants if t})
     label_map = {"default": "Logitrak"}
     return [{"id": c, "name": label_map.get(c, c)} for c in companies]
+
+
+# ---------- Privacy Phase 1 — Tracker compatibility scan (no command sent) ----------
+@router.get("/privacy/tracker-compatibility")
+async def privacy_tracker_compat(user=Depends(require_roles("admin", "manager"))):
+    """Scan every vehicle's tracker and report whether a privacy/sleep command exists.
+
+    PHASE 1 ONLY: discovery — no command is ever sent. Returns
+    `{rows: [{vehicle_id, plate, status, full_matches, partial_matches, error}],
+       counters: {full, partial, none, unknown, total}}`.
+    """
+    db = get_db()
+    return await scan_all_vehicles(db)
+
+
+@router.get("/privacy/tracker-compatibility/{vehicle_id}")
+async def privacy_tracker_compat_one(vehicle_id: str,
+                                     user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Véhicule introuvable")
+    return await scan_vehicle(db, v)
 
 
 # ---------- Dashboard ----------

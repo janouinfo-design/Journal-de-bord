@@ -70,3 +70,14 @@ async def list_tracks(tracker_id: int, date_from: str, date_to: str) -> dict:
         return await _post(c, "track/list", {
             "tracker_id": tracker_id, "from": date_from, "to": date_to,
         })
+
+
+async def list_commands(tracker_id: int) -> list[dict]:
+    """List available commands for a given tracker (depends on its model/firmware).
+
+    Each item typically contains: id, name, command_type, description, params...
+    See https://navixy.com/docs/navixy-api/user-api/backend-api/resources/tracker/command
+    """
+    async with httpx.AsyncClient() as c:
+        data = await _post(c, "tracker/command/list", {"tracker_id": tracker_id})
+    return data.get("list", [])
