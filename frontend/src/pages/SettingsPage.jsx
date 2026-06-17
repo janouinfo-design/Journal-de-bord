@@ -15,6 +15,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import AssignmentsDialog from "@/components/livre/AssignmentsDialog";
 import ScheduleEditor from "@/components/livre/ScheduleEditor";
 import PrivacyCompatCard from "@/components/livre/PrivacyCompatCard";
+import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
 
 const MODE_OPTIONS = [
   { id: "mixte", testId: TEST_IDS.settings.modeA, icon: Eye, label: "Mode mixte",
@@ -308,6 +309,9 @@ export default function SettingsPage() {
 
       {/* Privacy Phase 1 — Tracker compatibility scan (read-only, admin/manager only) */}
       {canEdit && <PrivacyCompatCard />}
+
+      {/* Privacy Phase 2 — Enforcement (admin/manager only — write actions are admin) */}
+      {canEdit && <PrivacyEnforcementCard />}
 
       {/* Vehicles */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">

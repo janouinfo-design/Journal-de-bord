@@ -21,6 +21,8 @@ from app.navixy_sync import sync_navixy
 logger = logging.getLogger(__name__)
 
 JOB_ID = "navixy_sync_job"
+PRIVACY_JOB_ID = "privacy_enforcement_job"
+PRIVACY_INTERVAL_MIN = int(os.environ.get("PRIVACY_ENFORCE_INTERVAL_MIN", "5"))
 STATE_ID = "scheduler"
 
 _scheduler: AsyncIOScheduler | None = None
@@ -71,6 +73,19 @@ async def _run_sync():
         )
 
 
+async def _run_privacy_enforcement():
+    """Periodic job — enforces tracker privacy per current schedule + settings."""
+    from app.db import get_db
+    from app.privacy_enforcer import enforce_all_vehicles
+    db = get_db()
+    try:
+        result = await enforce_all_vehicles(db)
+        logger.info("Privacy enforcement run: %s", {k: result.get(k) for k in
+                    ("enabled", "simulation", "executed", "sent_real", "simulated", "skipped", "errors")})
+    except Exception:
+        logger.exception("Privacy enforcement failed")
+
+
 async def _persist_next_run(db):
     if _scheduler is None:
         return
@@ -93,6 +108,12 @@ async def init_scheduler():
             _run_sync, IntervalTrigger(minutes=state.get("interval_min", 15)),
             id=JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
         )
+    # Privacy enforcement runs unconditionally — the job itself checks the
+    # settings.privacy_enforcement_enabled flag and short-circuits if off.
+    _scheduler.add_job(
+        _run_privacy_enforcement, IntervalTrigger(minutes=PRIVACY_INTERVAL_MIN),
+        id=PRIVACY_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
     await _persist_next_run(db)
     logger.info("Scheduler initialised (enabled=%s, interval_min=%s)",
                 state.get("enabled"), state.get("interval_min"))

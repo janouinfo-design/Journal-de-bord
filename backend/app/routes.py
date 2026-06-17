@@ -18,6 +18,9 @@ from app.assignments import (
     reassign_all_trips, driver_vehicle_ids,
 )
 from app.privacy_scan import scan_all_vehicles, scan_vehicle
+from app.privacy_enforcer import (
+    enforce_all_vehicles, kill_switch, list_states, compute_expected_state,
+)
 
 
 router = APIRouter(prefix="/livre", tags=["livre-de-bord"])
@@ -429,6 +432,61 @@ async def privacy_tracker_compat_one(vehicle_id: str,
     if not v:
         raise HTTPException(404, "Véhicule introuvable")
     return await scan_vehicle(db, v)
+
+
+# ---------- Privacy Phase 2 — Enforcement (real or simulated) ----------
+@router.get("/privacy/enforcement-config")
+async def privacy_enforcement_config(user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    s = await db.settings.find_one({"id": "default"}, {"_id": 0}) or {}
+    return {
+        "enabled": bool(s.get("privacy_enforcement_enabled", False)),
+        "simulation": bool(s.get("privacy_simulation_mode", True)),
+    }
+
+
+@router.put("/privacy/enforcement-config")
+async def privacy_enforcement_config_update(payload: dict,
+                                            user=Depends(require_roles("admin"))):
+    db = get_db()
+    update = {}
+    if "enabled" in payload:
+        update["privacy_enforcement_enabled"] = bool(payload["enabled"])
+    if "simulation" in payload:
+        update["privacy_simulation_mode"] = bool(payload["simulation"])
+    if not update:
+        raise HTTPException(400, "Aucun champ à mettre à jour")
+    await db.settings.update_one({"id": "default"}, {"$set": update}, upsert=True)
+    await db.audit_log.insert_one({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "scope": "tracker_privacy",
+        "action": "config_update",
+        "actor": user.get("email"),
+        "payload": update,
+    })
+    s = await db.settings.find_one({"id": "default"}, {"_id": 0}) or {}
+    return {
+        "enabled": bool(s.get("privacy_enforcement_enabled", False)),
+        "simulation": bool(s.get("privacy_simulation_mode", True)),
+    }
+
+
+@router.get("/privacy/state")
+async def privacy_state(user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    return {"rows": await list_states(db)}
+
+
+@router.post("/privacy/enforce-now")
+async def privacy_enforce_now(user=Depends(require_roles("admin"))):
+    db = get_db()
+    return await enforce_all_vehicles(db)
+
+
+@router.post("/privacy/kill-switch")
+async def privacy_kill_switch(user=Depends(require_roles("admin"))):
+    db = get_db()
+    return await kill_switch(db)
 
 
 # ---------- Dashboard ----------

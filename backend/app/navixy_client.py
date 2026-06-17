@@ -81,3 +81,21 @@ async def list_commands(tracker_id: int) -> list[dict]:
     async with httpx.AsyncClient() as c:
         data = await _post(c, "tracker/command/list", {"tracker_id": tracker_id})
     return data.get("list", [])
+
+
+async def send_raw_command(tracker_id: int, command: str, reliable: bool = True) -> dict:
+    """Send a raw protocol command to a tracker via Navixy (Phase 2 — write op).
+
+    Endpoint: `tracker/raw_command/send`. Returns `{success, command_id, ...}`.
+    `reliable=True` makes Navixy queue and retry the command until ACK/timeout.
+
+    Caller is responsible for ensuring the device supports this command. The
+    enforcer module restricts the call to vehicles classified as 'full'
+    compatibility (see `privacy_scan.classify_model`).
+    """
+    async with httpx.AsyncClient() as c:
+        return await _post(c, "tracker/raw_command/send", {
+            "tracker_id": int(tracker_id),
+            "command": command,
+            "reliable": reliable,
+        })
