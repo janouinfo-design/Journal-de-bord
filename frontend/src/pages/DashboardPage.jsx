@@ -80,7 +80,7 @@ export default function DashboardPage() {
           <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Tableau de bord</p>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900 mt-1">Livre de Bord</h1>
           <p className="text-sm text-slate-500 mt-1.5">
-            Vue d&apos;ensemble des kilomètres professionnels et personnels — données GPS officielles Navixy.
+            Vue d&apos;ensemble des kilomètres professionnels et personnels — données GPS officielles LOGITRAK.
           </p>
         </div>
         <div className="text-right">

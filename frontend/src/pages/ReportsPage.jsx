@@ -56,7 +56,7 @@ export default function ReportsPage({ kind }) {
           {kind === "pro" ? "Générer rapport professionnel" : "Générer rapport personnel"}
         </h1>
         <p className="text-sm text-slate-500 mt-1.5">
-          Génération de rapports PDF, Excel et CSV à partir des données Navixy.
+          Génération de rapports PDF, Excel et CSV à partir des données LOGITRAK.
         </p>
       </div>
 
@@ -122,7 +122,7 @@ export default function ReportsPage({ kind }) {
         <p className="font-medium text-[#1976D2]">À propos des rapports {kind === "pro" ? "professionnels" : "personnels"}</p>
         <p className="text-slate-600 mt-1 leading-relaxed text-xs">
           {kind === "pro"
-            ? "Inclut : véhicule, conducteur, départ, arrivée, distance, temps, carburant, vitesses. Distances strictement identiques à celles affichées dans Navixy."
+            ? "Inclut : véhicule, conducteur, départ, arrivée, distance, temps, carburant, vitesses. Distances strictement identiques à celles affichées dans LOGITRAK."
             : "En mode A (visible), le rapport contient les détails complets. En mode B (masqué), seuls la date, la distance et la durée apparaissent — la confidentialité du chauffeur est préservée."}
         </p>
       </Card>

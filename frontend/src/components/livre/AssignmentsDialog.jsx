@@ -193,7 +193,7 @@ export default function AssignmentsDialog({ vehicle, drivers, onChanged, canEdit
                         </td>
                         <td className="py-2 px-3 text-center">
                           <span className={`text-[10px] uppercase tracking-wider ${r.source === "navixy" ? "text-[#1976D2]" : "text-slate-500"}`}>
-                            {r.source}
+                            {r.source === "navixy" ? "LOGITRAK" : r.source}
                           </span>
                         </td>
                         <td className="py-2 px-3 text-right">

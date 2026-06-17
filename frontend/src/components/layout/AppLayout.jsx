@@ -110,7 +110,7 @@ export default function AppLayout() {
           ))}
         </nav>
         <div className="border-t border-slate-100 p-3 text-[11px] text-slate-400">
-          v1.0 · Données Navixy
+          v1.0 · Données LOGITRAK
         </div>
       </aside>
 

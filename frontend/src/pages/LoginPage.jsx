@@ -56,12 +56,12 @@ export default function LoginPage() {
             <span className="text-[#2196F3]">Pro / Personnel</span>
           </h1>
           <p className="text-slate-300 text-base max-w-md leading-relaxed">
-            Séparez automatiquement vos kilomètres professionnels et personnels grâce aux données GPS Navixy.
+            Séparez automatiquement vos kilomètres professionnels et personnels grâce aux données GPS LOGITRAK.
             Confidentialité configurable, rapports fiscaux suisses.
           </p>
           <div className="grid grid-cols-3 gap-3 max-w-md pt-4">
             {[
-              { icon: MapPin, label: "GPS Navixy" },
+              { icon: MapPin, label: "GPS LOGITRAK" },
               { icon: Truck, label: "Multi-véhicules" },
               { icon: FileText, label: "Fiscal CH" },
             ].map((f) => (

@@ -84,7 +84,7 @@ export default function SettingsPage() {
     try {
       const { data } = await api.post(`/livre/navixy/sync?days=${syncDays}`);
       setLastSync(data);
-      toast.success(`Navixy : ${data.trips_new} nouveaux · ${data.trips_updated} màj`);
+      toast.success(`LOGITRAK : ${data.trips_new} nouveaux · ${data.trips_updated} màj`);
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Sync impossible");
@@ -165,7 +165,7 @@ export default function SettingsPage() {
 
       {/* SECTION 1 — SYNCHRONISATION NAVIXY */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-lg p-5">
-        <SectionHeader n={1} title="Synchronisation Navixy"
+        <SectionHeader n={1} title="Synchronisation LOGITRAK"
           icon={navixy.configured ? Cloud : CloudOff}
           accent={navixy.configured ? "text-[#2196F3]" : "text-slate-400"} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -175,7 +175,7 @@ export default function SettingsPage() {
               <div className="min-w-[180px]">
                 <p className="text-xs font-semibold text-slate-800">Synchronisation automatique</p>
                 <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                  Lance une sync Navixy en arrière-plan à intervalle régulier.
+                  Lance une sync LOGITRAK en arrière-plan à intervalle régulier.
                 </p>
                 {sched && (
                   <div className="mt-3 space-y-1 text-[11px] font-mono text-slate-600">
@@ -252,7 +252,7 @@ export default function SettingsPage() {
               </div>
             </div>
             <p className="text-[10px] text-slate-500 mt-3 bg-blue-50 border border-blue-100 rounded px-2 py-1.5 leading-snug">
-              💡 La synchronisation importe les véhicules <span className="font-mono">tracker/list</span>, les chauffeurs <span className="font-mono">employee/list</span>, les zones <span className="font-mono">zone/list</span> et les trajets <span className="font-mono">track/list</span>.
+              💡 La synchronisation importe les véhicules, les chauffeurs, les zones et les trajets de la flotte LOGITRAK sur la période sélectionnée.
             </p>
             {lastSync && (
               <p className="text-[10px] font-mono text-slate-600 mt-2">
