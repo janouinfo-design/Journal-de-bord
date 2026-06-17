@@ -55,6 +55,24 @@ affectation manuelle, droits par rôle.
 
 ## Bug fixes
 
+### Iteration 9 — Carte MapLibre dans l'historique
+- Dépendances ajoutées : `maplibre-gl@5.24`, `react-map-gl@8.1` (via yarn)
+- Composant `frontend/src/components/livre/TripsMap.jsx` (NOUVEAU) :
+  * Tuiles **OpenStreetMap raster** (gratuit, sans clé API)
+  * Polylignes droites départ→arrivée par trajet, color-coding :
+    - Pro = `#2196F3`, Perso = `#F59E0B`, N/C = `#94A3B8`
+  * Markers verts au départ
+  * Popup HTML au clic : date, classification, plaque, adresses, distance, chauffeur
+  * Auto-fit bounds, contrôles zoom/orientation MapLibre
+  * Légende Pro/Privé/N/C dans le header
+- **Invariant Personnel Masqué STRICT (même pour admin)** :
+  * Filtre client-side : `if settingsMode==="masked" → keep only trips where classification==="professional"`
+  * Bandeau jaune « Mode Personnel Masqué — N trajet(s) personnel(s) masqué(s) sur la carte »
+  * data-testid `trips-map-masked-notice` pour les tests
+  * Testé end-to-end : admin + masked + perso page → **0 trajet** affiché alors que 500 dans la liste
+- Intégration dans `pages/HistoryPage.jsx` (sous les filtres, avant le tableau)
+- Pas de modification backend (utilise les `start_lat/lng` + `end_lat/lng` déjà présents)
+
 ### Iteration 8 — MVP Phase A : Identification BLE chauffeur ↔ véhicule
 - Backend `app/ble_engine.py` (NOUVEAU 350+ lignes) :
   * Modèles MongoDB : `ble_tags`, `ble_detections`, `driver_sessions`

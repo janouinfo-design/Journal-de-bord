@@ -8,6 +8,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { ClassificationBadge } from "@/components/livre/Badges";
+import TripsMap from "@/components/livre/TripsMap";
 import { toast } from "sonner";
 import {
   Loader2, ArrowLeftRight, Briefcase, User, EyeOff, Gauge,
@@ -262,6 +263,9 @@ export default function HistoryPage({ kind }) {
           </div>
         </div>
       </Card>
+
+      {/* Map view — strictly enforces masked mode (no personal trips even for admin) */}
+      <TripsMap trips={trips} settingsMode={mode} />
 
       <Card className="bg-white border-slate-200 shadow-sm rounded-md overflow-hidden">
         {loading ? (
