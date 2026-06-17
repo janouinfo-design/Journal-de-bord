@@ -55,6 +55,23 @@ affectation manuelle, droits par rôle.
 
 ## Bug fixes
 
+### Iteration 5 — Privacy Phase 1 (Tracker compatibility scan, read-only)
+- Backend : `GET /api/livre/privacy/tracker-compatibility` et `/{vehicle_id}` (admin/manager only)
+  → détection par modèle de traceur synchronisé Navixy ; aucune commande sortante
+- Modèles répertoriés :
+  * Teltonika FMC130 / FMC230 / FMC003 / FMB* → `full` (`setparam 1004:0 (sleep mode)`)
+  * Queclink GV/GL/GMT → `full` (`AT+GTCFG,privacy=1`)
+  * Concox JM-01 / GT06 → `partial` (SMS seulement)
+  * Smartphones Navixy (iOS/Android) → `none`
+  * Autres → `unknown`
+- Frontend : `<PrivacyCompatCard />` injecté dans Paramètres (admin/manager only)
+  4 compteurs + tableau (plaque, modèle, famille, statut, commande prévue) + Re-scanner
+- Sur la flotte réelle : 10 Teltonika compatibles, 2 smartphones non supportés,
+  6 véhicules mock à vérifier (modèles génériques type "Mercedes Sprinter")
+- Garde-fous Phase 1 : endpoint requireRoles(admin/manager), composant masqué pour drivers,
+  AUCUN appel à `tracker/raw_command/send` (vérifié par AST static check du testing agent)
+- Tests : backend pytest 10/10 PASS, frontend admin+driver flows OK après fix `canEdit && <PrivacyCompatCard />`
+
 ### Iteration 4 — Filtres Groupe/Société + KPI complets + always_perso strict
 - Backend : nouveaux endpoints `GET /api/livre/groups` (premier token des plaques) et
   `GET /api/livre/companies` (distinct tenant_id, label "Logitrak" pour default).

@@ -306,8 +306,8 @@ export default function SettingsPage() {
       {/* Schedule editor (per-day work periods) */}
       <ScheduleEditor canEdit={canEdit} drivers={drivers} />
 
-      {/* Privacy Phase 1 — Tracker compatibility scan (read-only) */}
-      <PrivacyCompatCard />
+      {/* Privacy Phase 1 — Tracker compatibility scan (read-only, admin/manager only) */}
+      {canEdit && <PrivacyCompatCard />}
 
       {/* Vehicles */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-6">
