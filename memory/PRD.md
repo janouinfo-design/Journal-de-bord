@@ -55,6 +55,25 @@ affectation manuelle, droits par rôle.
 
 ## Bug fixes
 
+### Iteration 8 — MVP Phase A : Identification BLE chauffeur ↔ véhicule
+- Backend `app/ble_engine.py` (NOUVEAU 350+ lignes) :
+  * Modèles MongoDB : `ble_tags`, `ble_detections`, `driver_sessions`
+  * `ingest_detection()` : ignore si rssi < seuil ou tag inconnu, sinon
+    open/extend session, ferme les autres sessions actives du chauffeur, recompute confidence
+  * `_compute_confidence()` : 0..100 = 35 % stabilité + 25 % force + 20 % durée + 20 % historique
+  * `driver_set_mode()` : stamp `mobile_override` sur session + propage aux trips à venir, audit log
+- Backend `rules.classify_trip` : cascade **mobile_override > vehicle.mode > geofence > schedule**
+- Backend endpoints : CRUD /ble/tags, /ble/detections (driver), /ble/simulate (admin),
+  /ble/sessions (read+amend), /ble/dashboard, /ble/settings, /driver/current-session,
+  /driver/manual-mode
+- Frontend `IdentificationPage.jsx` : 8 KPIs + filtres + tableau sessions + actions + Dialog
+- Frontend `DriverConsolePage.jsx` (PWA /driver) : mobile-first sombre, 2 gros boutons PRO/PRIVÉ,
+  vehicle card pulse + RSSI + confidence, banner override, simulateur BLE, polling 10s
+- Frontend Settings Sheet : colonne « Tag BLE » avec inline editor
+- Navigation : section « Identification BLE » gated admin
+- Tests : pytest 32/32 PASS ; bug ObjectId leak corrigé
+- État final : mode=mixte, allow_driver_override=true, ble_enabled=true
+
 ### Iteration 6 — Privacy Phase 2 (Tracker enforcement)
 - Backend `app/privacy_enforcer.py` (NOUVEAU) :
   * `compute_expected_state(vehicle, schedule, now)` → 'tracking' | 'private'

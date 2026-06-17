@@ -8,7 +8,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -220,7 +220,7 @@ export default function IdentificationPage() {
                 const meta = STATUS_BADGE[r.status] || STATUS_BADGE.open;
                 return (
                   <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/60"
-                    data-testid={`ident-row-${r.status}`}>
+                    data-testid={`ident-row-${r.id}`}>
                     <td className="py-3 px-4 text-xs font-mono text-slate-600">
                       {fmtDate(r.started_at)}<br/>
                       <span className="text-slate-400">→ {fmtDate(r.ended_at || r.last_seen)}</span>
@@ -284,6 +284,9 @@ export default function IdentificationPage() {
             <DialogTitle className="text-base font-semibold flex items-center gap-2">
               <Edit3 className="w-4 h-4 text-slate-500" /> Modifier la session
             </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Réassigner le chauffeur, le véhicule ou changer le statut de la session BLE.
+            </DialogDescription>
           </DialogHeader>
           {editing && (
             <div className="space-y-3 py-2">
