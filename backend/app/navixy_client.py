@@ -7,7 +7,7 @@ Authentication uses session `hash` (32-char hex). Configure via env:
 All methods raise NavixyError on non-success responses.
 """
 import os
-from typing import Any
+from typing import Any, Optional
 import httpx
 
 
@@ -70,6 +70,29 @@ async def list_tracks(tracker_id: int, date_from: str, date_to: str) -> dict:
         return await _post(c, "track/list", {
             "tracker_id": tracker_id, "from": date_from, "to": date_to,
         })
+
+
+async def read_track_points(tracker_id: int, date_from: str, date_to: str,
+                            track_id: Optional[int] = None,
+                            simplify: bool = True, point_limit: int = 500) -> list[dict]:
+    """Fetch raw GPS points (`track/read`) for a tracker over a time range.
+
+    `date_from` / `date_to` format: 'YYYY-MM-DD HH:MM:SS' (server timezone).
+    Optionally restrict to a specific Navixy track_id. Returns the raw list
+    of point dicts (`lat`, `lng`, `get_time`, `speed`, `heading`, ...).
+    """
+    body: dict = {
+        "tracker_id": int(tracker_id),
+        "from": date_from,
+        "to": date_to,
+        "simplify": simplify,
+        "point_limit": int(point_limit),
+    }
+    if track_id is not None:
+        body["track_id"] = int(track_id)
+    async with httpx.AsyncClient() as c:
+        data = await _post(c, "track/read", body)
+    return data.get("list") or []
 
 
 async def list_commands(tracker_id: int) -> list[dict]:

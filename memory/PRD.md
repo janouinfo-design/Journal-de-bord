@@ -55,6 +55,27 @@ affectation manuelle, droits par rôle.
 
 ## Bug fixes
 
+### Iteration 10 — Polylignes Navixy réelles (`tracker/track/read` + cache)
+- Backend `navixy_client.read_track_points(tracker_id, from, to, track_id?, simplify=true, point_limit=300)`
+  appelle `track/read` au format `'YYYY-MM-DD HH:MM:SS'`. Retourne 139 points GPS pour un trajet typique.
+- Backend `GET /api/livre/trips/{trip_id}/track?refresh=` (auth all roles, mais voir invariant) :
+  * **Invariant strict masqué** : si `settings.mode=='masked'` ET `trip.classification=='personal'` → **403 immédiat**, même pour admin. Les points ne sont JAMAIS lus, mis en cache, ni renvoyés.
+  * Cache permanent dans `db.trip_tracks` keyed by trip_id (trips immuables une fois clos)
+  * Cache négatif si erreur Navixy pour éviter de hammer
+  * Fallback gracieux : ligne droite `[start_lng/lat, end_lng/lat]` si pas de tracker_id / pas de NAVIXY_HASH / erreur réseau
+  * Source labelisée : `navixy | cache | fallback_no_tracker | fallback_no_points | fallback_navixy_error`
+- Frontend `TripsMap.jsx` :
+  * Pool de fetch concurrency=6 au mount/changement de trips
+  * Garde `fetchedRef` pour ne pas refetch déjà chargés
+  * Indicateur de chargement « chargement des traces GPS… (N restants) »
+  * Si polyline réelle reçue → remplace la ligne droite
+  * Fallback ligne droite reste affichée en attendant
+- Validation manuelle :
+  * 139 points GPS chargés sur un trajet réel ✅
+  * 2e appel → source='cache' ✅
+  * Mode masqué → admin reçoit 403 sur perso trip ✅
+  * UI : polylignes suivent les routes (autoroutes, périphériques), plus de lignes droites
+
 ### Iteration 9 — Carte MapLibre dans l'historique
 - Dépendances ajoutées : `maplibre-gl@5.24`, `react-map-gl@8.1` (via yarn)
 - Composant `frontend/src/components/livre/TripsMap.jsx` (NOUVEAU) :

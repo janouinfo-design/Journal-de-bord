@@ -4,13 +4,17 @@
  * rendered on the map regardless of user role. Only `classification ===
  * 'professional'` may be shown. This is enforced client-side AND complements
  * the existing backend invariant.
+ *
+ * Real polylines: for each visible trip we lazy-fetch GPS points from
+ * `/api/livre/trips/{id}/track` (which calls Navixy with a server-side cache).
+ * If the fetch fails or returns a fallback, we keep the straight line.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import maplibregl from "maplibre-gl";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Map as MapIcon, EyeOff, Maximize2 } from "lucide-react";
+import { Map as MapIcon, EyeOff, Loader2 } from "lucide-react";
 
 const COLORS = {
   professional: "#2196F3",
@@ -47,6 +51,10 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
   const mapRef = useRef(null);
   const popupRef = useRef(null);
   const [ready, setReady] = useState(false);
+  // Map trip.id → real polyline `[[lng,lat], ...]` once fetched
+  const [polylines, setPolylines] = useState({});
+  const [loadingPoly, setLoadingPoly] = useState(0);
+  const fetchedRef = useRef(new Set());
 
   // ✱ Strict masked-mode filter — applied here regardless of role.
   const visibleTrips = useMemo(() => {
@@ -59,28 +67,62 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
 
   const hiddenCount = (trips?.filter(validCoord).length || 0) - visibleTrips.length;
 
-  // Build GeoJSON
+  // Lazy load real polylines with a small concurrency pool (avoid spamming the backend).
+  useEffect(() => {
+    if (!visibleTrips.length) return;
+    const toFetch = visibleTrips
+      .filter(t => t.id && !fetchedRef.current.has(t.id))
+      .slice(0, 200); // hard cap per render
+    if (!toFetch.length) return;
+    let cancelled = false;
+    setLoadingPoly(toFetch.length);
+
+    const CONCURRENCY = 6;
+    let cursor = 0;
+    const next = async () => {
+      while (cursor < toFetch.length && !cancelled) {
+        const idx = cursor++;
+        const t = toFetch[idx];
+        fetchedRef.current.add(t.id);
+        try {
+          const { data } = await api.get(`/livre/trips/${t.id}/track`);
+          if (cancelled) return;
+          if (data?.points?.length >= 2) {
+            setPolylines(prev => ({ ...prev, [t.id]: data.points }));
+          }
+        } catch { /* keep fallback straight line */ }
+        setLoadingPoly(n => Math.max(0, n - 1));
+      }
+    };
+    Promise.all(Array.from({ length: Math.min(CONCURRENCY, toFetch.length) }, next));
+    return () => { cancelled = true; };
+  }, [visibleTrips]);
+
+  // Build GeoJSON, using real polyline if cached else straight line
   const geojson = useMemo(() => ({
     type: "FeatureCollection",
-    features: visibleTrips.map(t => ({
-      type: "Feature",
-      properties: {
-        id: t.id,
-        classification: t.classification || "unclassified",
-        start_address: t.start_address || "",
-        end_address: t.end_address || "",
-        start_time: t.start_time,
-        end_time: t.end_time,
-        distance_km: t.distance_km,
-        driver_name: t.driver_name || "",
-        vehicle_plate: t.vehicle_plate || "",
-      },
-      geometry: {
-        type: "LineString",
-        coordinates: [[t.start_lng, t.start_lat], [t.end_lng, t.end_lat]],
-      },
-    })),
-  }), [visibleTrips]);
+    features: visibleTrips.map(t => {
+      const coords = polylines[t.id] && polylines[t.id].length >= 2
+        ? polylines[t.id]
+        : [[t.start_lng, t.start_lat], [t.end_lng, t.end_lat]];
+      return {
+        type: "Feature",
+        properties: {
+          id: t.id,
+          classification: t.classification || "unclassified",
+          start_address: t.start_address || "",
+          end_address: t.end_address || "",
+          start_time: t.start_time,
+          end_time: t.end_time,
+          distance_km: t.distance_km,
+          driver_name: t.driver_name || "",
+          vehicle_plate: t.vehicle_plate || "",
+          is_real: !!polylines[t.id],
+        },
+        geometry: { type: "LineString", coordinates: coords },
+      };
+    }),
+  }), [visibleTrips, polylines]);
 
   // Init map (once)
   useEffect(() => {
@@ -190,6 +232,12 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
           <span className="text-[11px] text-slate-500" data-testid="trips-map-count">
             {visibleTrips.length} trajet(s) affiché(s)
           </span>
+          {loadingPoly > 0 && (
+            <span className="text-[11px] text-slate-400 flex items-center gap-1" data-testid="trips-map-loading">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              chargement des traces GPS… ({loadingPoly} restants)
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 text-[11px]">
           <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: COLORS.professional }}></span>Pro</span>

@@ -10,7 +10,7 @@ from app.auth import get_current_user, require_roles
 from app.db import get_db
 from app.rules import classify_trip, apply_rules_to_all, default_settings, default_schedule, _get_schedule_for
 from app.reports import trips_to_csv, trips_to_xlsx, trips_to_pdf, swiss_tax_report_pdf
-from app.navixy_client import is_configured as navixy_configured, NavixyError
+from app.navixy_client import is_configured as navixy_configured, NavixyError, read_track_points as navixy_read_track
 from app.navixy_sync import sync_navixy
 from app.scheduler import get_state as get_sched_state, reconfigure as reconfig_sched, trigger_now as trigger_sched
 from app.assignments import (
@@ -629,6 +629,107 @@ async def driver_manual_mode(payload: dict, user=Depends(get_current_user)):
         raise HTTPException(403, str(e))
     except LookupError as e:
         raise HTTPException(404, str(e))
+
+
+# ---------- Trip GPS polyline (Navixy track/read with local cache) ----------
+def _fallback_points(trip: dict) -> list[list[float]]:
+    """Two-point fallback when Navixy track/read is unavailable."""
+    pts = []
+    sl, sg = trip.get("start_lat"), trip.get("start_lng")
+    el, eg = trip.get("end_lat"), trip.get("end_lng")
+    if isinstance(sl, (int, float)) and isinstance(sg, (int, float)):
+        pts.append([sg, sl])
+    if isinstance(el, (int, float)) and isinstance(eg, (int, float)):
+        pts.append([eg, el])
+    return pts
+
+
+@router.get("/trips/{trip_id}/track")
+async def trip_track(trip_id: str, refresh: bool = False,
+                     user=Depends(get_current_user)):
+    """Return the polyline of a trip as a list of `[lng, lat]` points.
+
+    **Strict privacy invariant** (applied here regardless of role):
+    if `settings.mode == "masked"` and `trip.classification == "personal"`,
+    GPS points MUST NOT be loaded, cached or returned. → 403.
+
+    Cache strategy: `db.trip_tracks` keyed by `trip_id`. Trips are immutable
+    once closed, so we cache permanently (use `?refresh=true` to force).
+    """
+    db = get_db()
+    trip = await db.trips.find_one({"id": trip_id, "tenant_id": "default"}, {"_id": 0})
+    if not trip:
+        raise HTTPException(404, "Trajet introuvable")
+
+    settings = await db.settings.find_one({"id": "default"}, {"_id": 0}) or {}
+    if settings.get("mode") == "masked" and trip.get("classification") == "personal":
+        raise HTTPException(403, "Trajet personnel masqué — points GPS non disponibles")
+
+    if not refresh:
+        cached = await db.trip_tracks.find_one({"trip_id": trip_id}, {"_id": 0})
+        if cached and cached.get("points"):
+            return {"trip_id": trip_id, "points": cached["points"],
+                    "source": cached.get("source", "cache"),
+                    "fetched_at": cached.get("fetched_at"),
+                    "count": len(cached["points"])}
+
+    vehicle = await db.vehicles.find_one({"id": trip.get("vehicle_id")}, {"_id": 0}) or {}
+    tracker_id = vehicle.get("navixy_tracker_id")
+    if not tracker_id or not navixy_configured():
+        pts = _fallback_points(trip)
+        return {"trip_id": trip_id, "points": pts,
+                "source": "fallback_no_tracker" if not tracker_id else "fallback_no_navixy",
+                "count": len(pts)}
+
+    def _fmt(iso):
+        if not iso:
+            return None
+        try:
+            return datetime.fromisoformat(iso.replace("Z", "+00:00")) \
+                .astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+    f, t = _fmt(trip.get("start_time")), _fmt(trip.get("end_time"))
+    if not f or not t:
+        pts = _fallback_points(trip)
+        return {"trip_id": trip_id, "points": pts, "source": "fallback_no_dates", "count": len(pts)}
+
+    try:
+        raw = await navixy_read_track(
+            int(tracker_id), f, t,
+            track_id=trip.get("navixy_trip_id"),
+            simplify=True, point_limit=300,
+        )
+    except NavixyError as e:
+        pts = _fallback_points(trip)
+        # Negative cache for 1 hour to avoid hammering
+        await db.trip_tracks.update_one(
+            {"trip_id": trip_id},
+            {"$set": {"trip_id": trip_id, "tenant_id": "default", "points": pts,
+                      "source": "fallback_navixy_error", "error": str(e)[:200],
+                      "fetched_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+        return {"trip_id": trip_id, "points": pts, "source": "fallback_navixy_error",
+                "error": str(e), "count": len(pts)}
+
+    points = [[p["lng"], p["lat"]] for p in raw
+              if isinstance(p.get("lng"), (int, float)) and isinstance(p.get("lat"), (int, float))]
+    if not points:
+        points = _fallback_points(trip)
+        src = "fallback_no_points"
+    else:
+        src = "navixy"
+
+    await db.trip_tracks.update_one(
+        {"trip_id": trip_id},
+        {"$set": {"trip_id": trip_id, "tenant_id": "default",
+                  "points": points, "source": src,
+                  "fetched_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"trip_id": trip_id, "points": points, "source": src, "count": len(points)}
 
 
 # ---------- Dashboard ----------
