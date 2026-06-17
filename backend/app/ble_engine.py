@@ -1,0 +1,465 @@
+"""BLE-based driver identification engine (Phase A — MVP).
+
+Three core operations:
+
+1. **Ingest a detection**: a phone (PWA / future native app) sends a BLE detection
+   for the currently logged-in driver. The engine resolves the BLE identifier to
+   a vehicle, recomputes confidence, and opens / extends / closes
+   `driver_sessions`.
+
+2. **Driver manual override**: the driver presses PRO or PRIVÉ in the app. We
+   stamp `mobile_override` on the active session AND propagate it to every trip
+   of (driver, vehicle) starting after the toggle until the session closes.
+
+3. **Admin actions**: list / amend / validate sessions; CRUD on BLE tag ↔
+   vehicle mapping; simulate a detection (testing without physical hardware).
+
+Sessions lifecycle:
+- A session is **open** while at least one detection arrived in the last
+  SESSION_TIMEOUT minutes for the same (driver, vehicle).
+- When the driver switches to another vehicle (stronger RSSI on a different
+  tag), the previous session is closed (status = 'closed').
+- Confidence score is recomputed at every detection.
+
+Confidence (0..100):
+  35 % — Signal stability (low RSSI variance)
+  25 % — Signal strength (median RSSI normalized vs floor)
+  20 % — Presence duration (minutes within window)
+  20 % — Historical pairing (how often this driver was on this vehicle)
+
+Settings (db.settings keys):
+- `ble_enabled`           (default True)
+- `ble_min_duration_s`    (default 120)  — must accumulate this before auto-classify
+- `ble_min_rssi`          (default -85) — anything weaker is ignored
+- `ble_min_confidence`    (default 60)  — below ⇒ status='pending' (asks for validation)
+- `allow_driver_override` (default True)
+"""
+from __future__ import annotations
+
+import statistics
+import uuid
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+# A session is considered ongoing if a detection arrived in the last X minutes.
+SESSION_TIMEOUT = timedelta(minutes=5)
+# Window over which we compute confidence (median RSSI, variance, ...).
+RECENT_WINDOW = timedelta(minutes=30)
+
+DEFAULT_SETTINGS = {
+    "ble_enabled": True,
+    "ble_min_duration_s": 120,
+    "ble_min_rssi": -85,
+    "ble_min_confidence": 60,
+    "allow_driver_override": True,
+}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def get_ble_settings(db) -> dict:
+    s = await db.settings.find_one({"id": "default"}, {"_id": 0}) or {}
+    return {k: s.get(k, v) for k, v in DEFAULT_SETTINGS.items()}
+
+
+# ---------- Tag CRUD helpers ----------
+async def list_tags(db) -> list[dict]:
+    return await db.ble_tags.find({"tenant_id": "default"}, {"_id": 0}).to_list(1000)
+
+
+async def upsert_tag(db, payload: dict) -> dict:
+    tag = {
+        "id": payload.get("id") or str(uuid.uuid4()),
+        "tenant_id": "default",
+        "vehicle_id": payload["vehicle_id"],
+        "identifier": payload["identifier"].strip(),
+        "label": payload.get("label") or payload["identifier"],
+        "created_at": payload.get("created_at") or now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.ble_tags.update_one({"id": tag["id"]}, {"$set": tag}, upsert=True)
+    return tag
+
+
+async def delete_tag(db, tag_id: str) -> bool:
+    r = await db.ble_tags.delete_one({"id": tag_id, "tenant_id": "default"})
+    return r.deleted_count > 0
+
+
+async def _resolve_tag(db, identifier: str) -> Optional[dict]:
+    return await db.ble_tags.find_one(
+        {"tenant_id": "default", "identifier": identifier.strip()}, {"_id": 0},
+    )
+
+
+# ---------- Detection ingestion ----------
+async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
+    """Store a detection and update the driver's current session.
+
+    Returns a summary `{ session, tag, vehicle, confidence }` for the caller
+    (PWA console uses this to know which vehicle was matched).
+    """
+    settings = await get_ble_settings(db)
+    rssi = int(payload.get("rssi") or -100)
+
+    if rssi < settings["ble_min_rssi"]:
+        await db.ble_detections.insert_one({
+            "id": str(uuid.uuid4()),
+            "tenant_id": "default",
+            "driver_id": driver_id,
+            "identifier": payload.get("identifier", ""),
+            "rssi": rssi,
+            "ts": payload.get("ts") or now_iso(),
+            "ignored": True,
+            "ignore_reason": "rssi_below_floor",
+            "platform": payload.get("platform"),
+            "battery": payload.get("battery"),
+        })
+        return {"ignored": True, "reason": "rssi_below_floor"}
+
+    tag = await _resolve_tag(db, payload["identifier"])
+    if not tag:
+        await db.ble_detections.insert_one({
+            "id": str(uuid.uuid4()),
+            "tenant_id": "default",
+            "driver_id": driver_id,
+            "identifier": payload.get("identifier", ""),
+            "rssi": rssi,
+            "ts": payload.get("ts") or now_iso(),
+            "ignored": True,
+            "ignore_reason": "unknown_tag",
+            "platform": payload.get("platform"),
+            "battery": payload.get("battery"),
+        })
+        return {"ignored": True, "reason": "unknown_tag"}
+
+    detection = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": "default",
+        "driver_id": driver_id,
+        "vehicle_id": tag["vehicle_id"],
+        "ble_tag_id": tag["id"],
+        "identifier": tag["identifier"],
+        "rssi": rssi,
+        "ts": payload.get("ts") or now_iso(),
+        "platform": payload.get("platform"),
+        "battery": payload.get("battery"),
+        "ignored": False,
+    }
+    await db.ble_detections.insert_one(detection)
+
+    # Open / extend / close session
+    session = await _update_session(db, driver_id, tag["vehicle_id"], detection, settings)
+    vehicle = await db.vehicles.find_one({"id": tag["vehicle_id"]}, {"_id": 0})
+
+    return {
+        "ignored": False,
+        "session": session,
+        "tag": tag,
+        "vehicle": vehicle,
+        "confidence": session.get("confidence"),
+    }
+
+
+async def _update_session(db, driver_id: str, vehicle_id: str,
+                          detection: dict, settings: dict) -> dict:
+    """Open or extend the current session for (driver, vehicle).
+
+    Closes any other open session for this driver on a different vehicle.
+    """
+    # Close stale / other sessions
+    cutoff = (datetime.now(timezone.utc) - SESSION_TIMEOUT).isoformat()
+    async for s in db.driver_sessions.find(
+        {"driver_id": driver_id, "status": {"$in": ["open", "automatic", "pending", "manual"]}},
+        {"_id": 0},
+    ):
+        if s["vehicle_id"] != vehicle_id or (s.get("last_seen") or "") < cutoff:
+            await db.driver_sessions.update_one(
+                {"id": s["id"]},
+                {"$set": {"status": "closed", "ended_at": s.get("last_seen") or now_iso()}},
+            )
+
+    # Find the still-open one for this exact (driver, vehicle)
+    open_sess = await db.driver_sessions.find_one(
+        {"driver_id": driver_id, "vehicle_id": vehicle_id,
+         "status": {"$in": ["open", "automatic", "pending", "manual"]}},
+        {"_id": 0},
+    )
+
+    if not open_sess:
+        open_sess = {
+            "id": str(uuid.uuid4()),
+            "tenant_id": "default",
+            "driver_id": driver_id,
+            "vehicle_id": vehicle_id,
+            "ble_tag_id": detection["ble_tag_id"],
+            "source": "ble",
+            "status": "open",
+            "started_at": detection["ts"],
+            "ended_at": None,
+            "last_seen": detection["ts"],
+            "detection_count": 1,
+            "last_rssi": detection["rssi"],
+            "mobile_override": None,
+            "confidence": 0,
+            "created_at": now_iso(),
+        }
+        await db.driver_sessions.insert_one(open_sess)
+        open_sess.pop("_id", None)
+    else:
+        open_sess["last_seen"] = detection["ts"]
+        open_sess["detection_count"] = (open_sess.get("detection_count") or 0) + 1
+        open_sess["last_rssi"] = detection["rssi"]
+
+    # Confidence recompute
+    confidence = await _compute_confidence(db, open_sess, settings)
+    open_sess["confidence"] = confidence
+
+    # Status promotion
+    new_status = _derive_status(open_sess, settings)
+    open_sess["status"] = new_status
+
+    await db.driver_sessions.update_one(
+        {"id": open_sess["id"]},
+        {"$set": {
+            "last_seen": open_sess["last_seen"],
+            "detection_count": open_sess["detection_count"],
+            "last_rssi": open_sess["last_rssi"],
+            "confidence": confidence,
+            "status": new_status,
+        }},
+    )
+    return open_sess
+
+
+def _derive_status(session: dict, settings: dict) -> str:
+    if session.get("mobile_override") in ("professional", "personal"):
+        return "manual"
+    try:
+        started = datetime.fromisoformat(session["started_at"])
+        seen = datetime.fromisoformat(session["last_seen"])
+    except Exception:
+        return "open"
+    duration_s = (seen - started).total_seconds()
+    if duration_s < settings["ble_min_duration_s"]:
+        return "open"
+    if session["confidence"] >= settings["ble_min_confidence"]:
+        return "automatic"
+    return "pending"
+
+
+async def _compute_confidence(db, session: dict, settings: dict) -> int:
+    """Score 0..100. See module docstring for breakdown."""
+    cutoff = (datetime.now(timezone.utc) - RECENT_WINDOW).isoformat()
+    recent = await db.ble_detections.find({
+        "tenant_id": "default",
+        "driver_id": session["driver_id"],
+        "vehicle_id": session["vehicle_id"],
+        "ignored": False,
+        "ts": {"$gte": cutoff},
+    }, {"_id": 0}).to_list(500)
+    if not recent:
+        return 0
+
+    rssis = [d["rssi"] for d in recent]
+    median_rssi = statistics.median(rssis)
+    stdev = statistics.pstdev(rssis) if len(rssis) > 1 else 30
+
+    # Stability (max 35) — lower stdev is better. >20 dBm of jitter = 0.
+    stability = max(0.0, 1 - min(stdev, 20) / 20) * 35
+
+    # Strength (max 25). Floor=-95, ceiling=-40.
+    floor, ceil = -95, -40
+    norm = max(0.0, min(1.0, (median_rssi - floor) / (ceil - floor)))
+    strength = norm * 25
+
+    # Duration (max 20). 5 min full points.
+    try:
+        started = datetime.fromisoformat(session["started_at"])
+        seen = datetime.fromisoformat(session["last_seen"])
+        minutes = (seen - started).total_seconds() / 60
+    except Exception:
+        minutes = 0
+    duration = min(1.0, minutes / 5) * 20
+
+    # Historical pairing (max 20) — fraction of past sessions on this vehicle
+    past = await db.driver_sessions.count_documents({
+        "tenant_id": "default", "driver_id": session["driver_id"], "status": "closed",
+    })
+    if past == 0:
+        history = 5  # neutral starter
+    else:
+        same = await db.driver_sessions.count_documents({
+            "tenant_id": "default", "driver_id": session["driver_id"],
+            "vehicle_id": session["vehicle_id"], "status": "closed",
+        })
+        history = min(1.0, (same / past)) * 20
+
+    return int(round(stability + strength + duration + history))
+
+
+# ---------- Driver manual override ----------
+async def driver_set_mode(db, driver_id: str, mode: str, actor: str) -> dict:
+    """Driver presses PRO or PRIVÉ in the PWA.
+
+    Stamps the current open session AND propagates `mobile_override` to every
+    trip (driver, vehicle) starting AT or AFTER the toggle moment.
+    Returns the updated session (or 404 if none open).
+    """
+    assert mode in ("professional", "personal")
+    settings = await get_ble_settings(db)
+    if not settings["allow_driver_override"]:
+        raise PermissionError("Le forçage manuel est désactivé par l'administrateur")
+
+    sess = await db.driver_sessions.find_one({
+        "tenant_id": "default", "driver_id": driver_id,
+        "status": {"$in": ["open", "automatic", "pending", "manual"]},
+    }, {"_id": 0})
+    if not sess:
+        raise LookupError("Aucune session active — montez dans un véhicule équipé d'un tag BLE")
+
+    ts = now_iso()
+    await db.driver_sessions.update_one(
+        {"id": sess["id"]},
+        {"$set": {"mobile_override": mode, "status": "manual",
+                  "mobile_override_at": ts, "mobile_override_actor": actor}},
+    )
+
+    # Propagate to trips of (driver, vehicle) starting at or after this moment
+    n = await db.trips.count_documents({
+        "tenant_id": "default", "driver_id": driver_id,
+        "vehicle_id": sess["vehicle_id"],
+        "start_time": {"$gte": ts},
+    })
+    await db.trips.update_many(
+        {"tenant_id": "default", "driver_id": driver_id,
+         "vehicle_id": sess["vehicle_id"], "start_time": {"$gte": ts}},
+        {"$set": {"mobile_override": mode, "classification": mode,
+                  "auto_classified": False}},
+    )
+
+    # Audit
+    await db.audit_log.insert_one({
+        "ts": ts, "scope": "driver_identification", "action": "manual_override",
+        "actor": actor, "driver_id": driver_id, "vehicle_id": sess["vehicle_id"],
+        "mode": mode, "session_id": sess["id"], "trips_affected": n,
+    })
+
+    sess.update({"mobile_override": mode, "status": "manual",
+                 "mobile_override_at": ts, "mobile_override_actor": actor})
+    return {"session": sess, "trips_affected": n}
+
+
+async def get_current_session(db, driver_id: str) -> Optional[dict]:
+    """For the PWA: return the active session (vehicle, mode, confidence)."""
+    sess = await db.driver_sessions.find_one({
+        "tenant_id": "default", "driver_id": driver_id,
+        "status": {"$in": ["open", "automatic", "pending", "manual"]},
+    }, {"_id": 0})
+    if not sess:
+        return None
+    vehicle = await db.vehicles.find_one({"id": sess["vehicle_id"]}, {"_id": 0}) or {}
+    return {**sess, "vehicle": {"id": vehicle.get("id"), "plate": vehicle.get("plate"),
+                                "model": vehicle.get("model")}}
+
+
+# ---------- Admin: list / amend sessions ----------
+async def list_sessions(db, limit: int = 200, status: Optional[str] = None,
+                        start: Optional[str] = None, end: Optional[str] = None) -> list[dict]:
+    query: dict = {"tenant_id": "default"}
+    if status and status != "all":
+        query["status"] = status
+    if start:
+        query["started_at"] = {"$gte": start}
+    if end:
+        query.setdefault("started_at", {})["$lte"] = end
+    rows = await db.driver_sessions.find(query, {"_id": 0}).sort("started_at", -1).to_list(limit)
+    drivers = {d["id"]: d async for d in db.drivers.find({}, {"_id": 0})}
+    vehicles = {v["id"]: v async for v in db.vehicles.find({}, {"_id": 0})}
+    out = []
+    for r in rows:
+        drv = drivers.get(r["driver_id"], {})
+        veh = vehicles.get(r["vehicle_id"], {})
+        out.append({
+            **r,
+            "driver_name": drv.get("name"),
+            "vehicle_plate": veh.get("plate"),
+            "vehicle_model": veh.get("model"),
+        })
+    return out
+
+
+async def amend_session(db, session_id: str, patch: dict, actor: str) -> dict:
+    sess = await db.driver_sessions.find_one({"id": session_id}, {"_id": 0})
+    if not sess:
+        raise LookupError("Session inconnue")
+    old = {k: sess.get(k) for k in ("driver_id", "vehicle_id", "mobile_override", "status")}
+    update = {}
+    for k in ("driver_id", "vehicle_id"):
+        if k in patch and patch[k]:
+            update[k] = patch[k]
+    if "status" in patch and patch["status"] in (
+        "open", "automatic", "confirmed", "pending", "manual", "closed", "cancelled", "conflict",
+    ):
+        update["status"] = patch["status"]
+    if "mobile_override" in patch and patch["mobile_override"] in ("professional", "personal", None):
+        update["mobile_override"] = patch["mobile_override"]
+    if not update:
+        return sess
+    update["updated_at"] = now_iso()
+    update["updated_by"] = actor
+    await db.driver_sessions.update_one({"id": session_id}, {"$set": update})
+    await db.audit_log.insert_one({
+        "ts": now_iso(), "scope": "driver_identification", "action": "amend_session",
+        "actor": actor, "session_id": session_id, "before": old, "after": update,
+    })
+    sess.update(update)
+    return sess
+
+
+async def dashboard_kpis(db, start: Optional[str] = None, end: Optional[str] = None) -> dict:
+    base = {"tenant_id": "default"}
+    if start:
+        base["started_at"] = {"$gte": start}
+    if end:
+        base.setdefault("started_at", {})["$lte"] = end
+
+    total = await db.driver_sessions.count_documents(base)
+    auto = await db.driver_sessions.count_documents({**base, "status": "automatic"})
+    pending = await db.driver_sessions.count_documents({**base, "status": "pending"})
+    manual = await db.driver_sessions.count_documents({**base, "status": "manual"})
+    conflict = await db.driver_sessions.count_documents({**base, "status": "conflict"})
+    forced_pro = await db.driver_sessions.count_documents({**base, "mobile_override": "professional"})
+    forced_perso = await db.driver_sessions.count_documents({**base, "mobile_override": "personal"})
+
+    # Avg detections per closed session as proxy for stability
+    closed_rows = await db.driver_sessions.find(
+        {**base, "status": "closed"}, {"_id": 0, "detection_count": 1},
+    ).to_list(1000)
+    avg_det = sum(r.get("detection_count", 0) for r in closed_rows) / max(len(closed_rows), 1)
+
+    return {
+        "total_sessions": total,
+        "auto_identified": auto,
+        "pending_validation": pending,
+        "manual_set": manual,
+        "conflicts": conflict,
+        "forced_pro": forced_pro,
+        "forced_perso": forced_perso,
+        "success_rate": round(auto / total * 100, 1) if total else 0.0,
+        "avg_detections_per_session": round(avg_det, 1),
+    }
+
+
+# ---------- Simulation (for testing without physical hardware) ----------
+async def simulate_detection(db, driver_id: str, identifier: str, rssi: int = -55) -> dict:
+    """Insert a synthetic detection — used by admins to test the flow."""
+    return await ingest_detection(db, driver_id, {
+        "identifier": identifier,
+        "rssi": rssi,
+        "ts": now_iso(),
+        "platform": "simulator",
+        "battery": 100,
+    })

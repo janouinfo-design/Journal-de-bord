@@ -62,19 +62,24 @@ export default function SettingsPage() {
   const [syncDays, setSyncDays] = useState(30);
   const [sched, setSched] = useState(null);
   const [schedSaving, setSchedSaving] = useState(false);
+  const [bleTags, setBleTags] = useState({});  // vehicle_id -> tag object
   const scheduleSaveRef = useRef(null);
 
   async function load() {
     setLoading(true);
     try {
-      const [s, v, n, dr, sc] = await Promise.all([
+      const [s, v, n, dr, sc, bt] = await Promise.all([
         api.get("/livre/settings").then(r => r.data),
         api.get("/livre/vehicles").then(r => r.data),
         api.get("/livre/navixy/status").then(r => r.data).catch(() => ({ configured: false })),
         api.get("/livre/drivers").then(r => r.data),
         api.get("/livre/navixy/scheduler").then(r => r.data).catch(() => null),
+        api.get("/livre/ble/tags").then(r => r.data).catch(() => []),
       ]);
       setSettings(s); setVehicles(v); setNavixy(n); setDrivers(dr); setSched(sc);
+      const map = {};
+      for (const t of bt) map[t.vehicle_id] = t;
+      setBleTags(map);
     } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
@@ -133,6 +138,32 @@ export default function SettingsPage() {
       toast.success("Mode véhicule mis à jour");
       load();
     } catch { toast.error("Refusé"); }
+  }
+
+  async function saveBleTag(vehicleId, identifier) {
+    const trimmed = (identifier || "").trim();
+    if (!trimmed) {
+      const existing = bleTags[vehicleId];
+      if (existing) {
+        await api.delete(`/livre/ble/tags/${existing.id}`);
+        toast.success("Tag BLE retiré");
+        load();
+      }
+      return;
+    }
+    try {
+      const existing = bleTags[vehicleId];
+      await api.post("/livre/ble/tags", {
+        id: existing?.id,
+        vehicle_id: vehicleId,
+        identifier: trimmed,
+        label: existing?.label || trimmed,
+      });
+      toast.success("Tag BLE enregistré");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Refusé");
+    }
   }
 
   if (loading || !settings) {
@@ -362,6 +393,7 @@ export default function SettingsPage() {
                   <tr className="bg-slate-50 text-slate-500 text-[10px] font-semibold uppercase tracking-wider">
                     <th className="text-left py-2.5 px-3">Plaque</th>
                     <th className="text-left py-2.5 px-3">Modèle</th>
+                    <th className="text-left py-2.5 px-3">Tag BLE</th>
                     <th className="text-right py-2.5 px-3">Mode</th>
                     <th className="text-right py-2.5 px-3">Affectations</th>
                   </tr>
@@ -371,6 +403,14 @@ export default function SettingsPage() {
                     <tr key={v.id} className="border-t border-slate-100">
                       <td className="py-2.5 px-3 font-mono text-xs">{v.plate}</td>
                       <td className="py-2.5 px-3 text-slate-700 text-xs">{v.model}</td>
+                      <td className="py-2.5 px-3">
+                        <BleTagCell
+                          vehicle={v}
+                          tag={bleTags[v.id]}
+                          canEdit={canEdit}
+                          onSave={(id) => saveBleTag(v.id, id)}
+                        />
+                      </td>
                       <td className="py-2.5 px-3 text-right">
                         <Select value={v.mode} onValueChange={(val) => changeVehicleMode(v.id, val)} disabled={!canEdit}>
                           <SelectTrigger className="w-40 ml-auto h-8 text-xs"
@@ -398,3 +438,29 @@ export default function SettingsPage() {
     </div>
   );
 }
+
+function BleTagCell({ vehicle, tag, canEdit, onSave }) {
+  const [val, setVal] = useState(tag?.identifier || "");
+  useEffect(() => { setVal(tag?.identifier || ""); }, [tag?.identifier]);
+  const dirty = val !== (tag?.identifier || "");
+  return (
+    <div className="flex items-center gap-1.5">
+      <Input
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        placeholder="BUS35"
+        disabled={!canEdit}
+        data-testid={`settings-ble-tag-${vehicle.plate.replace(/\s+/g, "-")}`}
+        className="h-7 text-xs font-mono w-28"
+      />
+      {dirty && (
+        <Button size="sm" variant="ghost" disabled={!canEdit}
+          onClick={() => onSave(val)} className="h-7 px-2 text-[10px]"
+          data-testid={`settings-ble-save-${vehicle.plate.replace(/\s+/g, "-")}`}>
+          OK
+        </Button>
+      )}
+    </div>
+  );
+}
+

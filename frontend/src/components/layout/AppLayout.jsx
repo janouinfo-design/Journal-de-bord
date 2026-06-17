@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { TEST_IDS } from "@/constants/testIds";
 import {
   LayoutDashboard, Briefcase, User, FileText, Settings,
-  LogOut, Bell, Map, Receipt, Building2, ChevronRight,
+  LogOut, Bell, Map, Receipt, Building2, ChevronRight, Bluetooth, Smartphone,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -31,6 +31,13 @@ const NAV_SECTIONS = [
     label: "Générer",
     items: [
       { to: "/livre/reports/tax-swiss", label: "Rapport fiscal suisse", icon: Receipt, testId: TEST_IDS.layout.navTaxSwiss },
+    ],
+  },
+  {
+    label: "Identification BLE",
+    items: [
+      { to: "/livre/identification", label: "Identification chauffeurs", icon: Bluetooth, testId: "nav-identification", adminOnly: true },
+      { to: "/driver", label: "Console chauffeur (PWA)", icon: Smartphone, testId: "nav-driver-console" },
     ],
   },
   {
@@ -88,7 +95,7 @@ export default function AppLayout() {
                 {section.label}
               </p>
               <div className="space-y-0.5">
-                {section.items.map((it) => (
+                {section.items.filter(it => !it.adminOnly || user?.role === "admin" || user?.role === "manager").map((it) => (
                   <NavLink
                     key={it.to}
                     to={it.to}

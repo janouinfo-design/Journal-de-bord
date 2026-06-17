@@ -38,10 +38,21 @@ def _in_any_period(minute_of_day: int, periods: list[dict]) -> bool:
 def classify_trip(trip: dict, vehicle: Optional[dict], settings: dict, schedule: dict) -> str:
     """Return 'professional' or 'personal'.
 
+    Priority cascade (highest first):
+      1. `trip.mobile_override`        — driver's choice from the mobile app/PWA
+      2. `vehicle.mode`                — 'always_pro' / 'always_perso'
+      3. `trip.geofence_classification` — set by geofence engine (if any)
+      4. `schedule`                    — per-day work periods (default fallback)
+
     `schedule` is a dict with shape: { days: [ {day: 0..6, type: 'work'|'personal',
     periods: [ {enabled, from, to}, ... ] }, ... ] }
     """
-    # Vehicle mode override (highest priority)
+    # 1. Mobile override (driver's manual choice — absolute priority)
+    mob = (trip or {}).get("mobile_override")
+    if mob in ("professional", "personal"):
+        return mob
+
+    # 2. Vehicle mode override
     if vehicle:
         vmode = vehicle.get("mode")
         if vmode == "always_pro":
@@ -49,6 +60,12 @@ def classify_trip(trip: dict, vehicle: Optional[dict], settings: dict, schedule:
         if vmode == "always_perso":
             return "personal"
 
+    # 3. Geofence classification (precomputed by upstream engine)
+    geo = (trip or {}).get("geofence_classification")
+    if geo in ("professional", "personal"):
+        return geo
+
+    # 4. Schedule fallback
     try:
         start_dt = datetime.fromisoformat(trip["start_time"].replace("Z", "+00:00"))
     except Exception:

@@ -1,0 +1,48 @@
+{
+  "summary": "Itération 8 (BLE driver identification) — 32/32 tests pytest backend OK ; UI testée pour Identification page, Settings sheet (colonne Tag BLE), Driver PWA console, RBAC. Fix 1 bug critique de sérialisation (_id ObjectId leak sur ingestion). 2 problèmes mineurs UI restants à corriger par l'agent principal.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/livre/ble/detections", "issue": "Avant fix : 500 sur la première détection car insert_one(open_sess) mutait open_sess avec _id (ObjectId) renvoyé par FastAPI. Fix appliqué : open_sess.pop('_id', None) après insert."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "IdentificationPage — tableau sessions", "issue": "data-testid des lignes utilise `ident-row-{status}` au lieu de `ident-row-{session.id}` (lignes non uniques). Conséquence : impossible de cibler une session précise via Playwright et React warning 'Encountered two children with the same key, null'. Les boutons ident-validate-{id}/ident-cancel-{id}/ident-edit-{id} sont donc introuvables par leur sélecteur attendu.", "selector": "[data-testid^='ident-row-']", "priority": "HIGH"},
+      {"component": "IdentificationPage", "issue": "Console React : Encountered two children with the same key, `null` — la clé `key` du map() doit utiliser session.id et non un champ pouvant être null", "selector": "table tbody tr", "priority": "MEDIUM"},
+      {"component": "Dialog (edit session)", "issue": "Warning a11y : Missing `Description` or `aria-describedby` for DialogContent — ajouter <DialogDescription> ou aria-describedby", "selector": "[data-testid='ident-edit-*']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Settings → Sheet véhicules — colonne Tag BLE", "issues": ["Une seule valeur affichée par véhicule alors qu'un véhicule peut potentiellement avoir plusieurs tags (modèle data) ; UX OK pour MVP. À vérifier : la sauvegarde idempotente écrase-t-elle vraiment le tag précédent du véhicule ou crée-t-elle un doublon ? (Mes tests ont vu plusieurs tags TEST_ s'accumuler sur LOGITRAK AUDI — j'ai nettoyé.)"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration8_ble.py", "/app/test_reports/pytest/iteration8.xml"],
+  "action_items": [
+    "[BACKEND] (DÉJÀ FIX par testing agent) ble_engine._update_session : pop _id après insert_one(open_sess) — évite ObjectId leak qui renvoyait 500 sur la 1re détection.",
+    "[FRONTEND] IdentificationPage.jsx : changer data-testid={`ident-row-${session.status}`} → data-testid={`ident-row-${session.id}`} sur les <tr> ET changer key={session.status || idx} → key={session.id}. Sans cela les actions inline ne sont pas testables ni adressables individuellement et React lève des warnings de clés dupliquées.",
+    "[FRONTEND] IdentificationPage edit Dialog : ajouter <DialogDescription> pour résoudre warning a11y.",
+    "[BACKEND] (optionnel) upsert_tag : si l'on veut un véhicule = un tag, ajouter une contrainte logique (delete previous tag of same vehicle_id, or upsert by vehicle_id+identifier unique)."
+  ],
+  "critical_code_review_comments": [
+    "ble_engine._update_session: après `db.driver_sessions.insert_one(open_sess)`, pymongo mute le dict en ajoutant `_id`. C'était un bug bloquant 500. Fix appliqué.",
+    "ble_engine.driver_set_mode : OK — propage `mobile_override` aux trips à venir + audit log + idempotence.",
+    "rules.classify_trip : la cascade prioritaire (mobile_override > vehicle.mode > geofence_classification > schedule) est conforme à la spec et testée unitairement avec 5 cas.",
+    "ble_engine._compute_confidence : utilise pstdev sur >=2 points, sinon retombe à 30 (jitter max). OK.",
+    "routes.ble_settings_put : whitelist sur DEFAULT_SETTINGS et audit log présents. RBAC admin only ✓.",
+    "routes._resolve_driver_id_for_user : mapping email→driver.id correct pour role=driver.",
+    "Driver PWA Console : data-testids tous présents (driver-console-page, driver-vehicle-card, driver-mode-pro, driver-mode-perso, driver-override-banner, driver-sim-input, driver-sim-ping) — bon.",
+    "AppLayout nav : nav-identification correctement gated admin-only (driver ne le voit pas) ✓."
+  ],
+  "updated_files": [
+    "/app/backend/app/ble_engine.py (fix ObjectId pop)",
+    "/app/backend/tests/test_iteration8_ble.py (créé)"
+  ],
+  "success_rate": {"backend": "100% (32/32)", "frontend": "85% (selectors d'actions inline introuvables à cause d'un bug de testid)"},
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123",
+  "seed_data_creation": "Tag BLE 'BUS35' lié à LOGITRAK AUDI (idempotent). Sessions ble créées par les tests sur le driver Jean Dupont. Nettoyage final : tags TEST_* supprimés, BUS35→LOGITRAK AUDI réaffecté.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend 32/32 OK. Restera à valider après fix front : (1) Rows IdentificationPage avec data-testid={`ident-row-${session.id}`} et key={session.id} ; (2) Actions inline ident-validate/cancel/edit cliquables via Playwright. Settings final attendu : mode='mixte', allow_driver_override=true, ble_enabled=true (état restauré).",
+  "rca of the issue": "ObjectId leak (500 sur 1ère détection) : pymongo motor `insert_one(doc)` mute `doc` en ajoutant `_id` ObjectId. Comme `_update_session` retourne ensuite open_sess dans la réponse ingest_detection, FastAPI échoue à sérialiser ObjectId. Solution appliquée : `open_sess.pop('_id', None)` juste après insert_one. Reproduction : appel POST /api/livre/ble/detections en chauffeur sans session ouverte préalable (1re détection)."
+}
