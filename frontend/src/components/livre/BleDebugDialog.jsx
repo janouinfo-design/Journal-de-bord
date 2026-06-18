@@ -5,7 +5,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, Bug, Copy, RefreshCw, Radio } from "lucide-react";
+import { Loader2, Bug, Copy, RefreshCw, Radio, Eraser } from "lucide-react";
 
 const POLL_MS = 3000;
 
@@ -54,6 +54,46 @@ export default function BleDebugDialog({ open, onOpenChange }) {
     }
   }
 
+  async function clearTestDetections() {
+    const dry = await api.post("/livre/ble/debug/clear-detections",
+      { dry_run: true, only_test: true }).then(r => r.data);
+    if (!dry.detections_to_delete) {
+      toast.info("Aucune détection de test à supprimer");
+      return;
+    }
+    if (!window.confirm(
+      `Supprimer ${dry.detections_to_delete} détection(s) de TEST ?\n\n` +
+      `(simulator OR identifiant TEST/CONFLICTAG/MOCK)\n` +
+      `Les détections réelles seront préservées.`
+    )) return;
+    try {
+      const { data } = await api.post("/livre/ble/debug/clear-detections",
+        { dry_run: false, only_test: true });
+      toast.success(`${data.detections_deleted} détection(s) supprimée(s)`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
+    }
+  }
+
+  async function clearAllDetections() {
+    const dry = await api.post("/livre/ble/debug/clear-detections",
+      { dry_run: true, only_test: false }).then(r => r.data);
+    if (!window.confirm(
+      `Supprimer TOUTES les détections BLE ?\n\n` +
+      `${dry.detections_to_delete} détection(s) (test + réelles) seront effacées.\n` +
+      `Action IRRÉVERSIBLE.`
+    )) return;
+    try {
+      const { data } = await api.post("/livre/ble/debug/clear-detections",
+        { dry_run: false, only_test: false });
+      toast.success(`${data.detections_deleted} détection(s) supprimée(s)`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl" data-testid="ble-debug-dialog">
@@ -77,6 +117,18 @@ export default function BleDebugDialog({ open, onOpenChange }) {
             {rows.length > 0 ? `${rows.length} détection(s) — la plus récente en premier` : "Aucune détection récente"}
           </p>
           <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={clearTestDetections}
+                    data-testid="ble-debug-clear-test"
+                    className="h-8 text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                    title="Supprime uniquement les détections simulator + TEST/CONFLICTAG/MOCK">
+              <Eraser className="w-3 h-3 mr-1" /> Vider tests
+            </Button>
+            <Button variant="outline" size="sm" onClick={clearAllDetections}
+                    data-testid="ble-debug-clear-all"
+                    className="h-8 text-xs text-rose-700 border-rose-300 hover:bg-rose-50"
+                    title="Supprime TOUTES les détections (irréversible)">
+              <Eraser className="w-3 h-3 mr-1" /> Tout vider
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setAuto(!auto)}
                     data-testid="ble-debug-toggle-auto" className="h-8 text-xs">
               {auto ? "Pause" : "Reprendre"}

@@ -301,14 +301,62 @@ async def ble_settings_get(user=Depends(require_roles("admin", "manager"))):
 
 
 # ---------- Debug ----------
+@router.post("/ble/debug/clear-detections")
+async def ble_debug_clear_detections(payload: dict = None,
+                                     user=Depends(require_roles("admin"))):
+    """Delete raw BLE detections (admin only).
+
+    Body:
+        { "dry_run": true,  "only_test": true }  → preview, test-only
+        { "dry_run": false, "only_test": true }  → delete only test data
+        { "dry_run": false, "only_test": false } → wipe ALL detections
+
+    Test data heuristic: `platform == 'simulator'` OR identifier canonical form
+    matches one of the TEST patterns (TEST, CONFLICTAG, TESTTAG, TESTBEACON, MOCK).
+    """
+    payload = payload or {}
+    dry_run = bool(payload.get("dry_run", True))
+    only_test = bool(payload.get("only_test", True))
+    db = get_db()
+
+    if only_test:
+        # Match either simulator platform OR test-pattern identifier
+        all_rows = await db.ble_detections.find(
+            {"tenant_id": "default"}, {"_id": 0, "id": 1, "identifier": 1, "platform": 1},
+        ).to_list(50000)
+        ids_to_delete = []
+        for r in all_rows:
+            canon = ble_engine.normalize_identifier(r.get("identifier") or "")
+            if r.get("platform") == "simulator" or _is_test_identifier(canon):
+                ids_to_delete.append(r["id"])
+        count = len(ids_to_delete)
+        if dry_run:
+            return {"dry_run": True, "only_test": True, "detections_to_delete": count}
+        if not count:
+            return {"dry_run": False, "only_test": True, "detections_deleted": 0}
+        res = await db.ble_detections.delete_many({"id": {"$in": ids_to_delete}})
+        await db.audit_log.insert_one({
+            "ts": ble_engine.now_iso(), "scope": "ble", "action": "clear_test_detections",
+            "actor": user.get("email"), "deleted": res.deleted_count,
+        })
+        return {"dry_run": False, "only_test": True, "detections_deleted": res.deleted_count}
+
+    # only_test=false → wipe all
+    count = await db.ble_detections.count_documents({"tenant_id": "default"})
+    if dry_run:
+        return {"dry_run": True, "only_test": False, "detections_to_delete": count}
+    res = await db.ble_detections.delete_many({"tenant_id": "default"})
+    await db.audit_log.insert_one({
+        "ts": ble_engine.now_iso(), "scope": "ble", "action": "clear_all_detections",
+        "actor": user.get("email"), "deleted": res.deleted_count,
+    })
+    return {"dry_run": False, "only_test": False, "detections_deleted": res.deleted_count}
+
+
 @router.get("/ble/debug/recent-detections")
 async def ble_debug_recent(limit: int = 100,
                            user=Depends(require_roles("admin"))):
-    """Recent raw BLE detections — for live debugging of beacon discovery.
-
-    Returns the last `limit` detections ingested via the PWA / native app,
-    enriched with the resolved driver name and the canonical identifier.
-    """
+    """Recent raw BLE detections — for live debugging of beacon discovery."""
     db = get_db()
     rows = await db.ble_detections.find(
         {"tenant_id": "default"}, {"_id": 0},
