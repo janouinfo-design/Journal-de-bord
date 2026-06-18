@@ -137,6 +137,24 @@ async def _resolve_tag(db, identifier: str) -> Optional[dict]:
     return None
 
 
+def _detection_meta(payload: dict) -> dict:
+    """Extract the optional rich metadata sent by the Expo native app
+    (and tolerated for the PWA when Web Bluetooth provides them).
+
+    Returns a dict ready to be merged into a `ble_detections` document.
+    Empty values are stored as None so that the field is present and
+    indexable by the Debug query later.
+    """
+    return {
+        "platform": payload.get("platform"),
+        "battery": payload.get("battery"),
+        "local_name": payload.get("local_name") or payload.get("localName"),
+        "device_id": payload.get("device_id") or payload.get("deviceId"),
+        "manufacturer_data": payload.get("manufacturer_data") or payload.get("manufacturerData"),
+        "service_uuids": payload.get("service_uuids") or payload.get("serviceUUIDs") or payload.get("serviceUuids"),
+    }
+
+
 # ---------- Detection ingestion ----------
 async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
     """Store a detection and update the driver's current session.
@@ -146,6 +164,7 @@ async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
     """
     settings = await get_ble_settings(db)
     rssi = int(payload.get("rssi") or -100)
+    meta = _detection_meta(payload)
 
     if rssi < settings["ble_min_rssi"]:
         await db.ble_detections.insert_one({
@@ -157,8 +176,7 @@ async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
             "ts": payload.get("ts") or now_iso(),
             "ignored": True,
             "ignore_reason": "rssi_below_floor",
-            "platform": payload.get("platform"),
-            "battery": payload.get("battery"),
+            **meta,
         })
         return {"ignored": True, "reason": "rssi_below_floor"}
 
@@ -173,8 +191,7 @@ async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
             "ts": payload.get("ts") or now_iso(),
             "ignored": True,
             "ignore_reason": "unknown_tag",
-            "platform": payload.get("platform"),
-            "battery": payload.get("battery"),
+            **meta,
         })
         return {"ignored": True, "reason": "unknown_tag"}
 
@@ -187,9 +204,8 @@ async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
         "identifier": tag["identifier"],
         "rssi": rssi,
         "ts": payload.get("ts") or now_iso(),
-        "platform": payload.get("platform"),
-        "battery": payload.get("battery"),
         "ignored": False,
+        **meta,
     }
     await db.ble_detections.insert_one(detection)
 

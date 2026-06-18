@@ -94,9 +94,12 @@ export default function BleDebugDialog({ open, onOpenChange }) {
             <thead className="bg-slate-50 sticky top-0 z-10">
               <tr className="text-[10px] uppercase tracking-wider text-slate-500">
                 <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Heure</th>
+                <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Nom local</th>
                 <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Identifiant brut</th>
                 <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Canonique</th>
+                <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Device ID</th>
                 <th className="text-right px-2 py-2 font-medium whitespace-nowrap">RSSI</th>
+                <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Moy.</th>
                 <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Plateforme</th>
                 <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Chauffeur</th>
                 <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Manuf. data</th>
@@ -107,7 +110,7 @@ export default function BleDebugDialog({ open, onOpenChange }) {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={10} className="py-8 text-center text-slate-400">
+                <tr><td colSpan={13} className="py-8 text-center text-slate-400">
                   En attente de détections…
                 </td></tr>
               )}
@@ -118,14 +121,23 @@ export default function BleDebugDialog({ open, onOpenChange }) {
                   <td className="px-2 py-1.5 text-slate-500 font-mono whitespace-nowrap">
                     {r.ts ? new Date(r.ts).toLocaleTimeString("fr-FR") : "—"}
                   </td>
+                  <td className="px-2 py-1.5 text-slate-700 whitespace-nowrap">
+                    {r.local_name || "—"}
+                  </td>
                   <td className="px-2 py-1.5 font-mono text-slate-800 whitespace-nowrap">
                     {r.identifier_raw || "—"}
                   </td>
                   <td className="px-2 py-1.5 font-mono text-[#2196F3] whitespace-nowrap">
                     {r.identifier_canon || "—"}
                   </td>
+                  <td className="px-2 py-1.5 font-mono text-slate-500 whitespace-nowrap">
+                    {r.device_id || "—"}
+                  </td>
                   <td className="px-2 py-1.5 text-right text-slate-700 whitespace-nowrap">
                     {r.rssi ?? "—"}
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-slate-500 whitespace-nowrap">
+                    {r.rssi_avg ?? "—"}
                   </td>
                   <td className="px-2 py-1.5 text-slate-600 whitespace-nowrap">
                     {r.platform || "—"}

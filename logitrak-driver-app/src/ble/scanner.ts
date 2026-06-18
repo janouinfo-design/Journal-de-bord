@@ -124,6 +124,12 @@ class BleScanner {
       rssi,
       ts: new Date(now).toISOString(),
       platform: 'native',
+      // Rich metadata captured directly from react-native-ble-plx — invaluable
+      // for the admin "Debug BLE" panel to diagnose iOS vs Android differences.
+      local_name: device.localName ?? null,
+      device_id: device.id ?? null,
+      manufacturer_data: device.manufacturerData ?? null,
+      service_uuids: device.serviceUUIDs ?? null,
     }).catch((e) => logger.warn('scanner', 'enqueue failed', e));
   }
 

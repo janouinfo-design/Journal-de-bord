@@ -228,24 +228,39 @@ async def ble_debug_recent(limit: int = 100,
         {"tenant_id": "default"}, {"_id": 0},
     ).sort("ts", -1).limit(min(limit, 500)).to_list(min(limit, 500))
 
-    # Enrich with driver name + normalised identifier for clarity
+    # Rolling RSSI average per identifier across the returned window
+    rssi_acc: dict[str, list[int]] = {}
+    for r in rows:
+        canon = ble_engine.normalize_identifier(r.get("identifier") or "")
+        if canon and isinstance(r.get("rssi"), (int, float)):
+            rssi_acc.setdefault(canon, []).append(r["rssi"])
+
+    # Enrich with driver name + normalised identifier + average RSSI for clarity
     out = []
     for r in rows:
         driver = await db.drivers.find_one(
             {"id": r.get("driver_id")}, {"_id": 0, "name": 1, "email": 1},
         ) or {}
+        canon = ble_engine.normalize_identifier(r.get("identifier") or "")
+        rssi_list = rssi_acc.get(canon, [])
+        rssi_avg = round(sum(rssi_list) / len(rssi_list), 1) if rssi_list else None
         out.append({
             "ts": r.get("ts"),
             "driver_id": r.get("driver_id"),
             "driver_name": driver.get("name") or driver.get("email") or "—",
             "identifier_raw": r.get("identifier"),
-            "identifier_canon": ble_engine.normalize_identifier(r.get("identifier") or ""),
+            "identifier_canon": canon,
+            "local_name": r.get("local_name"),
+            "device_id": r.get("device_id"),
             "rssi": r.get("rssi"),
+            "rssi_avg": rssi_avg,
             "platform": r.get("platform"),
             "battery": r.get("battery"),
             "manufacturer_data": r.get("manufacturer_data"),
             "service_uuids": r.get("service_uuids"),
-            "matched_tag_id": r.get("tag_id"),
+            "matched_tag_id": r.get("ble_tag_id") or r.get("tag_id"),
+            "ignored": r.get("ignored"),
+            "ignore_reason": r.get("ignore_reason"),
         })
     return out
 

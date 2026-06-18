@@ -6,6 +6,12 @@ export type BleDetection = {
   ts?: string; // ISO
   platform?: 'ios' | 'android' | 'pwa' | 'native';
   battery?: number;
+  // Rich metadata — sent when react-native-ble-plx provides it (native app),
+  // empty/undefined for the simulated PWA pings.
+  local_name?: string | null;
+  device_id?: string | null;
+  manufacturer_data?: string | null;
+  service_uuids?: string[] | null;
 };
 
 export type CurrentSession = {
