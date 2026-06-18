@@ -65,21 +65,37 @@ export default function NotificationsPreferencesCard() {
     return () => { alive = false; };
   }, []);
 
-  // Admin-only: best-effort user list for the "Other user" selector.
-  // We derive it from drivers + the current user — there is no public
-  // /api/users endpoint yet, so this stays defensive.
+  // Admin-only: full user list from /auth/users (admins + managers + drivers)
   useEffect(() => {
     if (!isAdmin) return;
-    api.get("/livre/drivers").then((r) => {
-      const drivers = r.data || [];
-      const acc = [{ id: user.id, label: `${user.email} (vous)` }];
-      for (const d of drivers) {
-        if (d.email && d.email !== user.email) {
-          acc.push({ id: d.id, label: `${d.name || d.email} (${d.email})` });
-        }
+    api.get("/auth/users").then((r) => {
+      const all = r.data || [];
+      const acc = [];
+      // Put current user first as "(vous)"
+      const me = all.find((u) => u.id === user.id);
+      if (me) {
+        acc.push({ id: me.id, label: `${me.email} (vous)` });
+      }
+      for (const u of all) {
+        if (u.id === user.id) continue;
+        const tag = u.role ? `${u.role}` : "user";
+        acc.push({ id: u.id, label: `${u.full_name || u.email} — ${tag}` });
       }
       setUsers(acc);
-    }).catch(() => { /* ignore */ });
+    }).catch((e) => {
+      console.debug("[NotificationsPrefs] /auth/users failed, falling back to /drivers", e);
+      // Fallback: drivers endpoint (older deployments)
+      api.get("/livre/drivers").then((r) => {
+        const drivers = r.data || [];
+        const acc = [{ id: user.id, label: `${user.email} (vous)` }];
+        for (const d of drivers) {
+          if (d.email && d.email !== user.email) {
+            acc.push({ id: d.id, label: `${d.name || d.email} (${d.email})` });
+          }
+        }
+        setUsers(acc);
+      }).catch(() => { /* ignore */ });
+    });
   }, [isAdmin, user]);
 
   function togglePref(eventName, channel, value) {

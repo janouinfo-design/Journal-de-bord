@@ -9,7 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Tag, Loader2, Plus, Trash2, Wifi } from "lucide-react";
+import { Tag, Loader2, Plus, Trash2, Wifi, Sparkles } from "lucide-react";
 
 /**
  * BLE Tags management dialog.
@@ -73,6 +73,39 @@ export default function BleTagsManager({ open, onOpenChange, vehicles = [] }) {
       reload();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Suppression refusée");
+    }
+  }
+
+  async function cleanupTestData() {
+    // 1. Dry-run pour montrer ce qui sera supprimé
+    let preview;
+    try {
+      const { data } = await api.post("/livre/ble/cleanup-test-data", { dry_run: true });
+      preview = data;
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec de l'aperçu");
+      return;
+    }
+    if ((preview?.tags_to_delete ?? 0) === 0 && (preview?.sessions_to_delete ?? 0) === 0) {
+      toast.info("Aucune donnée de test à nettoyer");
+      return;
+    }
+    const sample = (preview.sample_identifiers || []).slice(0, 5).join(", ");
+    if (!window.confirm(
+      `Nettoyer les données de test ?\n\n` +
+      `• ${preview.tags_to_delete} tag(s) à supprimer\n` +
+      `• ${preview.sessions_to_delete} session(s) liées\n\n` +
+      `Exemples : ${sample}\n\nCette action est IRRÉVERSIBLE.`
+    )) return;
+    // 2. Suppression effective
+    try {
+      const { data } = await api.post("/livre/ble/cleanup-test-data", { dry_run: false });
+      toast.success(
+        `Nettoyage terminé : ${data.tags_deleted} tag(s) + ${data.sessions_deleted} session(s)`
+      );
+      reload();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
     }
   }
 
@@ -201,6 +234,11 @@ export default function BleTagsManager({ open, onOpenChange, vehicles = [] }) {
         )}
 
         <DialogFooter>
+          <Button variant="outline" onClick={cleanupTestData}
+                  className="mr-auto text-amber-700 border-amber-300 hover:bg-amber-50"
+                  data-testid="ble-tags-cleanup">
+            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Nettoyer les données de test
+          </Button>
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="ble-tags-close">
             Fermer
           </Button>

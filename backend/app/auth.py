@@ -239,6 +239,22 @@ async def me(user=Depends(get_current_user)):
     return {"user": user}
 
 
+@router.get("/users")
+async def list_users(current=Depends(require_roles("admin"))):
+    """List all registered users (admin only).
+
+    Used by the notification preferences panel to target a specific user
+    when sending a test notification, and by any future admin user-management UI.
+    Excludes the password hash from the response.
+    """
+    from app.db import get_db
+    db = get_db()
+    rows = await db.users.find(
+        {}, {"_id": 0, "password_hash": 0},
+    ).to_list(1000)
+    return rows
+
+
 async def seed_admin():
     from app.db import get_db
     import uuid

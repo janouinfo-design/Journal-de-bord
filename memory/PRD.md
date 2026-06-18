@@ -202,6 +202,27 @@ affectation manuelle, droits par rôle.
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 21 — Cleanup test data + GET /auth/users
+- **Backend** :
+  - `POST /api/livre/ble/cleanup-test-data` (admin) avec `{dry_run: bool}` — supprime les tags
+    contenant `TEST` / `CONFLICTAG` / `TESTTAG` / `TESTBEACON` / `MOCK` (post-normalisation) +
+    les sessions liées (`tag_id` OU `identifier` matché). Audit log + counts retournés.
+  - `GET /api/auth/users` (admin) — liste tous les utilisateurs (id, email, role, full_name),
+    `password_hash` exclu. Utilisé par le sélecteur user des préférences notifications.
+- **Frontend** :
+  - `BleTagsManager` : bouton « Nettoyer les données de test » en bas de la modal,
+    avec preview dry-run avant confirmation puis suppression.
+  - `NotificationsPreferencesCard` : sélecteur user cible utilise désormais `/auth/users`
+    (3 utilisateurs : admin + manager + chauffeur), avec fallback vers `/livre/drivers`
+    pour les déploiements plus anciens.
+- **Smoke test curl** :
+  - `GET /auth/users` → 3 users avec roles
+  - Cleanup dry-run → 6 tags + 0 sessions à supprimer
+  - Cleanup réel → 6 tags effacés
+  - RBAC manager 403 sur les 2 endpoints
+- **Smoke screenshot** : bouton Sparkles présent, tags réduits à 10 après cleanup
+- **Tests régression** : 83/83 PASS
+
 ### Iteration 20 — Suppression définitive de session BLE
 - **Backend** : nouveau `DELETE /api/livre/ble/sessions/{id}` (admin only) — hard delete
   avec log dans `audit_log` (`scope=ble`, `action=delete_session`, acteur, session_id).
