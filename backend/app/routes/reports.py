@@ -39,7 +39,9 @@ async def export_report(
     settings = await get_settings_doc(db)
     q = await filter_trips_query(db, user, start, end, driver_id, vehicle_id, classification,
                                  group=group, company=company)
-    trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(20000)
+    # Reports need most trip fields (addresses, speeds, fuel, durations) for
+    # the PDF/Excel/CSV output. Cap at 10k to avoid runaway memory on huge fleets.
+    trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).limit(10000).to_list(10000)
 
     # Privacy mode 'masked' for managers — personal report contains no per-trip data
     is_masked = (classification == "personal"
@@ -49,9 +51,10 @@ async def export_report(
         total_km = round(sum((t.get("distance_km") or 0) for t in trips), 1)
         all_q = dict(q)
         all_q.pop("classification", None)
+        # Aggregate-only — just the distance + classification fields
         all_km_docs = await db.trips.find(
             all_q, {"_id": 0, "distance_km": 1, "classification": 1},
-        ).to_list(50000)
+        ).limit(20000).to_list(20000)
         total_all = round(sum((d.get("distance_km") or 0) for d in all_km_docs), 1)
         pct = round(total_km / total_all * 100, 1) if total_all else 0
         trips = [{
@@ -99,7 +102,9 @@ async def tax_swiss_report(
     start = f"{year}-01-01T00:00:00+00:00"
     end = f"{year}-12-31T23:59:59+00:00"
     q = await filter_trips_query(db, user, start, end, driver_id, vehicle_id, None)
-    trips = await db.trips.find(q, {"_id": 0}).to_list(50000)
+    # Swiss tax report aggregate — only need distance, classification, fuel
+    projection = {"_id": 0, "distance_km": 1, "classification": 1, "fuel_l": 1}
+    trips = await db.trips.find(q, projection).limit(20000).to_list(20000)
 
     pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
     perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")

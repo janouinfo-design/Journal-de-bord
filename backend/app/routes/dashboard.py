@@ -32,7 +32,14 @@ async def dashboard(
     settings = await get_settings_doc(db)
     q = await filter_trips_query(db, user, start, end, driver_id, vehicle_id, None,
                                  group=group, company=company)
-    trips = await db.trips.find(q, {"_id": 0}).to_list(20000)
+    # Aggregation-only endpoint: project only the fields we actually consume
+    # to keep the response small even on large fleets.
+    projection = {
+        "_id": 0, "distance_km": 1, "classification": 1, "fuel_l": 1,
+        "duration_min": 1, "start_time": 1, "driver_id": 1,
+        "driver_name": 1, "vehicle_plate": 1,
+    }
+    trips = await db.trips.find(q, projection).limit(10000).to_list(10000)
 
     pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
     perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")
