@@ -219,7 +219,7 @@ export default function ScheduleEditor({ canEdit, drivers, registerSave }) {
                         </label>
                       </td>
                       {cfg.periods.map((p, i) => (
-                        <td key={i} className="py-2.5 px-2">
+                        <td key={`d${d.idx}-p${i}`} className="py-2.5 px-2">
                           <PeriodCell
                             period={p}
                             dayIdx={d.idx}

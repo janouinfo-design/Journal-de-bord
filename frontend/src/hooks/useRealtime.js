@@ -32,7 +32,9 @@ export function useRealtime(onMessage) {
           attemptRef.current = 0;
           setConnected(true);
           pingInterval = setInterval(() => {
-            try { ws.send("ping"); } catch { /* noop */ }
+            try { ws.send("ping"); } catch (e) {
+              console.debug("[useRealtime] ping send failed:", e);
+            }
           }, 25000);
         };
         ws.onmessage = (e) => {
@@ -41,9 +43,13 @@ export function useRealtime(onMessage) {
             if (payload?.type && payload.type !== "pong" && payload.type !== "hello") {
               cbRef.current?.(payload);
             }
-          } catch { /* ignore malformed */ }
+          } catch (err) {
+            console.debug("[useRealtime] malformed payload ignored:", err);
+          }
         };
-        ws.onerror = () => { /* swallow; onclose will trigger reconnect */ };
+        ws.onerror = (e) => {
+          console.debug("[useRealtime] socket error; reconnecting via onclose:", e);
+        };
         ws.onclose = () => {
           setConnected(false);
           if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
@@ -52,7 +58,8 @@ export function useRealtime(onMessage) {
           const delay = Math.min(30000, 500 * Math.pow(2, Math.min(attempt, 6))); // cap 30s
           setTimeout(connect, delay);
         };
-      } catch {
+      } catch (e) {
+        console.warn("[useRealtime] WebSocket constructor failed:", e);
         const attempt = ++attemptRef.current;
         const delay = Math.min(30000, 500 * Math.pow(2, Math.min(attempt, 6)));
         setTimeout(connect, delay);
@@ -63,7 +70,9 @@ export function useRealtime(onMessage) {
     return () => {
       cancelled = true;
       if (pingInterval) clearInterval(pingInterval);
-      try { wsRef.current?.close(); } catch { /* noop */ }
+      try { wsRef.current?.close(); } catch (e) {
+        console.debug("[useRealtime] close on unmount failed:", e);
+      }
     };
   }, []);
 

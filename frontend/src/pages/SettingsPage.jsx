@@ -118,7 +118,11 @@ export default function SettingsPage() {
       await api.put("/livre/settings", { mode: settings.mode });
       // 2. plages horaires (delegated to ScheduleEditor via ref)
       if (scheduleSaveRef.current) {
-        try { await scheduleSaveRef.current(); } catch { /* toast already shown */ }
+        try {
+          await scheduleSaveRef.current();
+        } catch (e) {
+          console.debug("[SettingsPage] schedule save failed (toast already shown):", e);
+        }
       }
       // 3. scheduler config (if user changed values, persist)
       if (sched) {
@@ -138,7 +142,10 @@ export default function SettingsPage() {
       await api.put(`/livre/vehicles/${vehicleId}/mode`, { mode });
       toast.success("Mode véhicule mis à jour");
       load();
-    } catch { toast.error("Refusé"); }
+    } catch (e) {
+      console.debug("[SettingsPage] vehicle mode change refused:", e);
+      toast.error("Refusé");
+    }
   }
 
   async function saveBleTag(vehicleId, identifier) {

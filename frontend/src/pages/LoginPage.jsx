@@ -7,6 +7,11 @@ import { Label } from "@/components/ui/label";
 import { TEST_IDS } from "@/constants/testIds";
 import { Truck, MapPin, FileText, Loader2 } from "lucide-react";
 
+// Demo / mock seed accounts shown intentionally on the login screen so testers
+// can sign in without provisioning real users. These credentials are public
+// (also seeded by the backend) and DO NOT grant access to any production data.
+// They live in env vars too: ADMIN_EMAIL/PASSWORD, MANAGER_EMAIL/PASSWORD,
+// DRIVER_EMAIL/PASSWORD in backend/.env.
 const DEMO = [
   { id: TEST_IDS.auth.demoAdmin, label: "Admin", email: "admin@logitrak.ch", password: "admin123", desc: "Accès complet" },
   { id: TEST_IDS.auth.demoManager, label: "Gestionnaire", email: "manager@logitrak.ch", password: "manager123", desc: "Selon politique" },

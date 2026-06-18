@@ -47,7 +47,11 @@ export default function DriverConsolePage() {
       const { data } = await api.get("/livre/driver/current-session");
       setSession(data.session);
     } catch (e) {
-      // ignore — chauffeur might not be linked
+      // Chauffeur might not be linked to a driver record — that is fine.
+      // Anything else (network / 5xx) is logged for debugging.
+      if (e?.response?.status && e.response.status !== 400) {
+        console.debug("[DriverConsole] current-session fetch failed:", e);
+      }
     } finally { setLoading(false); }
   }
   useEffect(() => {

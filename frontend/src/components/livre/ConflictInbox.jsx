@@ -37,8 +37,12 @@ export default function ConflictInbox() {
       const { data } = await api.get("/livre/ble/sessions",
         { params: { status: "conflict", limit: 100 } });
       setConflicts(data || []);
-    } catch {
-      // silent — user might not have permission (drivers don't see this)
+    } catch (e) {
+      // Drivers don't have permission to list conflicts — that's expected.
+      // For other roles, log so we can investigate without breaking the UI.
+      if (e?.response?.status !== 403) {
+        console.debug("[ConflictInbox] loadConflicts failed:", e);
+      }
     }
   }
   useEffect(() => { loadConflicts(); }, []);

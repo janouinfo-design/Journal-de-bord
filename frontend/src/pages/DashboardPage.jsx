@@ -182,7 +182,7 @@ export default function DashboardPage() {
           <ResponsiveContainer width="100%" height={240}>
             <PieChart>
               <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={2} dataKey="value">
-                {pieData.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
+                {pieData.map((d, i) => <Cell key={d.name || `pie-${i}`} fill={COLORS[i]} />)}
               </Pie>
               <Tooltip formatter={(v) => fmtKm(v)} />
             </PieChart>

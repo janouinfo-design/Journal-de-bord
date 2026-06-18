@@ -80,8 +80,8 @@ class TestNotificationsPrefs:
         body = r.json()
         assert body["channels"] == {"push": True, "email": True, "sms": True}
         # Defaults: ble.conflict push=true,email=false,sms=false
-        assert body["events"]["ble.conflict"]["push"] is True
-        assert body["events"]["ble.conflict"]["email"] is False
+        assert body["events"]["ble.conflict"]["push"]
+        assert not (body["events"]["ble.conflict"]["email"])
 
     def test_put_prefs_merges(self, driver_s):
         r = driver_s.put(
@@ -93,11 +93,11 @@ class TestNotificationsPrefs:
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["channels"]["email"] is False
-        assert body["events"]["ble.conflict"]["push"] is False
-        assert body["events"]["ble.conflict"]["email"] is True
+        assert not (body["channels"]["email"])
+        assert not (body["events"]["ble.conflict"]["push"])
+        assert body["events"]["ble.conflict"]["email"]
         # Untouched events keep their defaults
-        assert body["events"]["ble.resolved"]["push"] is True
+        assert body["events"]["ble.resolved"]["push"]
 
     def test_put_prefs_filters_unknown_event(self, driver_s):
         r = driver_s.put(

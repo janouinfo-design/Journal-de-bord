@@ -183,9 +183,9 @@ class TestPushToken:
                                 "platform": "ios", "device_id": "dev-1"}, timeout=15)
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["ok"] is True
+        assert d["ok"]
         assert d["token"] == "ExponentPushToken[REG_AAA]"
-        assert d["active"] is True
+        assert d["active"]
 
     def test_register_idempotent_update(self, driver_s):
         # First register
@@ -197,7 +197,7 @@ class TestPushToken:
                           json={"token": "ExponentPushToken[REG_BBB]",
                                 "platform": "android"}, timeout=15)
         assert r.status_code == 200
-        assert r.json()["active"] is True
+        assert r.json()["active"]
 
     def test_register_token_invalid_short(self, driver_s):
         r = driver_s.post(f"{API}/livre/driver/push-token",

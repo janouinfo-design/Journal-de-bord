@@ -90,7 +90,9 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
           if (data?.points?.length >= 2) {
             setPolylines(prev => ({ ...prev, [t.id]: data.points }));
           }
-        } catch { /* keep fallback straight line */ }
+        } catch (e) {
+          console.debug("[TripsMap] track fetch failed, keeping straight-line fallback:", e);
+        }
         setLoadingPoly(n => Math.max(0, n - 1));
       }
     };
@@ -219,7 +221,11 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
         b.extend([t.start_lng, t.start_lat]);
         b.extend([t.end_lng, t.end_lat]);
       }
-      try { map.fitBounds(b, { padding: 40, maxZoom: 13, duration: 600 }); } catch { /* noop */ }
+      try {
+        map.fitBounds(b, { padding: 40, maxZoom: 13, duration: 600 });
+      } catch (e) {
+        console.debug("[TripsMap] fitBounds skipped:", e);
+      }
     }
   }, [geojson, ready, visibleTrips]);
 

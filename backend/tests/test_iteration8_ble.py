@@ -157,7 +157,7 @@ class TestBleDetections:
             results.extend(res_list)
             time.sleep(0.4)
         last = results[-1]
-        assert last.get("ignored") is False, f"unexpected ignored result: {last}"
+        assert not (last.get("ignored")), f"unexpected ignored result: {last}"
         assert last.get("confidence", 0) > 0
         sess = last.get("session") or {}
         assert sess.get("status") in ("open", "automatic", "pending", "manual")
@@ -180,7 +180,7 @@ class TestBleDetections:
         assert r.status_code == 200
         body = r.json()
         item = (body.get("results") or [{}])[0] if isinstance(body, dict) else body[0]
-        assert item.get("ignored") is True
+        assert item.get("ignored")
         assert item.get("reason") == "rssi_below_floor"
 
     def test_unknown_tag_ignored(self, driver_s):
@@ -190,7 +190,7 @@ class TestBleDetections:
         assert r.status_code == 200
         body = r.json()
         item = (body.get("results") or [{}])[0] if isinstance(body, dict) else body[0]
-        assert item.get("ignored") is True
+        assert item.get("ignored")
         assert item.get("reason") == "unknown_tag"
 
 
@@ -293,7 +293,7 @@ class TestBleSimulate:
                          timeout=15)
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body.get("ignored") is False
+        assert not (body.get("ignored"))
         assert body.get("session", {}).get("driver_id") == driver_record["id"]
 
     def test_manager_simulate_forbidden(self, manager_s, driver_record):
@@ -387,7 +387,7 @@ class TestPrivacyInvariant:
                 allowed = {"id", "distance_km", "classification", "masked"}
                 leak = [k for k in t.keys() if k not in allowed and t.get(k) is not None]
                 assert not leak, f"masked personal trip leaks fields: {leak}"
-                assert t.get("masked") is True
+                assert t.get("masked")
         finally:
             admin_s.put(f"{API}/livre/settings", json={"mode": "mixte"}, timeout=15)
 

@@ -33,7 +33,11 @@ export function AuthProvider({ children }) {
   }
 
   async function logout() {
-    try { await api.post("/auth/logout"); } catch (e) {}
+    try {
+      await api.post("/auth/logout");
+    } catch (e) {
+      console.debug("[AuthContext] logout request failed (will still clear local state):", e);
+    }
     setUser(null);
   }
 

@@ -25,7 +25,7 @@ export default function DayTimeline({ periods, dayType }) {
         const to = (_toMin(p.to) / 1440) * 100;
         return (
           <div
-            key={i}
+            key={`band-${p.from}-${p.to}-${i}`}
             className="absolute top-0 bottom-0 bg-[#2196F3]"
             style={{ left: `${from}%`, width: `${Math.max(to - from, 0.5)}%` }}
             title={`${p.from} → ${p.to}`}

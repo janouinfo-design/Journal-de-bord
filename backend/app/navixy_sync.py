@@ -34,9 +34,12 @@ def _detect_zone_type(label: str) -> str:
     s = (label or "").lower()
     for kw in PRO_KEYWORDS:
         if kw in s:
-            if "entrep" in s: return "entrepot"
-            if "chantier" in s: return "chantier"
-            if "depot" in s or "dépôt" in s or "depôt" in s: return "depot"
+            if "entrep" in s:
+                return "entrepot"
+            if "chantier" in s:
+                return "chantier"
+            if "depot" in s or "dépôt" in s or "depôt" in s:
+                return "depot"
             return "client"
     for kw in PERSO_KEYWORDS:
         if kw in s:

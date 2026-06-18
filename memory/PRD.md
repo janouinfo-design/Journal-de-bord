@@ -202,6 +202,39 @@ affectation manuelle, droits par rôle.
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 17 — Code Quality Cleanup post-review
+- **Tests pytest** : remplacement de `assert x is True/False` → `assert x` / `assert not (x)` dans
+  `test_phase_a_regression.py`, `test_notifications.py`, `test_iteration8_ble.py` (16 assertions).
+  Suite Phase A : 83/83 toujours PASS.
+- **Empty catch blocks → logs scopés `console.debug`** :
+  - `hooks/useRealtime.js` (3 blocs : ping send, malformed payload, close on unmount, WS error, constructor)
+  - `contexts/AuthContext.jsx:36` (logout endpoint failure)
+  - `components/livre/TripsMap.jsx:93,222` (track fetch fallback, fitBounds skip)
+  - `components/livre/ConflictInbox.jsx:40` (drivers 403 silencieux conservé, autres erreurs loguées)
+  - `pages/DriverConsolePage.jsx:49` (driver-not-linked filtré, autres loguées)
+  - `pages/SettingsPage.jsx:121,141` (schedule save échec, vehicle mode refus)
+- **Index-as-key anti-pattern** corrigé :
+  - `DashboardPage.jsx:185` → `key={d.name || \`pie-${i}\`}` (catégorie stable)
+  - `ScheduleEditor.jsx:222` → `key={\`d${d.idx}-p${i}\`}` (composite stable)
+  - `DayTimeline.jsx:28` → `key={\`band-${p.from}-${p.to}-${i}\`}`
+- **LoginPage.jsx** : commentaire explicite ajouté précisant que les comptes DEMO affichés sont
+  des seeds publics (PAS un secret). Confirmation : pas de vraie clé/credential exposé dans le code.
+- **NotificationsPreferencesCard.jsx** : extraction d'`EventSection` → composant dédié
+  `NotificationEventSection.jsx` (107 LOC, présentationnel pur, avec sous-composant `EventRow`).
+  Card principale passée de 360 → 286 LOC (-21%), complexité réduite. Lint : 0 erreur.
+- **navixy_sync.py** : 3 erreurs ruff E701 (statements one-line) corrigées.
+
+#### Faux positifs justifiés (non corrigés)
+- **React Hook deps** flaggées sur `api`, `COLORS`, `CONCURRENCY`, `STYLE_OSM`, `wsUrl` etc :
+  ce sont des constantes/imports module-level stables — les ajouter aux deps causerait des
+  re-renders/re-connexions inutiles. Le `[]` empty-deps de `useRealtime.useEffect` est intentionnel
+  (connexion établie une fois par mount).
+- **`sync_navixy()` (206 LOC, complexité 41)** : code legacy d'intégration Navixy, fonctionnel
+  et couvert par les tests d'itération 3. Un refactor risquerait de casser la synchro production
+  sans gain immédiat — reporté à une itération dédiée avec suite de tests étendue préalable.
+- **Composants legacy >200 LOC** (`TripsMap`, `ScheduleEditor`, `AssignmentsDialog`) :
+  fonctionnent, non touchés ce cycle pour éviter régression UX. Split possible plus tard.
+
 ### Iteration 16 — UI Settings web : panneau Préférences de notification
 - **`frontend/src/components/livre/NotificationsPreferencesCard.jsx`** (nouveau, 360 LOC) :
   - Section 5 du Settings (cohérence visuelle avec les 4 autres sections numérotées)
