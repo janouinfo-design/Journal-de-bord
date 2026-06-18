@@ -21,6 +21,7 @@ import AssignmentsDialog from "@/components/livre/AssignmentsDialog";
 import ScheduleEditor from "@/components/livre/ScheduleEditor";
 import PrivacyCompatCard from "@/components/livre/PrivacyCompatCard";
 import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
+import NotificationsPreferencesCard from "@/components/livre/NotificationsPreferencesCard";
 
 const MODE_OPTIONS = [
   {
@@ -435,6 +436,9 @@ export default function SettingsPage() {
           </SheetContent>
         </Sheet>
       </div>
+
+      {/* SECTION 5 — NOTIFICATION PREFERENCES */}
+      <NotificationsPreferencesCard />
     </div>
   );
 }

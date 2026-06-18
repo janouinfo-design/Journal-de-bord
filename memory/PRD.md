@@ -202,6 +202,29 @@ affectation manuelle, droits par rôle.
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 16 — UI Settings web : panneau Préférences de notification
+- **`frontend/src/components/livre/NotificationsPreferencesCard.jsx`** (nouveau, 360 LOC) :
+  - Section 5 du Settings (cohérence visuelle avec les 4 autres sections numérotées)
+  - Charge le catalogue (`GET /notifications/catalog`) + les préférences (`GET /notifications/preferences`)
+  - 3 master switches Push / Email / SMS (hint « stubbé — actif à l'ajout de Resend/Twilio »)
+  - Matrice événement × canal : 11 lignes (3 LOGITRAK actifs + 8 stubs business), 3 toggles + bouton Tester par ligne
+  - Sauvegarde via `PUT /notifications/preferences` (toast + état loading)
+  - Bouton **Tester** (admin only) via `POST /notifications/test`, retour intelligent : nb d'appareils touchés / tokens morts / aucun appareil
+  - Sélecteur **utilisateur cible** (admin only) pour tester sur un autre user via le catalogue chauffeurs
+  - États gérés : loading initial, erreur de chargement, saving, testing par événement
+  - 11 `data-testid` (`settings-notifications-card`, `-save`, `-master-push/email/sms`, `-target-user`, `-row-<event>`, `-toggle-<event>-<channel>`, `-test-<event>`)
+- **`frontend/src/pages/SettingsPage.jsx`** : 2 lignes ajoutées (import + montage de la card en bas de la page)
+- **Validation manuelle** :
+  - Screenshot Playwright : card affichée, 11 événements listés, 33 toggles, 11 boutons Test, sélecteur user, Enregistrer
+  - PUT `/notifications/preferences` → 200 OK, persistance vérifiée après reload (aria-checked conservé)
+  - POST `/notifications/test` → 200 OK, toast affiché
+  - Driver peut GET+PUT ses prefs (200/200), Driver bloqué sur POST `/test` (403 attendu)
+- **Compatibilité** :
+  - Aucun endpoint backend modifié — uniquement consommation
+  - PWA `/driver` + app native Expo intactes
+  - 83/83 tests Phase A toujours PASS (aucune régression)
+- **Lint** : 0 erreur ESLint sur le nouveau composant + la page modifiée.
+
 ### Iteration 15 — Refactoring `routes.py` monolithique → package `routes/`
 - **Suppression** de `app/routes.py` (1162 lignes monolithique) → remplacé par le package `app/routes/`.
 - **Nouveau package `app/routes/`** (11 fichiers, 1368 LOC total réparties) :
