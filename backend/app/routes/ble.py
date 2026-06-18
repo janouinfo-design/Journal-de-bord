@@ -180,6 +180,92 @@ async def ble_cleanup_test_data(payload: dict = None,
     }
 
 
+@router.post("/ble/sessions/clear-all")
+async def ble_sessions_clear_all(payload: dict = None,
+                                 user=Depends(require_roles("admin"))):
+    """Hard-delete ALL BLE sessions for the tenant (admin only).
+
+    Use to clean up demo / accumulated noise in the Identification table.
+    Body:
+        { "dry_run": true }  → only count (default)
+        { "dry_run": false } → actually delete
+    """
+    payload = payload or {}
+    dry_run = bool(payload.get("dry_run", True))
+    db = get_db()
+    count = await db.driver_sessions.count_documents({"tenant_id": "default"})
+    if dry_run:
+        return {"dry_run": True, "sessions_to_delete": count}
+    res = await db.driver_sessions.delete_many({"tenant_id": "default"})
+    await db.audit_log.insert_one({
+        "ts": ble_engine.now_iso(), "scope": "ble", "action": "clear_all_sessions",
+        "actor": user.get("email"), "deleted": res.deleted_count,
+    })
+    return {"dry_run": False, "sessions_deleted": res.deleted_count}
+
+
+@router.post("/ble/sessions/seed-demo")
+async def ble_sessions_seed_demo(user=Depends(require_roles("admin"))):
+    """Create 5 demo BLE sessions, each with a different driver + vehicle.
+
+    Useful after a clear-all to repopulate the Identification table with
+    realistic-looking data for screenshots / customer demos.
+    """
+    import uuid
+    from datetime import datetime, timezone, timedelta
+
+    db = get_db()
+    drivers = await db.drivers.find(
+        {"tenant_id": "default"}, {"_id": 0, "id": 1, "name": 1},
+    ).sort("name", 1).to_list(50)
+    # Keep only drivers with a proper human-readable name
+    drivers = [d for d in drivers if d.get("name") and not d["name"].isdigit()][:5]
+    if len(drivers) < 5:
+        raise HTTPException(400, f"Besoin de 5 chauffeurs distincts (trouvés: {len(drivers)})")
+
+    vehicles = await db.vehicles.find(
+        {"tenant_id": "default"}, {"_id": 0, "id": 1, "plate": 1},
+    ).sort("plate", 1).to_list(50)
+    if len(vehicles) < 5:
+        raise HTTPException(400, f"Besoin de 5 véhicules distincts (trouvés: {len(vehicles)})")
+
+    statuses = ["automatic", "confirmed", "pending", "manual", "closed"]
+    confidences = [92, 88, 64, 72, 95]
+    now = datetime.now(timezone.utc)
+    created = []
+    for i in range(5):
+        started = now - timedelta(hours=i + 1, minutes=i * 13)
+        ended = started + timedelta(minutes=45 + i * 5)
+        sess = {
+            "id": str(uuid.uuid4()),
+            "tenant_id": "default",
+            "driver_id": drivers[i]["id"],
+            "vehicle_id": vehicles[i]["id"],
+            "ble_tag_id": None,
+            "source": "ble",
+            "status": statuses[i],
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat() if statuses[i] in ("closed", "confirmed") else None,
+            "last_seen": ended.isoformat(),
+            "detection_count": 20 + i * 8,
+            "last_rssi": -55 - i * 2,
+            "mobile_override": None,
+            "confidence": confidences[i],
+            "created_at": ble_engine.now_iso(),
+        }
+        await db.driver_sessions.insert_one(sess)
+        sess.pop("_id", None)
+        created.append({"driver": drivers[i]["name"],
+                        "vehicle": vehicles[i]["plate"],
+                        "status": statuses[i]})
+
+    await db.audit_log.insert_one({
+        "ts": ble_engine.now_iso(), "scope": "ble", "action": "seed_demo_sessions",
+        "actor": user.get("email"), "created": len(created),
+    })
+    return {"created": len(created), "sessions": created}
+
+
 @router.post("/ble/sessions/{session_id}/resolve")
 async def ble_session_resolve(session_id: str, payload: dict,
                               user=Depends(require_roles("admin"))):

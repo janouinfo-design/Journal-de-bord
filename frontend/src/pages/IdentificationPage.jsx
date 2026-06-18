@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 import {
   Bluetooth, Loader2, RefreshCw, Filter, CheckCircle2, XCircle,
-  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag, Bug, Trash2,
+  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag, Bug, Trash2, Eraser, Sparkles,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/useRealtime";
 import BleTagsManager from "@/components/livre/BleTagsManager";
@@ -171,6 +171,33 @@ export default function IdentificationPage() {
     }
   }
 
+  async function clearAllSessions() {
+    // Two-step confirm to avoid accidental wipe of historical BLE data.
+    const dry = await api.post("/livre/ble/sessions/clear-all", { dry_run: true }).then(r => r.data);
+    if (!window.confirm(
+      `Supprimer DÉFINITIVEMENT toutes les sessions BLE ?\n\n` +
+      `${dry.sessions_to_delete} session(s) seront effacées de l'historique.\n` +
+      `Cette action est IRRÉVERSIBLE.`
+    )) return;
+    try {
+      const { data } = await api.post("/livre/ble/sessions/clear-all", { dry_run: false });
+      toast.success(`${data.sessions_deleted} session(s) supprimée(s)`);
+      loadAll();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec du nettoyage");
+    }
+  }
+
+  async function seedDemoSessions() {
+    try {
+      const { data } = await api.post("/livre/ble/sessions/seed-demo");
+      toast.success(`${data.created} sessions démo créées (5 chauffeurs distincts)`);
+      loadAll();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec du seed");
+    }
+  }
+
   return (
     <div data-testid="identification-page" className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300 max-w-[1320px]">
       <div>
@@ -199,6 +226,26 @@ export default function IdentificationPage() {
             data-testid="ident-open-debug"
           >
             <Bug className="w-3.5 h-3.5 mr-1.5" /> Debug BLE
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={seedDemoSessions}
+            className="h-8 text-slate-600 border-slate-300 hover:bg-slate-50"
+            data-testid="ident-seed-demo"
+            title="Crée 5 sessions démo avec 5 chauffeurs distincts"
+          >
+            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Démo (5)
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={clearAllSessions}
+            className="h-8 text-rose-600 border-rose-300 hover:bg-rose-50"
+            data-testid="ident-clear-all"
+            title="Supprime TOUTES les sessions BLE de l'historique (irréversible)"
+          >
+            <Eraser className="w-3.5 h-3.5 mr-1.5" /> Vider sessions
           </Button>
         </h1>
         <p className="text-xs text-slate-500 mt-1">
