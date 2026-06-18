@@ -198,25 +198,53 @@ affectation manuelle, droits par rôle.
 - AssignmentsDialog refresh timing (optimistic insert)
 
 ## Tests
-- Backend pytest : 19/19 PASS (iteration 3)
+- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE)
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
+## Implemented — 19/02/2026
+### Iteration 9 — Phase B Native scaffold (app Expo mobile chauffeur)
+- App Expo SDK 51 + TypeScript scaffoldée dans `/app/logitrak-driver-app/` (24 fichiers source, 1 844 LOC)
+- Stack : React Navigation 6, Zustand, axios + JWT refresh, expo-secure-store, expo-notifications,
+  expo-background-fetch, expo-task-manager, `react-native-ble-plx` 3.x, `@react-native-community/netinfo`
+- Écrans : `LoginScreen` (JWT email/password), `DriverScreen` (carte véhicule + boutons PRO/PRIVÉ + scanner BLE),
+  `SettingsScreen` (toggle BLE, file hors-ligne, déconnexion)
+- BLE : `scanner.ts` (dedupe 2 s, filtre optionnel par identifiers), `queue.ts` (AsyncStorage 24h/5 000 max,
+  backoff exponentiel 1 s → 60 s), `background.ts` (BackgroundFetch 15 min flush)
+- Hooks : `useRealtime` (WS backoff 1 s → 30 s), `useCurrentSessionPoll` (10 s),
+  `useQueueFlusher` (30 s + NetInfo reconnect + AppState focus)
+- Permissions iOS (`Info.plist` BG modes bluetooth-central) + Android (BT_SCAN/CONNECT/LOCATION/POST_NOTIFICATIONS)
+- `app.json` plugins : `expo-secure-store`, `expo-notifications`, `react-native-ble-plx` (BG enabled)
+- `eas.json` avec profils dev / preview / production (env `EXPO_PUBLIC_API_URL` par profil)
+- Fallbacks : Bluetooth off, permission refusée, réseau coupé, token expiré, WS fermé
+- Logger scopé `[scope][level]` activable via `EXPO_PUBLIC_DEBUG=1`
+- README de 250 lignes : pré-requis, install, prebuild, dev client, EAS build, soumission stores
+- Backend FastAPI **inchangé** (endpoints Phase A déjà compatibles)
+- TypeScript `npx tsc --noEmit` : 0 erreur
+- Web app `/driver` PWA conservée — coexiste avec l'app native
+
 ## P1 backlog
-- Carte Leaflet/Mapbox dans l'historique (polylignes Navixy via `track/read`)
+- Carte Leaflet/Mapbox dans l'historique (polylignes Navixy via `track/read`) — DONE (MapLibre, iteration 7)
 - Carburant réel via `tracker/get_diagnostics` au lieu de l'estimation
 - Webhook Navixy (push temps réel au lieu de polling APScheduler)
 - Page admin pour gérer utilisateurs Logitrak
 - CRUD UI pour géofences
 - Multi-tenant via header `X-Tenant-ID`
+- Tests pytest de régression sur Phase A BLE + Phase B endpoints (option **c** du plan)
+- Refactoring `routes.py` monolithique en routers modulaires (option **b** du plan)
+- Endpoint backend `POST /api/auth/refresh` (consommé par l'app native)
+- Endpoint backend `POST /api/livre/driver/push-token` (Expo Push registration)
 
 ## P2 backlog
 - Rapports programmés (email)
-- Notifications WebSocket nouveaux trajets
+- Notifications WebSocket nouveaux trajets — DONE (Conflict Inbox, iteration 8)
 - Mode sombre
 - Tests Pytest/Jest formalisés
 - Module "Avantage en nature" (calcul fiscal CHF)
+- Phase B production : Apple Developer + Play Console, iOS BG State Restoration, Android Foreground Service BLE
+- Tests Detox E2E sur l'app native
 
 ## Next tasks
-- Brancher la carte Leaflet
-- Récupérer le carburant réel
-- Investiguer un webhook Navixy
+- **(c)** Suite pytest de régression `/app/backend/tests/` couvrant Phase A BLE complet (cascade, RBAC, score) — testable immédiatement
+- **(b)** Décomposer `routes.py` en routers modulaires (`ble.py`, `dashboard.py`, `reports.py`, `settings.py`)
+- Ajouter endpoints backend `auth/refresh` + `driver/push-token` pour finaliser l'intégration mobile
+- Tester l'app native sur device physique (Android/iOS) avec un vrai tag BLE

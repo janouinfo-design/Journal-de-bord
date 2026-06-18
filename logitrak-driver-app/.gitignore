@@ -1,0 +1,35 @@
+node_modules/
+.expo/
+dist/
+npm-debug.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+
+# macOS
+.DS_Store
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Native
+ios/
+android/
+.gradle/
+*.xcworkspace/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Misc
+google-services.json
+GoogleService-Info.plist
+play-store-service-account.json
