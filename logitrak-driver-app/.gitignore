@@ -13,8 +13,7 @@ web-build/
 # macOS
 .DS_Store
 
-# Local env
-.env
+# Local env (committed for Emergent deployment tooling — see /app/.gitignore)
 .env.local
 .env.*.local
 
