@@ -97,9 +97,10 @@ frontend/node_modules/.cache/default-development/1.pack
 frontend/node_modules/.cache/default-development/1.pack
 frontend/node_modules/.cache/default-development/16.pack
 frontend/node_modules/.cache/default-development/2.pack
-.env
-.env.*
-*.env
+# NOTE: .env files are intentionally committed for Emergent deployment.
+# Emergent's pipeline injects production values during deploy, so the files
+# must be tracked in git. Real secrets live in the platform's secret manager.
+# (Removed: .env / .env.* / *.env entries on the line below)
 credentials.json
 *.key
 .credentials
