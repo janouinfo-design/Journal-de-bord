@@ -1,0 +1,71 @@
+{
+  "summary": "FINAL pre-deploy validation — 101/101 backend tests PASS (34 phase_a regression + 49 notifications/BLE + 18 final pre_deploy covering exports binary, privacy masked, settings PUT, schedule, notif prefs roundtrip, RBAC). Frontend E2E confirms: admin/driver/manager login OK, dashboard KPIs load (27 446 km pro / 38 643 km perso / 66 089 km total / Mode Mixte), French UI, LOGITRAK branding only (zero Navixy leak), Settings notifications card has the expected 33 toggles + 3 master + 11 test buttons + save, Conflict Inbox bell visible with unresolved-count badge, RBAC nav hidden for driver, Driver Console PWA fully functional (vehicle detected, BLE -50 dBm, score 53, PRO/PRIVÉ override + simulator). GO recommendation, with 2 non-blocking issues to address post-deploy.",
+  "go_no_go": "GO — Production deployment is approved. The 2 issues below are non-blocking (cosmetic React warning + WS browser handshake warning with working REST fallback).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Dashboard / Reports / History (any page rendering trip rows)", "issue": "React console error 'Encountered two children with the same key, null' is STILL present (already flagged in iteration_8). Indicates a .map() somewhere is using a field that can be null as React key. Likely in DashboardPage trips table or driver list. Not visible to users but cause data duplication risks in future.", "selector": "n/a (console error)", "priority": "MEDIUM"},
+      {"component": "useRealtime hook / Realtime WebSocket", "issue": "Browser warning 'WebSocket connection to wss://.../api/livre/realtime failed: WebSocket is closed before the connection is established'. Pytest WS suite passes (backend confirmed working). Likely the browser hook attempts to connect before the auth cookie/session is ready (on login page) or the ingress drops the first handshake. The exponential-backoff reconnect eventually succeeds — Conflict Inbox bell shows correct unresolved count via fallback, so user-visible impact is minimal. Worth investigating: gate connect() until /auth/me succeeds.", "selector": "useRealtime.js:25 connect()", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_flows": [
+    "Admin login via demo button + /livre/dashboard with KPIs + French + LOGITRAK branding only",
+    "Driver login (chauffeur@logitrak.ch / chauffeur123) — Identification nav HIDDEN (admin-only RBAC enforced)",
+    "/auth/refresh: 8 tests covering success, rotation, invalid, expired, missing, wrong-type",
+    "/livre/driver/push-token: register, idempotent update, delete, RBAC, unauthenticated reject",
+    "BLE conflict detection on CONFLICTAG with 2 drivers; admin /resolve closes loser sessions; manager+driver get 403",
+    "WebSocket /api/livre/realtime (pytest): conflict_detected + conflict_resolved events received",
+    "Notifications catalog 11 events, prefs PUT merges + filters unknown events, /test admin-only (manager+driver 403)",
+    "Exports: PDF (%PDF magic bytes), XLSX (PK zip), CSV — for both professional and personal classifications; tax-swiss PDF",
+    "Privacy mode masked: driver sees personal trips with masked:true (no address/GPS/date fields), /trips/{id}/track returns 403; admin sees everything",
+    "Settings GET/PUT (mode), Schedule GET/PUT idempotent, invalid mode 'C' rejected with 400/422",
+    "Driver console PWA: vehicle detection card, BLE rssi/score, PRO/PRIVÉ override with banner, BLE simulator",
+    "Conflict Inbox bell visible in header with unresolved count badge",
+    "Settings notifications panel: 33 toggles (11×3 channels) + 3 master switches + 11 admin test buttons + save"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_phase_a_regression.py",
+    "/app/backend/tests/test_notifications.py",
+    "/app/backend/tests/test_iteration8_ble.py",
+    "/app/backend/tests/test_final_pre_deploy.py",
+    "/app/test_reports/pytest/phase_a_final.xml",
+    "/app/test_reports/pytest/notif_ble_final.xml",
+    "/app/test_reports/pytest/final_pre_deploy.xml"
+  ],
+  "action_items": [
+    "[FRONTEND, non-blocking] Fix React 'two children with same key null' warning — audit all .map((x, idx) => ...) calls and ensure key={x.id} (fallback to idx ONLY if id may be null). Likely culprits: IdentificationPage trs (already flagged iteration_8), Dashboard driver/trip lists, ConflictInbox dropdown items.",
+    "[FRONTEND, non-blocking] useRealtime.js: gate initial connect() until cookie is present (e.g., after /auth/me 200) OR add a one-time retry-on-401 path. Will eliminate the 'closed before established' warning during initial mount."
+  ],
+  "critical_code_review_comments": [
+    "Backend modular routers (auth/ble/realtime/identification/notifications/reports/settings/dashboard/misc) all aggregated cleanly via /app/backend/app/routes/__init__.py — no circular imports observed, RBAC consistently applied.",
+    "ble_engine.resolve_conflict + notifications_service.dispatch wiring is tested end-to-end (TestDispatcherWiring::test_conflict_writes_notifications_log PASSED) — the notification log row is written even though Expo push is a no-op (no tokens registered in tests).",
+    "expo_push.py handles 3 cases properly (skip invalid tokens, success + dead tokens cleanup, swallow HTTP failure) — verified by unit tests.",
+    "Privacy masked mode invariant TestPrivacyInvariant + TestPrivacyMasked confirm absolute anonymisation for non-admin: only {id, classification, distance_km, masked:true} returned, /track endpoint returns 403/404.",
+    "Reports endpoints return correct binary content (PDF magic bytes %PDF, XLSX zip magic PK, CSV with delimiters) — no JSON-wrapper leak.",
+    "Notifications catalog returns ≥11 events as specified; PUT prefs filters out unknown events and merges correctly with defaults.",
+    "Driver scoping verified: driver session sees trips only for own driver_id (single unique driver_id when trips present). Drivers list endpoint returns 12 entries to driver — intentional for assignment context but consider if any sensitive PII fields are exposed (currently only email/name/created_at — acceptable)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_final_pre_deploy.py (created, 18 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (101/101 tests across 3 suites)",
+    "frontend": "95% (all critical user flows working; 2 non-blocking console warnings)"
+  },
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123 — all verified working on the live preview URL",
+  "seed_data_creation": "None added. Tests use idempotent fixtures (CONFLICTAG tag created if absent, settings reverted to 'mixte' on teardown). Pre-existing seed data preserved.",
+  "mocked_apis_confirmed": [
+    "Expo push HTTP — push_tokens collection empty in tests, dispatch returns sent:0 (no actual https://exp.host call). MOCKED behavior verified by unit tests using monkeypatched requests.post.",
+    "Email + SMS channels — STUBBED in notifications_service.dispatch (log only). No Resend/Twilio HTTP calls.",
+    "Privacy tracker enforcement — SIMULATION mode only (no real tracker commands)."
+  ],
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully covered by 3 pytest suites (101 tests, ~25s total). For any next iteration: re-run `cd /app/backend && pytest tests/test_phase_a_regression.py tests/test_notifications.py tests/test_iteration8_ble.py tests/test_final_pre_deploy.py -v`. Settings mode is auto-reverted to 'mixte' by TestPrivacyMasked teardown. The 'duplicate key null' React warning has been present since iteration_8 and was NOT fixed in this cycle — confirm fix by checking browser console on /livre/dashboard and /livre/identification.",
+  "rca of the issue": "Not a bug — final pre-deploy validation. The pre-existing iteration_8 issue (React duplicate-key warning on IdentificationPage row data-testid) is still observable on multiple pages, indicating the fix may not have been applied or a similar pattern exists elsewhere. Recommended scan: `grep -rn 'key={' /app/frontend/src/pages /app/frontend/src/components/livre | grep -v '\\.id'`."
+}
