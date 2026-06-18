@@ -36,10 +36,13 @@ Settings (db.settings keys):
 """
 from __future__ import annotations
 
+import logging
 import statistics
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # A session is considered ongoing if a detection arrived in the last X minutes.
 SESSION_TIMEOUT = timedelta(minutes=5)
@@ -295,6 +298,21 @@ async def _maybe_flag_conflict(db, sess: dict, confidence_delta: int = 30) -> No
     except Exception:
         pass
 
+    # Push notification to involved drivers + admins
+    try:
+        from app.notifications_service import dispatch
+        vehicle = await db.vehicles.find_one({"id": sess["vehicle_id"]}, {"_id": 0}) or {}
+        driver_ids = [sess["driver_id"], *(r["driver_id"] for r in close)]
+        await dispatch("ble.conflict", {
+            "session_id": sess["id"],
+            "vehicle_id": sess["vehicle_id"],
+            "vehicle_plate": vehicle.get("plate"),
+            "vehicle_label": vehicle.get("model"),
+            "drivers": driver_ids,
+        }, driver_ids=driver_ids)
+    except Exception as e:
+        logger.warning("conflict push notification failed: %s", e)
+
 
 async def resolve_conflict(db, session_id: str, winner_driver_id: str,
                            actor: str, source: str = "page") -> dict:
@@ -350,6 +368,20 @@ async def resolve_conflict(db, session_id: str, winner_driver_id: str,
         })
     except Exception:
         pass
+
+    # Push notification to involved drivers
+    try:
+        from app.notifications_service import dispatch
+        vehicle = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0}) or {}
+        involved_drivers = list({s["driver_id"] for s in siblings})
+        await dispatch("ble.resolved", {
+            "vehicle_id": vehicle_id,
+            "vehicle_plate": vehicle.get("plate"),
+            "winner_driver_id": winner_driver_id,
+            "winner_session_id": winner_session["id"],
+        }, driver_ids=involved_drivers)
+    except Exception as e:
+        logger.warning("resolve push notification failed: %s", e)
     return {"winner_session_id": winner_session["id"], "closed_count": len(loser_ids),
             "final_status": final_status}
 

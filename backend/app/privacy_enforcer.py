@@ -290,8 +290,25 @@ async def kill_switch(db) -> dict:
             await _audit(db, v["id"], "kill_switch_error", {**payload, "error": str(e)})
             rows.append({"vehicle_id": v["id"], "result": "error", "error": str(e)})
             errors += 1
-    return {"targets": len(targets), "sent": sent, "errors": errors, "rows": rows,
-            "ran_at": datetime.now(timezone.utc).isoformat()}
+    summary = {"targets": len(targets), "sent": sent, "errors": errors, "rows": rows,
+               "ran_at": datetime.now(timezone.utc).isoformat()}
+    # Broadcast realtime + push notification
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish("kill_switch", {
+            "targets": summary["targets"], "sent": summary["sent"], "errors": summary["errors"],
+        })
+    except Exception:
+        pass
+    try:
+        from app.notifications_service import dispatch
+        await dispatch("kill_switch", {
+            "reason": "Le mode privé a été désactivé en urgence par l'administrateur.",
+            "targets": summary["targets"], "sent": summary["sent"],
+        }, role_filter=["admin", "manager"])
+    except Exception:
+        pass
+    return summary
 
 
 async def list_states(db) -> list[dict]:

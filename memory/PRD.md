@@ -198,10 +198,49 @@ affectation manuelle, droits par rôle.
 - AssignmentsDialog refresh timing (optimistic insert)
 
 ## Tests
-- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE) + 34/34 PASS (iteration 13 régression)
+- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE) + 34/34 PASS (iteration 13 régression) + 17/17 PASS (iteration 14 notifications) — **128/128 PASS** Phase A
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 14 — Expo Push Notifications + Notification Preferences
+- **`backend/app/expo_push.py`** (nouveau, 150 LOC) : client HTTP async vers `exp.host`,
+  batches de 100, parsing des tickets, nettoyage automatique des tokens morts
+  (`DeviceNotRegistered`, `InvalidCredentials`, `MismatchSenderId`), aucun API key requis.
+- **`backend/app/notifications_service.py`** (nouveau, 280 LOC) : dispatcher haut niveau avec
+  catalogue d'événements (11 types : 3 actifs `ble.conflict`/`ble.resolved`/`kill_switch` +
+  8 stubs business : `contract.renewal`, `insurance.expiring`, `vehicle.inspection_due`,
+  `tracker.low_battery`, `tracker.gps_lost`, `driver.unassigned`, `vehicle.incident`,
+  `logibus.delay`), résolution audience par `user_ids`/`driver_ids`/`role_filter`, lecture
+  des préférences utilisateur, log dans `db.notifications_log`.
+- **Templates FR** : « 🚨 Conflit d'identification chauffeur » + « ✅ Conflit résolu » +
+  « ⚠️ Tracking désactivé par l'administrateur ».
+- **`notification_preferences`** collection MongoDB : `{user_id, channels: {push, email, sms},
+  events: {<event>: {push, email, sms}}}`. Email + SMS stubbés (logs uniquement).
+- **Endpoints REST** :
+  - `GET /api/livre/notifications/catalog` (auth) — liste des événements + défauts
+  - `GET /api/livre/notifications/preferences` (auth) — prefs utilisateur courant
+  - `PUT /api/livre/notifications/preferences` (auth) — màj prefs (filtre événements inconnus)
+  - `POST /api/livre/notifications/test` (admin) — déclenche un event de test
+- **Hooks moteur** :
+  - `ble_engine._maybe_flag_conflict` → `dispatch('ble.conflict', …)`
+  - `ble_engine.resolve_conflict` → `dispatch('ble.resolved', …)`
+  - `privacy_enforcer.kill_switch` → WS broadcast `kill_switch` + `dispatch('kill_switch', …)`
+- **App Expo native — Actions interactives** :
+  - `src/utils/notificationActions.ts` (nouveau, 140 LOC) : enregistre la catégorie iOS
+    `BLE_CONFLICT` avec 2 boutons « Je conduisais » / « Ce n'était pas moi », handler qui
+    appelle `/driver/manual-mode` directement, file `pending_actions` AsyncStorage si offline
+    avec replay automatique au prochain login.
+  - `App.tsx` : enregistrement des catégories + handler attaché au démarrage + enregistrement
+    automatique du push token Expo dès le login + replay des actions en attente.
+- **Tests pytest** : `/app/backend/tests/test_notifications.py` (17 tests, 4 s, 100 % PASS) :
+  catalog, préférences GET/PUT, RBAC `/test` (admin only), templates BLE/kill_switch/business,
+  unit tests `expo_push` avec mocks (skip tokens invalides, cleanup tokens morts, gestion erreur HTTP),
+  intégration end-to-end vérifiant que les conflits écrivent dans `notifications_log`.
+- **Total Phase A** : 128/128 tests PASS sur les 5 suites (iteration 3/4/5/8/13/14).
+- **Compatibilité** : aucun changement de comportement existant. Le service email/SMS est
+  stubbé (logs) — quand un provider (Resend, Twilio) sera ajouté plus tard, seul
+  `notifications_service.dispatch` aura besoin d'être complété, sans toucher au reste.
+
 ### Iteration 13 — Auth refresh + Push token + Régression pytest
 - **`POST /api/auth/refresh`** ajouté dans `auth.py` : accepte refresh token via cookie OU body JSON,
   validation `type=refresh` + signature + expiration, rotation du refresh token, renvoie
