@@ -67,18 +67,45 @@ async def get_ble_settings(db) -> dict:
     return {k: s.get(k, v) for k, v in DEFAULT_SETTINGS.items()}
 
 
+def normalize_identifier(raw: str | None) -> str:
+    """Canonicalise a BLE identifier.
+
+    Accepts any of:
+        BC:57:29:1D:22:C5   (colon MAC)
+        BC-57-29-1D-22-C5   (dash MAC)
+        BC57291D22C5        (compact MAC)
+        bc 57 29 1d 22 c5   (lowercase, spaces)
+        KBPro_653127        (device name)
+    Returns:
+        BC57291D22C5        (compact, uppercase) for MACs
+        KBPRO_653127        (uppercase) for arbitrary names
+
+    The function strips ':', '-', ' ', '.', '/' and uppercases. Empty input
+    returns an empty string. The same normalisation is applied at WRITE time
+    (when an admin saves a tag) AND at READ time (when a detection comes in),
+    so any of the input formats matches.
+    """
+    if not raw:
+        return ""
+    return "".join(c for c in str(raw) if c not in ":-. /").upper()
+
+
 # ---------- Tag CRUD helpers ----------
 async def list_tags(db) -> list[dict]:
     return await db.ble_tags.find({"tenant_id": "default"}, {"_id": 0}).to_list(1000)
 
 
 async def upsert_tag(db, payload: dict) -> dict:
+    raw_id = payload["identifier"]
     tag = {
         "id": payload.get("id") or str(uuid.uuid4()),
         "tenant_id": "default",
         "vehicle_id": payload["vehicle_id"],
-        "identifier": payload["identifier"].strip(),
-        "label": payload.get("label") or payload["identifier"],
+        # Canonical form used for matching incoming detections.
+        "identifier": normalize_identifier(raw_id),
+        # Keep the original spelling for display (e.g. "BC:57:29:1D:22:C5").
+        "identifier_raw": raw_id.strip() if isinstance(raw_id, str) else str(raw_id),
+        "label": payload.get("label") or raw_id,
         "created_at": payload.get("created_at") or now_iso(),
         "updated_at": now_iso(),
     }
@@ -92,9 +119,22 @@ async def delete_tag(db, tag_id: str) -> bool:
 
 
 async def _resolve_tag(db, identifier: str) -> Optional[dict]:
-    return await db.ble_tags.find_one(
-        {"tenant_id": "default", "identifier": identifier.strip()}, {"_id": 0},
+    canon = normalize_identifier(identifier)
+    if not canon:
+        return None
+    # Try the canonical column first, fall back to the legacy `identifier` field
+    # for tags created before normalisation was introduced.
+    tag = await db.ble_tags.find_one(
+        {"tenant_id": "default", "identifier": canon}, {"_id": 0},
     )
+    if tag:
+        return tag
+    # Legacy fallback: scan and normalise on the fly (small collection, <1000 rows).
+    cursor = db.ble_tags.find({"tenant_id": "default"}, {"_id": 0})
+    async for row in cursor:
+        if normalize_identifier(row.get("identifier") or "") == canon:
+            return row
+    return None
 
 
 # ---------- Detection ingestion ----------

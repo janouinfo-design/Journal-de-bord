@@ -202,6 +202,28 @@ affectation manuelle, droits par rôle.
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 19 — Normalisation + Debug BLE
+- **Backend `ble_engine.normalize_identifier()`** (nouveau) : canonicalise tout identifiant BLE
+  en strippant `:` `-` ` ` `.` `/` et en upper-casing. `BC:57:29:1D:22:C5`, `bc-57-29-1d-22-c5`,
+  `bc57291d22c5` → tous matchent `BC57291D22C5`. Validé : 3 formats curl → même canon.
+- **`upsert_tag()`** stocke désormais `identifier` (canon) + `identifier_raw` (saisie d'origine).
+- **`_resolve_tag()`** : matching canonique avec fallback legacy (scan + normalisation à la volée
+  pour les tags créés avant normalisation).
+- **Endpoint `GET /api/livre/ble/debug/recent-detections`** (admin only) : 100 dernières détections
+  enrichies de `identifier_raw`, `identifier_canon`, `driver_name`, RSSI, platform, manufacturer_data,
+  service_uuids, matched_tag_id, battery.
+- **`frontend/src/components/livre/BleDebugDialog.jsx`** (nouveau, 165 LOC) :
+  modal live avec polling 3 s, table scrollable (max-h 420 px, min-w 900 px, sticky headers),
+  bouton « Copier » l'identifiant canonique, bouton Pause/Reprise, surlignage des détections
+  non associées en jaune.
+- **`BleTagsManager`** : hint sous le champ identifiant listant les 3 formats acceptés
+  (`BC:57:29:1D:22:C5`, `BC-57-29-1D-22-C5`, `BC57291D22C5`, ou nom comme `KBPro_653127`).
+- **`IdentificationPage`** : 2nd bouton header **Debug BLE** (orange, icône Bug) à côté de
+  « Gérer les tags BLE ».
+- **Smoke test live** : 3 formats → canon `BC57291D22C5` identique ✅. Endpoint debug retourne
+  100 lignes enrichies ✅. Modal Debug s'ouvre, table peuplée, bouton Copier fonctionnel.
+- **Tests régression** : 83/83 PASS (test_phase_a_regression + test_iteration8_ble + test_notifications).
+
 ### Iteration 18 — UI Gestion des tags BLE
 - **`frontend/src/components/livre/BleTagsManager.jsx`** (nouveau, 175 LOC) :
   - Dialog modale avec formulaire d'ajout (identifiant + sélecteur véhicule) + tableau des tags existants

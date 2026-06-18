@@ -108,10 +108,16 @@ export default function BleTagsManager({ open, onOpenChange, vehicles = [] }) {
             <Input
               value={form.identifier}
               onChange={(e) => setForm({ ...form, identifier: e.target.value })}
-              placeholder="ex. BUS35 ou LOGI-A4B7"
+              placeholder="ex. BC:57:29:1D:22:C5 ou BUS35"
               data-testid="ble-tags-identifier"
               autoFocus
             />
+            <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+              Formats acceptés : <span className="font-mono text-slate-600">BC:57:29:1D:22:C5</span>,{" "}
+              <span className="font-mono text-slate-600">BC-57-29-1D-22-C5</span>,{" "}
+              <span className="font-mono text-slate-600">BC57291D22C5</span> ou un nom (<span className="font-mono text-slate-600">KBPro_653127</span>).
+              Normalisation automatique.
+            </p>
           </div>
           <div>
             <label className="text-[10px] uppercase tracking-wider text-slate-500 block mb-1">

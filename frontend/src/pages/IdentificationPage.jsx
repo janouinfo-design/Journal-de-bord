@@ -14,10 +14,11 @@ import {
 import { toast } from "sonner";
 import {
   Bluetooth, Loader2, RefreshCw, Filter, CheckCircle2, XCircle,
-  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag,
+  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag, Bug,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/useRealtime";
 import BleTagsManager from "@/components/livre/BleTagsManager";
+import BleDebugDialog from "@/components/livre/BleDebugDialog";
 
 const STATUS_BADGE = {
   open:       { color: "bg-blue-50 text-blue-700 border-blue-200",         label: "Ouverte" },
@@ -60,6 +61,7 @@ export default function IdentificationPage() {
   const [editForm, setEditForm] = useState({ driver_id: "", vehicle_id: "", status: "" });
   const [resolving, setResolving] = useState(null);    // session_id in conflict
   const [tagsManagerOpen, setTagsManagerOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [resolveChoice, setResolveChoice] = useState("");
 
   async function loadAll() {
@@ -173,6 +175,15 @@ export default function IdentificationPage() {
             data-testid="ident-open-tags-manager"
           >
             <Tag className="w-3.5 h-3.5 mr-1.5" /> Gérer les tags BLE
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDebugOpen(true)}
+            className="h-8 text-amber-600 border-amber-300 hover:bg-amber-50"
+            data-testid="ident-open-debug"
+          >
+            <Bug className="w-3.5 h-3.5 mr-1.5" /> Debug BLE
           </Button>
         </h1>
         <p className="text-xs text-slate-500 mt-1">
@@ -453,6 +464,9 @@ export default function IdentificationPage() {
         onOpenChange={setTagsManagerOpen}
         vehicles={vehicles}
       />
+
+      {/* BLE Debug live panel */}
+      <BleDebugDialog open={debugOpen} onOpenChange={setDebugOpen} />
     </div>
   );
 }

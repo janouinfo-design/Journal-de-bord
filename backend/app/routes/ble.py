@@ -123,6 +123,42 @@ async def ble_settings_get(user=Depends(require_roles("admin", "manager"))):
     return await ble_engine.get_ble_settings(get_db())
 
 
+# ---------- Debug ----------
+@router.get("/ble/debug/recent-detections")
+async def ble_debug_recent(limit: int = 100,
+                           user=Depends(require_roles("admin"))):
+    """Recent raw BLE detections — for live debugging of beacon discovery.
+
+    Returns the last `limit` detections ingested via the PWA / native app,
+    enriched with the resolved driver name and the canonical identifier.
+    """
+    db = get_db()
+    rows = await db.ble_detections.find(
+        {"tenant_id": "default"}, {"_id": 0},
+    ).sort("ts", -1).limit(min(limit, 500)).to_list(min(limit, 500))
+
+    # Enrich with driver name + normalised identifier for clarity
+    out = []
+    for r in rows:
+        driver = await db.drivers.find_one(
+            {"id": r.get("driver_id")}, {"_id": 0, "name": 1, "email": 1},
+        ) or {}
+        out.append({
+            "ts": r.get("ts"),
+            "driver_id": r.get("driver_id"),
+            "driver_name": driver.get("name") or driver.get("email") or "—",
+            "identifier_raw": r.get("identifier"),
+            "identifier_canon": ble_engine.normalize_identifier(r.get("identifier") or ""),
+            "rssi": r.get("rssi"),
+            "platform": r.get("platform"),
+            "battery": r.get("battery"),
+            "manufacturer_data": r.get("manufacturer_data"),
+            "service_uuids": r.get("service_uuids"),
+            "matched_tag_id": r.get("tag_id"),
+        })
+    return out
+
+
 @router.put("/ble/settings")
 async def ble_settings_put(payload: dict, user=Depends(require_roles("admin"))):
     db = get_db()
