@@ -104,3 +104,6 @@ frontend/node_modules/.cache/default-development/2.pack
 credentials.json
 *.key
 .credentials
+.env
+.env.*
+*.env
