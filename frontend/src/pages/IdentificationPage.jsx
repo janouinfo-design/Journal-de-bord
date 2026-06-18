@@ -14,9 +14,10 @@ import {
 import { toast } from "sonner";
 import {
   Bluetooth, Loader2, RefreshCw, Filter, CheckCircle2, XCircle,
-  Edit3, AlertTriangle, Smartphone, History, Radio, Users,
+  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/useRealtime";
+import BleTagsManager from "@/components/livre/BleTagsManager";
 
 const STATUS_BADGE = {
   open:       { color: "bg-blue-50 text-blue-700 border-blue-200",         label: "Ouverte" },
@@ -58,6 +59,7 @@ export default function IdentificationPage() {
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ driver_id: "", vehicle_id: "", status: "" });
   const [resolving, setResolving] = useState(null);    // session_id in conflict
+  const [tagsManagerOpen, setTagsManagerOpen] = useState(false);
   const [resolveChoice, setResolveChoice] = useState("");
 
   async function loadAll() {
@@ -163,6 +165,15 @@ export default function IdentificationPage() {
             <Radio className={`w-3 h-3 ${connected ? "animate-pulse" : ""}`} />
             {connected ? "Live" : "Hors-ligne"}
           </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setTagsManagerOpen(true)}
+            className="ml-auto h-8 text-[#2196F3] border-[#2196F3]/30 hover:bg-[#2196F3]/5"
+            data-testid="ident-open-tags-manager"
+          >
+            <Tag className="w-3.5 h-3.5 mr-1.5" /> Gérer les tags BLE
+          </Button>
         </h1>
         <p className="text-xs text-slate-500 mt-1">
           Détection automatique de l&apos;association chauffeur ↔ véhicule grâce aux tags Bluetooth installés à bord.
@@ -435,6 +446,13 @@ export default function IdentificationPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* BLE Tags manager */}
+      <BleTagsManager
+        open={tagsManagerOpen}
+        onOpenChange={setTagsManagerOpen}
+        vehicles={vehicles}
+      />
     </div>
   );
 }

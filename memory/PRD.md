@@ -202,6 +202,18 @@ affectation manuelle, droits par rôle.
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 18 — UI Gestion des tags BLE
+- **`frontend/src/components/livre/BleTagsManager.jsx`** (nouveau, 175 LOC) :
+  - Dialog modale avec formulaire d'ajout (identifiant + sélecteur véhicule) + tableau des tags existants
+  - GET `/livre/ble/tags`, POST `/livre/ble/tags`, DELETE `/livre/ble/tags/{id}` (endpoints déjà en place)
+  - Vide-état, loading, toasts success/error, confirmation de suppression
+  - data-testids : `ble-tags-dialog`, `ble-tags-identifier`, `ble-tags-vehicle`, `ble-tags-add`, `ble-tags-table`, `ble-tags-row-<id>`, `ble-tags-delete-<id>`, `ble-tags-close`
+- **`frontend/src/pages/IdentificationPage.jsx`** : bouton « Gérer les tags BLE » ajouté dans le header (admin only via la page elle-même), ouvre la modal.
+- **Smoke test** : modal s'ouvre, tags existants listés (BUS35, CONFLICTAG, TEST_*), bouton suppression visible
+- **Backend** : aucun changement (les endpoints existaient déjà depuis Phase A)
+- **Tests régression** : 66/66 PASS (test_phase_a_regression + test_iteration8_ble)
+- **Compatibilité** : aucun impact sur PWA `/driver`, app native Expo, ou flux existants
+
 ### Iteration 17 — Code Quality Cleanup post-review
 - **Tests pytest** : remplacement de `assert x is True/False` → `assert x` / `assert not (x)` dans
   `test_phase_a_regression.py`, `test_notifications.py`, `test_iteration8_ble.py` (16 assertions).
