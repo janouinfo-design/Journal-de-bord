@@ -198,11 +198,34 @@ affectation manuelle, droits par rôle.
 - AssignmentsDialog refresh timing (optimistic insert)
 
 ## Tests
-- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE)
+- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE) + 34/34 PASS (iteration 13 régression)
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
-## Implemented — 19/02/2026
-### Iteration 9 — Phase B Native scaffold (app Expo mobile chauffeur)
+## Implemented — 19/02/2026 (suite)
+### Iteration 13 — Auth refresh + Push token + Régression pytest
+- **`POST /api/auth/refresh`** ajouté dans `auth.py` : accepte refresh token via cookie OU body JSON,
+  validation `type=refresh` + signature + expiration, rotation du refresh token, renvoie
+  `{access_token, refresh_token, user}`. Erreurs HTTP 401 propres (token manquant / invalide / expiré).
+- **`POST /login`** : ajoute `refresh_token` au body de réponse (utilisé par l'app native Expo).
+- **`POST /api/auth/logout`** : désactive aussi les push tokens du user (best-effort).
+- **`POST /api/livre/driver/push-token`** : enregistre/met à jour un push token Expo,
+  idempotent par token, lié à `(user_id, driver_id, tenant_id)`, ré-activation auto si déjà présent.
+- **`DELETE /api/livre/driver/push-token?token=...`** : désactivation soft (active=false).
+- **Tests pytest régression Phase A** : `/app/backend/tests/test_phase_a_regression.py` (34 tests,
+  10,8 s, 100 % PASS) couvrant :
+  - 8 tests `TestAuthRefresh` (login, body, cookie, rotation, invalide, expiré, mauvais type, access post-refresh)
+  - 7 tests `TestPushToken` (register, idempotence, invalide, RBAC, delete, 404, admin)
+  - 6 tests `TestBleConflict` (simulate, flag conflict, RBAC manager/driver refus, résolution admin, 400)
+  - 3 tests `TestRealtimeWebSocket` (refus non-auth, événements `conflict_detected` + `conflict_resolved`)
+  - 10 tests `TestNonRegression` (auth/me, dashboard, trips, drivers, vehicles, BLE sessions+dashboard, current-session, manual-mode, logout)
+- **conftest.py** créé : charge `/app/backend/.env` + `/app/frontend/.env`, ajoute backend dans `sys.path`.
+- **Résumé** : 66/66 tests Phase A PASS (34 régression + 32 itération 8). 3 échecs résiduels
+  sur tests legacy `test_livre_de_bord.py` et `test_iteration6` — **pré-existants** (modes A/B/C obsolètes
+  vs valeur courante "mixte"), aucune régression introduite.
+- **Compatibilité** : PWA web `/driver` 100 % conservée (cookie session), app native Expo
+  utilise désormais access+refresh via Authorization header.
+
+### Iteration 12 — Phase B Native scaffold (app Expo mobile chauffeur)
 - App Expo SDK 51 + TypeScript scaffoldée dans `/app/logitrak-driver-app/` (24 fichiers source, 1 844 LOC)
 - Stack : React Navigation 6, Zustand, axios + JWT refresh, expo-secure-store, expo-notifications,
   expo-background-fetch, expo-task-manager, `react-native-ble-plx` 3.x, `@react-native-community/netinfo`

@@ -140,7 +140,7 @@ async def login(payload: LoginIn, response: Response):
     _set_auth_cookies(response, access, refresh)
     user.pop("_id", None)
     user.pop("password_hash", None)
-    return {"user": user, "access_token": access}
+    return {"user": user, "access_token": access, "refresh_token": refresh}
 
 
 @router.post("/register")
@@ -166,10 +166,72 @@ async def register(payload: RegisterIn, response: Response, current=Depends(requ
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(response: Response, request: Request):
+    """Logout: clear cookies and best-effort revoke the current push token."""
+    # Best-effort: deactivate any push token bound to this access token's user
+    from app.db import get_db
+    try:
+        token = request.cookies.get("access_token") or ""
+        if not token:
+            ah = request.headers.get("Authorization", "")
+            if ah.startswith("Bearer "):
+                token = ah[7:]
+        if token:
+            payload = jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM],
+                                 options={"verify_exp": False})
+            uid = payload.get("sub")
+            if uid:
+                db = get_db()
+                await db.push_tokens.update_many(
+                    {"user_id": uid},
+                    {"$set": {"active": False,
+                              "deactivated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+    except Exception:
+        pass
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
     return {"ok": True}
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str | None = None
+
+
+@router.post("/refresh")
+async def refresh(payload: RefreshIn, request: Request, response: Response):
+    """Issue a new access token (and rotate the refresh token).
+
+    Accepts the refresh token from either:
+    - cookie `refresh_token` (web PWA)
+    - JSON body `{refresh_token}` (native Expo app)
+
+    Returns JSON `{access_token, refresh_token, user}` and refreshes cookies.
+    """
+    from app.db import get_db
+    db = get_db()
+
+    token = (payload.refresh_token if payload else None) or request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Refresh token manquant")
+    try:
+        decoded = jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expiré")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Refresh token invalide")
+
+    if decoded.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Type de token invalide")
+
+    user = await db.users.find_one({"id": decoded["sub"]}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+
+    new_access = create_access_token(user["id"], user["email"], user["role"])
+    new_refresh = create_refresh_token(user["id"])
+    _set_auth_cookies(response, new_access, new_refresh)
+    return {"user": user, "access_token": new_access, "refresh_token": new_refresh}
 
 
 @router.get("/me")
