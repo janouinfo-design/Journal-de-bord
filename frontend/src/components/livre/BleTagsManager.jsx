@@ -144,14 +144,15 @@ export default function BleTagsManager({ open, onOpenChange, vehicles = [] }) {
           </Button>
         </form>
 
-        {/* List */}
-        <div className="mt-2 border border-slate-200 rounded-md overflow-hidden">
-          <table className="w-full text-sm" data-testid="ble-tags-table">
-            <thead className="bg-slate-50">
+        {/* List — limité à ~5 lignes visibles avec scroll vertical + horizontal */}
+        <div className="mt-2 border border-slate-200 rounded-md overflow-auto max-h-[260px]"
+             data-testid="ble-tags-scroll-container">
+          <table className="w-full text-sm min-w-[480px]" data-testid="ble-tags-table">
+            <thead className="bg-slate-50 sticky top-0 z-10">
               <tr className="text-[10px] uppercase tracking-wider text-slate-500">
-                <th className="text-left px-3 py-2 font-medium">Identifiant</th>
-                <th className="text-left px-3 py-2 font-medium">Véhicule</th>
-                <th className="text-right px-3 py-2 font-medium w-24">Actions</th>
+                <th className="text-left px-3 py-2 font-medium whitespace-nowrap">Identifiant</th>
+                <th className="text-left px-3 py-2 font-medium whitespace-nowrap">Véhicule</th>
+                <th className="text-right px-3 py-2 font-medium w-24 whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -170,8 +171,8 @@ export default function BleTagsManager({ open, onOpenChange, vehicles = [] }) {
                 <tr key={t.id}
                     data-testid={`ble-tags-row-${t.identifier}`}
                     className="border-t border-slate-100 hover:bg-slate-50/50">
-                  <td className="px-3 py-2 font-mono text-slate-800">{t.identifier}</td>
-                  <td className="px-3 py-2 text-slate-700">{plateOf(t.vehicle_id)}</td>
+                  <td className="px-3 py-2 font-mono text-slate-800 whitespace-nowrap">{t.identifier}</td>
+                  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{plateOf(t.vehicle_id)}</td>
                   <td className="px-3 py-2 text-right">
                     <Button
                       variant="ghost" size="sm"
@@ -187,6 +188,11 @@ export default function BleTagsManager({ open, onOpenChange, vehicles = [] }) {
             </tbody>
           </table>
         </div>
+        {!loading && tags.length > 0 && (
+          <p className="text-[10px] text-slate-400 mt-1 text-right">
+            {tags.length} tag{tags.length > 1 ? "s" : ""} — défilez pour voir le reste
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="ble-tags-close">
