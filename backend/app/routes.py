@@ -584,16 +584,18 @@ async def ble_session_resolve(session_id: str, payload: dict,
                               user=Depends(require_roles("admin"))):
     """Admin manually resolves a multi-driver BLE conflict.
 
-    Body: `{winner_driver_id: <driver-id>}`. The winning session keeps
-    `status='confirmed'` (or 'pending' if confidence < threshold);
-    all other involved sessions are closed.
+    Body: `{winner_driver_id: <driver-id>, source?: 'page'|'header_inbox'}`.
+    The winning session keeps `status='confirmed'` (or 'pending' if
+    confidence < threshold); other involved sessions are closed.
     """
     winner = (payload or {}).get("winner_driver_id")
+    source = (payload or {}).get("source") or "page"
     if not winner:
         raise HTTPException(400, "winner_driver_id requis")
     try:
         return await ble_engine.resolve_conflict(
-            get_db(), session_id, winner, actor=user.get("email", "?"),
+            get_db(), session_id, winner,
+            actor=user.get("email", "?"), source=source,
         )
     except LookupError as e:
         raise HTTPException(404, str(e))

@@ -296,7 +296,8 @@ async def _maybe_flag_conflict(db, sess: dict, confidence_delta: int = 30) -> No
         pass
 
 
-async def resolve_conflict(db, session_id: str, winner_driver_id: str, actor: str) -> dict:
+async def resolve_conflict(db, session_id: str, winner_driver_id: str,
+                           actor: str, source: str = "page") -> dict:
     """Admin chooses which driver was really driving. The winning session
     keeps its status (automatic if confidence high enough, else pending);
     the losing ones are closed.
@@ -337,7 +338,8 @@ async def resolve_conflict(db, session_id: str, winner_driver_id: str, actor: st
         )
     await db.audit_log.insert_one({
         "ts": now_iso(), "scope": "driver_identification", "action": "conflict_resolved",
-        "actor": actor, "vehicle_id": vehicle_id, "winner_driver_id": winner_driver_id,
+        "actor": actor, "source": source, "vehicle_id": vehicle_id,
+        "winner_driver_id": winner_driver_id,
         "winner_session_id": winner_session["id"], "loser_session_ids": loser_ids,
     })
     try:

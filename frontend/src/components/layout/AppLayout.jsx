@@ -5,6 +5,7 @@ import {
   LayoutDashboard, Briefcase, User, FileText, Settings,
   LogOut, Bell, Map, Receipt, Building2, ChevronRight, Bluetooth, Smartphone,
 } from "lucide-react";
+import ConflictInbox from "@/components/livre/ConflictInbox";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -132,10 +133,7 @@ export default function AppLayout() {
             <span className="text-slate-900 font-medium">Livre de bord</span>
           </div>
           <div className="flex items-center gap-3">
-            <button className="w-9 h-9 rounded-md hover:bg-slate-100 flex items-center justify-center text-slate-500 relative">
-              <Bell className="w-[18px] h-[18px]" />
-              <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-[#E53935]" />
-            </button>
+            {(user?.role === "admin" || user?.role === "manager") && <ConflictInbox />}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button data-testid={TEST_IDS.layout.userMenu} className="flex items-center gap-2.5 hover:bg-slate-50 rounded-md pl-2 pr-3 py-1.5 transition-colors">
