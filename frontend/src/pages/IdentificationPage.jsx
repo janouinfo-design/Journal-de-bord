@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 import {
   Bluetooth, Loader2, RefreshCw, Filter, CheckCircle2, XCircle,
-  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag, Bug,
+  Edit3, AlertTriangle, Smartphone, History, Radio, Users, Tag, Bug, Trash2,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/useRealtime";
 import BleTagsManager from "@/components/livre/BleTagsManager";
@@ -147,12 +147,27 @@ export default function IdentificationPage() {
   }
 
   async function cancel(r) {
+    if (!window.confirm(`Annuler la session de ${r.driver_name || r.driver_id} ?`)) return;
     try {
       await api.put(`/livre/ble/sessions/${r.id}`, { status: "cancelled" });
       toast.success("Session annulée");
       loadAll();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Échec");
+    }
+  }
+
+  async function deleteSession(r) {
+    if (!window.confirm(
+      `Supprimer définitivement la session de ${r.driver_name || r.driver_id} ?\n\n` +
+      `Action IRRÉVERSIBLE — la ligne disparaîtra de l'historique BLE.`
+    )) return;
+    try {
+      await api.delete(`/livre/ble/sessions/${r.id}`);
+      toast.success("Session supprimée");
+      loadAll();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Suppression refusée");
     }
   }
 
@@ -338,10 +353,16 @@ export default function IdentificationPage() {
                         </Button>
                         {r.status !== "cancelled" && r.status !== "closed" && (
                           <Button size="sm" variant="ghost" className="h-7 text-rose-500"
-                            onClick={() => cancel(r)} data-testid={`ident-cancel-${r.id}`}>
+                            onClick={() => cancel(r)} data-testid={`ident-cancel-${r.id}`}
+                            title="Annuler la session">
                             <XCircle className="w-3.5 h-3.5" />
                           </Button>
                         )}
+                        <Button size="sm" variant="ghost" className="h-7 text-rose-700 hover:bg-rose-50"
+                          onClick={() => deleteSession(r)} data-testid={`ident-delete-${r.id}`}
+                          title="Supprimer définitivement (admin)">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
                     </td>
                   </tr>

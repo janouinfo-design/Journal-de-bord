@@ -89,6 +89,24 @@ async def ble_session_amend(session_id: str, patch: dict,
         raise HTTPException(404, str(e))
 
 
+@router.delete("/ble/sessions/{session_id}")
+async def ble_session_delete(session_id: str,
+                             user=Depends(require_roles("admin"))):
+    """Hard-delete a session (admin only). Use when an obviously bogus or
+    duplicate session must disappear from the historical view."""
+    db = get_db()
+    res = await db.driver_sessions.delete_one(
+        {"id": session_id, "tenant_id": "default"},
+    )
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Session introuvable")
+    await db.audit_log.insert_one({
+        "ts": ble_engine.now_iso(), "scope": "ble", "action": "delete_session",
+        "actor": user.get("email"), "session_id": session_id,
+    })
+    return {"deleted": True}
+
+
 @router.post("/ble/sessions/{session_id}/resolve")
 async def ble_session_resolve(session_id: str, payload: dict,
                               user=Depends(require_roles("admin"))):

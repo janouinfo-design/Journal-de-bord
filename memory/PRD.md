@@ -202,6 +202,16 @@ affectation manuelle, droits par rôle.
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 20 — Suppression définitive de session BLE
+- **Backend** : nouveau `DELETE /api/livre/ble/sessions/{id}` (admin only) — hard delete
+  avec log dans `audit_log` (`scope=ble`, `action=delete_session`, acteur, session_id).
+- **Frontend** : 4e bouton « Corbeille » 🗑️ dans la colonne Actions de chaque ligne sessions.
+  Distinction visuelle : annuler (`text-rose-500`, XCircle) vs supprimer (`text-rose-700`, Trash2).
+  Confirmation modale double : « Action IRRÉVERSIBLE — la ligne disparaîtra de l'historique BLE ».
+- **RBAC** : backend renvoie 403 « Accès refusé » au manager ; le toast s'affiche côté UI.
+- **Smoke test curl** : admin DELETE → 200 + `deleted:true`. Manager DELETE → 403.
+- **Tests régression** : 66/66 PASS (Phase A inchangée).
+
 ### Iteration 19 — Normalisation + Debug BLE
 - **Backend `ble_engine.normalize_identifier()`** (nouveau) : canonicalise tout identifiant BLE
   en strippant `:` `-` ` ` `.` `/` et en upper-casing. `BC:57:29:1D:22:C5`, `bc-57-29-1d-22-c5`,
