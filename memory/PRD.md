@@ -198,10 +198,36 @@ affectation manuelle, droits par rôle.
 - AssignmentsDialog refresh timing (optimistic insert)
 
 ## Tests
-- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE) + 34/34 PASS (iteration 13 régression) + 17/17 PASS (iteration 14 notifications) — **128/128 PASS** Phase A
+- Backend pytest : 19/19 PASS (iteration 3) + 32/32 PASS (iteration 8 BLE) + 34/34 PASS (iteration 13 régression) + 17/17 PASS (iteration 14 notifications) — **168/170 PASS** au total (2 échecs legacy pré-existants modes A/B/C dans `test_livre_de_bord.py`, non liés au refactoring)
 - Frontend e2e : tous les flows validés via testing_agent_v3
 
 ## Implemented — 19/02/2026 (suite)
+### Iteration 15 — Refactoring `routes.py` monolithique → package `routes/`
+- **Suppression** de `app/routes.py` (1162 lignes monolithique) → remplacé par le package `app/routes/`.
+- **Nouveau package `app/routes/`** (11 fichiers, 1368 LOC total réparties) :
+  - `__init__.py` — agrégateur, expose `livre_router` (prefix `/livre`) + `auth_router` (prefix `/auth`)
+  - `_helpers.py` (170 LOC) — helpers partagés : `parse_iso`, `get_settings_doc`, `apply_privacy`,
+    `filter_trips_query`, `resolve_driver_id_for_user`, `fallback_points`, `normalize_schedule`, `filename`
+  - `auth.py` (12 LOC) — shim re-exportant `app.auth.router` (utilitaires gardés co-localisés)
+  - `ble.py` (138 LOC) — `/ble/tags` CRUD, `/ble/detections`, `/ble/simulate`, `/ble/sessions` + `/resolve`, `/ble/dashboard`, `/ble/settings`
+  - `realtime.py` (41 LOC) — WebSocket `/realtime`
+  - `identification.py` (110 LOC) — `/driver/current-session`, `/driver/manual-mode`, `/driver/push-token` POST+DELETE
+  - `reports.py` (131 LOC) — `/reports/export` (PDF/Excel/CSV) + `/reports/tax-swiss`
+  - `settings.py` (171 LOC) — `/settings`, `/schedule/*`, `/privacy/*` (5 endpoints)
+  - `dashboard.py` (116 LOC) — `/dashboard` agrégé
+  - `notifications.py` (50 LOC) — `/notifications/{catalog,preferences,test}`
+  - `misc.py` (389 LOC) — `/bootstrap`, `/navixy/*`, `/assignments`, `/drivers`, `/vehicles*`, `/geofences`,
+    `/groups`, `/companies`, `/trips*`, `/audit-log`
+- **server.py** : import mis à jour `from app.routes import auth_router, livre_router`. Aucune autre modification.
+- **Résultat — zéro breaking change** :
+  - Tous les chemins publics inchangés (`/api/auth/*`, `/api/livre/*`)
+  - RBAC + multi-tenant intacts (mêmes dépendances `Depends(require_roles(…))`)
+  - PWA `/driver` + app native Expo continuent à fonctionner sans modification
+  - Tous les tests Phase A passent : **168/170** (2 échecs legacy pré-existants confirmés via `git stash`)
+  - 20 endpoints clés smoke-testés à 200 OK (curl)
+- **Logique métier non modifiée** : aucun changement de comportement, uniquement réorganisation.
+- **Lint** : 0 erreur ruff sur le nouveau package.
+
 ### Iteration 14 — Expo Push Notifications + Notification Preferences
 - **`backend/app/expo_push.py`** (nouveau, 150 LOC) : client HTTP async vers `exp.host`,
   batches de 100, parsing des tickets, nettoyage automatique des tokens morts

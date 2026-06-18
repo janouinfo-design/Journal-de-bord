@@ -11,8 +11,8 @@ from fastapi import FastAPI, APIRouter
 from starlette.middleware.cors import CORSMiddleware
 
 from app.db import init_db, close_db, get_db
-from app.auth import router as auth_router, seed_admin
-from app.routes import router as livre_router
+from app.auth import seed_admin
+from app.routes import auth_router, livre_router
 from app.mock_navixy import seed_mock_data
 from app.rules import apply_rules_to_all
 from app.scheduler import init_scheduler, shutdown_scheduler
