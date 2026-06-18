@@ -78,6 +78,31 @@ async def get_current_user(request: Request):
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
+async def get_user_from_request(req) -> dict | None:
+    """Cookie-based auth helper that also works for FastAPI `WebSocket`
+    (which exposes `.cookies` and `.headers` like Request). Returns the
+    user dict (without password_hash) or None if unauthenticated."""
+    from app.db import get_db
+    db = get_db()
+    token = req.cookies.get("access_token")
+    if not token:
+        auth_header = req.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "access":
+            return None
+        return await db.users.find_one(
+            {"id": payload["sub"]}, {"_id": 0, "password_hash": 0},
+        )
+    except Exception:
+        return None
+
+
+
 def require_roles(*roles):
     async def _dep(user=Depends(get_current_user)):
         if user.get("role") not in roles:

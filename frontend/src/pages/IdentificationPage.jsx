@@ -14,8 +14,9 @@ import {
 import { toast } from "sonner";
 import {
   Bluetooth, Loader2, RefreshCw, Filter, CheckCircle2, XCircle,
-  Edit3, AlertTriangle, Smartphone, History,
+  Edit3, AlertTriangle, Smartphone, History, Radio, Users,
 } from "lucide-react";
+import { useRealtime } from "@/hooks/useRealtime";
 
 const STATUS_BADGE = {
   open:       { color: "bg-blue-50 text-blue-700 border-blue-200",         label: "Ouverte" },
@@ -56,6 +57,8 @@ export default function IdentificationPage() {
   const [filters, setFilters] = useState({ status: "all", start: "", end: "" });
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ driver_id: "", vehicle_id: "", status: "" });
+  const [resolving, setResolving] = useState(null);    // session_id in conflict
+  const [resolveChoice, setResolveChoice] = useState("");
 
   async function loadAll() {
     setLoading(true);
@@ -74,6 +77,44 @@ export default function IdentificationPage() {
     } finally { setLoading(false); }
   }
   useEffect(() => { loadAll(); /* eslint-disable-next-line */ }, [filters.status, filters.start, filters.end]);
+
+  // Realtime channel — push toasts and trigger silent refresh
+  const { connected } = useRealtime((evt) => {
+    if (evt.type === "conflict_detected") {
+      const drivers = evt.data?.drivers || [];
+      toast.warning(`Conflit BLE détecté · ${drivers.length} chauffeurs sur le même véhicule`,
+        { description: "Cliquez pour résoudre depuis la page Identification." });
+      loadAll();
+    } else if (evt.type === "conflict_resolved") {
+      toast.success("Conflit résolu");
+      loadAll();
+    } else if (evt.type === "session_opened" || evt.type === "session_updated") {
+      // Silent refresh for new sessions (avoid spamming toasts)
+      loadAll();
+    }
+  });
+
+  // Find rival sessions for a given conflict session (same vehicle, status=conflict)
+  function rivalsOf(r) {
+    return rows.filter(x =>
+      x.vehicle_id === r.vehicle_id &&
+      x.status === "conflict" &&
+      x.id !== r.id
+    );
+  }
+
+  async function resolveConflict() {
+    if (!resolving || !resolveChoice) return;
+    try {
+      const { data } = await api.post(`/livre/ble/sessions/${resolving.id}/resolve`,
+        { winner_driver_id: resolveChoice });
+      toast.success(`Conflit résolu — ${data.closed_count} session(s) clôturée(s)`);
+      setResolving(null); setResolveChoice("");
+      loadAll();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
+    }
+  }
 
   function openEdit(r) {
     setEditing(r);
@@ -117,6 +158,11 @@ export default function IdentificationPage() {
         <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Identification BLE</p>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 flex items-center gap-2.5 mt-1">
           <Bluetooth className="w-5 h-5 text-[#2196F3]" /> Identification chauffeurs
+          <span className={`ml-2 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${connected ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-500 border border-slate-200"}`}
+                data-testid="ident-realtime-status">
+            <Radio className={`w-3 h-3 ${connected ? "animate-pulse" : ""}`} />
+            {connected ? "Live" : "Hors-ligne"}
+          </span>
         </h1>
         <p className="text-xs text-slate-500 mt-1">
           Détection automatique de l&apos;association chauffeur ↔ véhicule grâce aux tags Bluetooth installés à bord.
@@ -251,6 +297,13 @@ export default function IdentificationPage() {
                     <td className="py-3 px-4 text-xs text-slate-600 font-mono">{r.detection_count ?? 0}</td>
                     <td className="py-3 px-4 text-right">
                       <div className="inline-flex gap-1">
+                        {r.status === "conflict" && (
+                          <Button size="sm" variant="outline" className="h-7 text-rose-600 border-rose-200 hover:bg-rose-50"
+                            onClick={() => { setResolving(r); setResolveChoice(r.driver_id); }}
+                            data-testid={`ident-resolve-${r.id}`}>
+                            <Users className="w-3.5 h-3.5 mr-1" /> Résoudre
+                          </Button>
+                        )}
                         {r.status === "pending" && (
                           <Button size="sm" variant="ghost" className="h-7 text-emerald-600"
                             onClick={() => validate(r)} data-testid={`ident-validate-${r.id}`}>
@@ -325,6 +378,59 @@ export default function IdentificationPage() {
             <Button variant="outline" onClick={() => setEditing(null)}>Annuler</Button>
             <Button onClick={saveEdit} className="bg-[#2196F3] hover:bg-[#1E88E5]" data-testid="ident-edit-save">
               Enregistrer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Conflict resolution modal */}
+      <Dialog open={!!resolving} onOpenChange={(o) => !o && setResolving(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold flex items-center gap-2 text-rose-700">
+              <Users className="w-4 h-4" /> Conflit BLE — Qui conduisait réellement ?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Plusieurs chauffeurs ont été détectés sur le même véhicule. Sélectionnez celui qui était au volant.
+            </DialogDescription>
+          </DialogHeader>
+          {resolving && (
+            <div className="space-y-2 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">
+                Véhicule : <span className="font-mono text-slate-700">{resolving.vehicle_plate}</span>
+              </p>
+              <div className="space-y-2">
+                {[resolving, ...rivalsOf(resolving)].map(s => (
+                  <label key={s.id}
+                    className={`flex items-center justify-between gap-3 border rounded-md p-3 cursor-pointer ${
+                      resolveChoice === s.driver_id ? "border-[#2196F3] bg-blue-50" : "border-slate-200 hover:border-slate-300"
+                    }`}
+                    data-testid={`ident-resolve-choice-${s.driver_id}`}>
+                    <div className="flex items-center gap-2">
+                      <input type="radio" name="winner" value={s.driver_id}
+                        checked={resolveChoice === s.driver_id}
+                        onChange={() => setResolveChoice(s.driver_id)} />
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">{s.driver_name}</p>
+                        <p className="text-[11px] text-slate-500 font-mono">détections : {s.detection_count ?? 0}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-400">Confiance</p>
+                      <p className="font-mono text-sm">{s.confidence}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setResolving(null); setResolveChoice(""); }}>
+              Annuler
+            </Button>
+            <Button onClick={resolveConflict} disabled={!resolveChoice}
+              className="bg-[#2196F3] hover:bg-[#1E88E5]" data-testid="ident-resolve-save">
+              Valider le choix
             </Button>
           </DialogFooter>
         </DialogContent>

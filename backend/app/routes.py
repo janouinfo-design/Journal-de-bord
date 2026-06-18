@@ -22,6 +22,8 @@ from app.privacy_enforcer import (
     enforce_all_vehicles, kill_switch, list_states, compute_expected_state,
 )
 from app import ble_engine
+from app.realtime import get_broadcaster
+from fastapi import WebSocket, WebSocketDisconnect
 
 
 router = APIRouter(prefix="/livre", tags=["livre-de-bord"])
@@ -575,6 +577,65 @@ async def ble_session_amend(session_id: str, patch: dict,
         return await ble_engine.amend_session(get_db(), session_id, patch, actor=user.get("email", "?"))
     except LookupError as e:
         raise HTTPException(404, str(e))
+
+
+@router.post("/ble/sessions/{session_id}/resolve")
+async def ble_session_resolve(session_id: str, payload: dict,
+                              user=Depends(require_roles("admin"))):
+    """Admin manually resolves a multi-driver BLE conflict.
+
+    Body: `{winner_driver_id: <driver-id>}`. The winning session keeps
+    `status='confirmed'` (or 'pending' if confidence < threshold);
+    all other involved sessions are closed.
+    """
+    winner = (payload or {}).get("winner_driver_id")
+    if not winner:
+        raise HTTPException(400, "winner_driver_id requis")
+    try:
+        return await ble_engine.resolve_conflict(
+            get_db(), session_id, winner, actor=user.get("email", "?"),
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
+
+
+# ---------- Realtime WebSocket ----------
+@router.websocket("/realtime")
+async def realtime_ws(ws: WebSocket):
+    """In-memory pub/sub of identification events for the current tenant.
+
+    Auth is done by reading the same `session` cookie used by REST. We accept
+    any authenticated user (admin/manager/driver); messages are JSON
+    `{type, data, ts}`. The frontend hook handles reconnection.
+    """
+    # Authenticate from cookie
+    from app.auth import get_user_from_request  # local import to avoid cycles
+    try:
+        user = await get_user_from_request(ws)
+    except Exception:
+        user = None
+    if not user:
+        await ws.close(code=4401)
+        return
+    await ws.accept()
+    broadcaster = get_broadcaster()
+    await broadcaster.join(ws, tenant_id="default")
+    try:
+        # Send a hello ping
+        await ws.send_text('{"type":"hello","data":{"ok":true},"ts":""}')
+        while True:
+            # We just keep the connection alive; clients may send pings.
+            msg = await ws.receive_text()
+            if msg == "ping":
+                await ws.send_text('{"type":"pong","data":{},"ts":""}')
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await broadcaster.leave(ws, tenant_id="default")
 
 
 @router.get("/ble/dashboard")

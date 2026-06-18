@@ -55,6 +55,25 @@ affectation manuelle, droits par rôle.
 
 ## Bug fixes
 
+### Iteration 11 — Phase B spec + multi-driver conflict + WebSocket realtime
+- **Doc Phase B Expo** : `/app/docs/phase_b_native_spec.md` — stack Expo SDK 51+ react-native-ble-plx, perms iOS/Android, architecture offline-first avec queue locale, plan tests, coûts (Apple 99$/yr + Play 25$), planning 6-7 semaines, critères d'acceptation
+- **Multi-driver conflict detection** (`ble_engine._maybe_flag_conflict`) :
+  * Déclenché à chaque ingest si 2+ drivers ont des sessions ouvertes sur le même véhicule dans la fenêtre 5min avec confidence delta ≤ 30
+  * Marque TOUTES les sessions impliquées en `status='conflict'`
+  * Audit log `action='conflict_detected'` avec drivers + confidences
+  * **Jamais d'auto-choix** — admin doit résoudre
+  * `POST /ble/sessions/{id}/resolve` (admin only) : `{winner_driver_id}` → winner gardé en `confirmed`/`pending`, autres clôturées en `closed` + audit
+- **WebSocket realtime** (`app/realtime.py` + endpoint `/api/livre/realtime`) :
+  * In-memory broadcaster avec rooms par tenant_id, lock asyncio
+  * Auth via cookie session (`get_user_from_request` ajouté à `auth.py`)
+  * Messages JSON `{type, data, ts}` : `session_opened`, `session_updated`, `conflict_detected`, `conflict_resolved`
+  * Hook frontend `useRealtime.js` avec reconnexion exponentielle (500ms→30s cap), ping 25s
+  * Badge "Live"/"Hors-ligne" pulsant en haut de la page Identification
+  * Toast `warning` au reçu d'un `conflict_detected`, refresh silencieux sur sessions
+- Frontend : Dialog "Conflit BLE — Qui conduisait réellement ?" avec radio buttons des drivers en conflit
+- Tests : conflit déclenché empiriquement (Jean conf=73 + Marie conf=70 sur LOGITRAK AUDI → status=conflict) ; resolve renvoie `{winner_session_id, closed_count, final_status}` ; badge Live visible ; sessions nettoyées après test
+- État final : sessions de test clôturées, mode=mixte, allow_driver_override=true
+
 ### Iteration 10 — Polylignes Navixy réelles (`tracker/track/read` + cache)
 - Backend `navixy_client.read_track_points(tracker_id, from, to, track_id?, simplify=true, point_limit=300)`
   appelle `track/read` au format `'YYYY-MM-DD HH:MM:SS'`. Retourne 139 points GPS pour un trajet typique.

@@ -231,7 +231,125 @@ async def _update_session(db, driver_id: str, vehicle_id: str,
             "status": new_status,
         }},
     )
+
+    # Conflict detection — if other open sessions on the same vehicle exist
+    # for OTHER drivers with similar confidence, flag both as 'conflict'.
+    await _maybe_flag_conflict(db, open_sess)
+
+    # Realtime broadcast (best-effort)
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish(
+            "session_updated" if open_sess.get("detection_count", 1) > 1 else "session_opened",
+            {"session_id": open_sess["id"], "driver_id": open_sess["driver_id"],
+             "vehicle_id": open_sess["vehicle_id"], "confidence": confidence,
+             "status": new_status},
+        )
+    except Exception:
+        pass
     return open_sess
+
+
+async def _maybe_flag_conflict(db, sess: dict, confidence_delta: int = 30) -> None:
+    """If 2+ drivers have open sessions on the same vehicle within the timeout
+    window AND their confidence scores are within `confidence_delta` points,
+    mark ALL involved sessions as `status='conflict'`. Emit a realtime event.
+
+    Default delta=30 is intentionally lenient: as soon as a second phone
+    detects the same vehicle with a non-trivial confidence (>= 30), the
+    admin should review. Never auto-pick a winner.
+    """
+    cutoff = (datetime.now(timezone.utc) - SESSION_TIMEOUT).isoformat()
+    rivals = await db.driver_sessions.find({
+        "tenant_id": "default",
+        "vehicle_id": sess["vehicle_id"],
+        "driver_id": {"$ne": sess["driver_id"]},
+        "status": {"$in": ["open", "automatic", "pending", "manual"]},
+        "last_seen": {"$gte": cutoff},
+    }, {"_id": 0}).to_list(50)
+    if not rivals:
+        return
+    my_conf = sess.get("confidence") or 0
+    close = [r for r in rivals if abs((r.get("confidence") or 0) - my_conf) <= confidence_delta]
+    if not close:
+        return
+    involved_ids = [sess["id"], *(r["id"] for r in close)]
+    await db.driver_sessions.update_many(
+        {"id": {"$in": involved_ids}},
+        {"$set": {"status": "conflict", "conflict_at": now_iso()}},
+    )
+    await db.audit_log.insert_one({
+        "ts": now_iso(), "scope": "driver_identification", "action": "conflict_detected",
+        "vehicle_id": sess["vehicle_id"], "session_ids": involved_ids,
+        "drivers": [sess["driver_id"], *(r["driver_id"] for r in close)],
+        "confidences": {sess["driver_id"]: my_conf,
+                        **{r["driver_id"]: r.get("confidence") for r in close}},
+    })
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish("conflict_detected", {
+            "vehicle_id": sess["vehicle_id"],
+            "session_ids": involved_ids,
+            "drivers": [sess["driver_id"], *(r["driver_id"] for r in close)],
+        })
+    except Exception:
+        pass
+
+
+async def resolve_conflict(db, session_id: str, winner_driver_id: str, actor: str) -> dict:
+    """Admin chooses which driver was really driving. The winning session
+    keeps its status (automatic if confidence high enough, else pending);
+    the losing ones are closed.
+    """
+    target = await db.driver_sessions.find_one({"id": session_id}, {"_id": 0})
+    if not target:
+        raise LookupError("Session inconnue")
+    if target.get("status") != "conflict":
+        raise PermissionError("Cette session n'est pas en conflit")
+    vehicle_id = target["vehicle_id"]
+    siblings = await db.driver_sessions.find({
+        "tenant_id": "default", "vehicle_id": vehicle_id, "status": "conflict",
+    }, {"_id": 0}).to_list(50)
+
+    winner_session = next((s for s in siblings if s["driver_id"] == winner_driver_id), None)
+    if not winner_session:
+        raise LookupError("Aucune session active pour ce chauffeur sur ce véhicule")
+
+    settings = await get_ble_settings(db)
+    final_status = (
+        "confirmed" if (winner_session.get("confidence") or 0) >= settings["ble_min_confidence"]
+        else "pending"
+    )
+    losers = [s for s in siblings if s["driver_id"] != winner_driver_id]
+    loser_ids = [s["id"] for s in losers]
+
+    await db.driver_sessions.update_one(
+        {"id": winner_session["id"]},
+        {"$set": {"status": final_status, "resolved_at": now_iso(),
+                  "resolved_by": actor, "resolved_winner": winner_driver_id}},
+    )
+    if loser_ids:
+        await db.driver_sessions.update_many(
+            {"id": {"$in": loser_ids}},
+            {"$set": {"status": "closed", "resolved_at": now_iso(),
+                      "resolved_by": actor, "resolved_winner": winner_driver_id,
+                      "ended_at": now_iso()}},
+        )
+    await db.audit_log.insert_one({
+        "ts": now_iso(), "scope": "driver_identification", "action": "conflict_resolved",
+        "actor": actor, "vehicle_id": vehicle_id, "winner_driver_id": winner_driver_id,
+        "winner_session_id": winner_session["id"], "loser_session_ids": loser_ids,
+    })
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish("conflict_resolved", {
+            "vehicle_id": vehicle_id, "winner_driver_id": winner_driver_id,
+            "winner_session_id": winner_session["id"], "loser_session_ids": loser_ids,
+        })
+    except Exception:
+        pass
+    return {"winner_session_id": winner_session["id"], "closed_count": len(loser_ids),
+            "final_status": final_status}
 
 
 def _derive_status(session: dict, settings: dict) -> str:
