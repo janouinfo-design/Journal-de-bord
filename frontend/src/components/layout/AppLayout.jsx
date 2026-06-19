@@ -4,6 +4,7 @@ import { TEST_IDS } from "@/constants/testIds";
 import {
   LayoutDashboard, Briefcase, User, FileText, Settings,
   LogOut, Bell, Map, Receipt, Building2, ChevronRight, Bluetooth, Smartphone,
+  ShieldAlert,
 } from "lucide-react";
 import ConflictInbox from "@/components/livre/ConflictInbox";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -39,6 +40,12 @@ const NAV_SECTIONS = [
     items: [
       { to: "/livre/identification", label: "Identification chauffeurs", icon: Bluetooth, testId: "nav-identification", adminOnly: true },
       { to: "/driver", label: "Console chauffeur (PWA)", icon: Smartphone, testId: "nav-driver-console" },
+    ],
+  },
+  {
+    label: "Administration",
+    items: [
+      { to: "/livre/amendes", label: "Gestion des amendes", icon: ShieldAlert, testId: "nav-fines", adminOnly: true },
     ],
   },
   {

@@ -15,6 +15,7 @@ from app.routes import (
     auth as _auth,
     ble as _ble,
     dashboard as _dashboard,
+    fines as _fines,
     identification as _identification,
     misc as _misc,
     notifications as _notifications,
@@ -36,5 +37,6 @@ livre_router.include_router(_ble.router)
 livre_router.include_router(_realtime.router)
 livre_router.include_router(_identification.router)
 livre_router.include_router(_notifications.router)
+livre_router.include_router(_fines.router)
 
 __all__ = ["auth_router", "livre_router"]

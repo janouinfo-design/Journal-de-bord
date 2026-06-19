@@ -79,3 +79,20 @@ export function fmtDuration(min) {
   const m = min % 60;
   return h > 0 ? `${h}h ${m}min` : `${m} min`;
 }
+
+export function fmtAmount(v, currency = "CHF") {
+  if (v == null || isNaN(v)) return "—";
+  const n = Number(v).toLocaleString("fr-CH", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).replace(/,/g, "'");
+  return `${n} ${currency}`;
+}
+
+export function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("fr-CH", {
+      day: "2-digit", month: "2-digit", year: "numeric",
+    });
+  } catch (e) { return iso; }
+}

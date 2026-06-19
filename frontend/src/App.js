@@ -10,6 +10,7 @@ import TaxSwissPage from "@/pages/TaxSwissPage";
 import SettingsPage from "@/pages/SettingsPage";
 import IdentificationPage from "@/pages/IdentificationPage";
 import DriverConsolePage from "@/pages/DriverConsolePage";
+import FinesPage from "@/pages/FinesPage";
 import { Toaster } from "@/components/ui/sonner";
 
 function App() {
@@ -34,6 +35,7 @@ function App() {
             <Route path="reports/perso" element={<Navigate to="/livre/history/perso" replace />} />
             <Route path="reports/tax-swiss" element={<TaxSwissPage />} />
             <Route path="identification" element={<IdentificationPage />} />
+            <Route path="amendes" element={<FinesPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="/driver" element={<ProtectedRoute><DriverConsolePage /></ProtectedRoute>} />
