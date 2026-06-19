@@ -35,7 +35,11 @@ function App() {
             <Route path="reports/perso" element={<Navigate to="/livre/history/perso" replace />} />
             <Route path="reports/tax-swiss" element={<TaxSwissPage />} />
             <Route path="identification" element={<IdentificationPage />} />
-            <Route path="amendes" element={<FinesPage />} />
+            <Route path="amendes" element={
+              <ProtectedRoute roles={["admin", "manager"]}>
+                <FinesPage />
+              </ProtectedRoute>
+            } />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="/driver" element={<ProtectedRoute><DriverConsolePage /></ProtectedRoute>} />

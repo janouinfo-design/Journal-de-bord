@@ -20,6 +20,24 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 23 — Module Gestion des amendes Phase 1 (19/06/2026)
+- New module `/livre/amendes` (Administration → Gestion des amendes), admin & manager only
+- Backend route module `/app/backend/app/routes/fines.py`:
+  - Mongo collection `fines` with multi-tenant isolation (tenant_id='default')
+  - All schema fields ready for future phases (driver_confidence, driver_sources, documents[])
+  - Sequential dossier numbering AMD-YYYY-NNNN
+  - Enums: 10 statuses, 8 infraction_types, 4 priorities
+  - Endpoints: GET /meta, GET / (filters+sort+pagination+aggregated totals), POST, GET/{id}, PATCH/{id} (with auto paid_at stamp on status=paid, denormalization refresh), DELETE/{id} (admin only), GET /stats/summary
+  - Audit log entries on create/update/delete (scope='fines')
+- Frontend:
+  - `pages/FinesPage.jsx` — KPI band + filter section + sortable/paginated table with colored status badges, overdue auto-detection
+  - `components/fines/FineFormDialog.jsx` — 5 sections (Infos, Véhicule, Détails, Financier, Suivi)
+  - `constants/fines.js` — status/type/priority constants + tone classes
+  - Sidebar new section "Administration → Gestion des amendes"
+  - `ProtectedRoute` extended with `roles` prop; `/livre/amendes` restricted to admin+manager
+- Testing: 26/26 backend pytest cases pass + full frontend admin flow (create/edit/delete/filters) PASS via testing_agent_v3_fork (iteration_9.json)
+- Out of scope (later phases): auto-driver detection (Phase 2), GPS link, document upload (Phase 3), reminders (Phase 4), OCR (Phase 5), exports (Phase 6)
+
 ### Iteration 1 (MVP)
 - JWT auth + 3 demo roles
 - Mock Navixy seed (6 véhicules, 6 chauffeurs, ~600 trajets)

@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, formatApiErrorDetail } from "@/lib/api";
 import { toast } from "sonner";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,6 +118,9 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
       >
         <DialogHeader>
           <DialogTitle>{isEdit ? `Modifier l'amende` : "Nouvelle amende"}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Formulaire de saisie des informations d&apos;une amende.
+          </DialogDescription>
         </DialogHeader>
 
         {loading ? (
