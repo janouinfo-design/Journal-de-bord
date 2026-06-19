@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
   Bluetooth, Loader2, Briefcase, User as UserIcon, Smartphone,
-  Truck, RefreshCw, Wifi, LogOut, AlertCircle,
+  Truck, RefreshCw, Wifi, LogOut, AlertCircle, Tag, Play, Square, RadioTower,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import useBleScanner from "@/hooks/useBleScanner";
 
 function Pulse({ active }) {
   return (
@@ -41,6 +42,9 @@ export default function DriverConsolePage() {
   const [sending, setSending] = useState(false);
   const [tagInput, setTagInput] = useState("BUS35");
   const [pinging, setPinging] = useState(false);
+  const [fleetTags, setFleetTags] = useState([]);
+  const [testingTagId, setTestingTagId] = useState(null);
+  const scanner = useBleScanner();
 
   async function loadSession() {
     try {
@@ -54,11 +58,40 @@ export default function DriverConsolePage() {
       }
     } finally { setLoading(false); }
   }
+
+  async function loadFleetTags() {
+    try {
+      const { data } = await api.get("/livre/driver/fleet-tags");
+      setFleetTags(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.debug("[DriverConsole] fleet-tags fetch failed:", e);
+    }
+  }
+
   useEffect(() => {
     loadSession();
+    loadFleetTags();
     const t = setInterval(loadSession, 10000); // poll every 10s
     return () => clearInterval(t);
   }, []);
+
+  async function testTag(t) {
+    setTestingTagId(t.id);
+    try {
+      for (let i = 0; i < 3; i++) {
+        await api.post("/livre/ble/detections", {
+          identifier: t.identifier_raw || t.identifier,
+          rssi: -55 - Math.floor(Math.random() * 10),
+          platform: "pwa",
+          battery: 78,
+        });
+      }
+      toast.success(`Tag « ${t.identifier_raw || t.identifier} » envoyé`);
+      await loadSession();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
+    } finally { setTestingTagId(null); }
+  }
 
   async function pingBLE() {
     if (!tagInput.trim()) return;
@@ -213,6 +246,118 @@ export default function DriverConsolePage() {
             </div>
           </Card>
         )}
+
+        {/* BLE Scanner status */}
+        <Card className="bg-slate-800 border-slate-700 text-slate-200 p-4" data-testid="driver-scanner-card">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <RadioTower className="w-3 h-3" /> Scanner Bluetooth
+            </p>
+            <span
+              data-testid="driver-scanner-status"
+              className={`flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
+                scanner.scanning
+                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                  : scanner.support === "ok"
+                    ? "bg-slate-700/60 text-slate-300 border-slate-600"
+                    : "bg-rose-500/15 text-rose-300 border-rose-500/40"
+              }`}
+            >
+              <Pulse active={scanner.scanning} />
+              {scanner.scanning
+                ? "Actif"
+                : scanner.support === "ok"
+                  ? "Inactif"
+                  : "Indisponible"}
+            </span>
+          </div>
+          {scanner.support !== "ok" && (
+            <p className="text-[11px] text-amber-300/90 leading-relaxed mb-2"
+               data-testid="driver-scanner-warning">
+              {scanner.support === "no-bluetooth"
+                ? "Web Bluetooth indisponible. Sur iPhone, l'app native Expo sera nécessaire (Phase B)."
+                : "Le scan BLE nécessite Chrome Android. Ouvrez cette page depuis Chrome sur Android."}
+            </p>
+          )}
+          {scanner.error && (
+            <p className="text-[11px] text-rose-300 mb-2" data-testid="driver-scanner-error">
+              {scanner.error}
+            </p>
+          )}
+          {scanner.lastEvent && (
+            <p className="text-[10px] text-slate-400 font-mono mb-2" data-testid="driver-scanner-last">
+              dernier signal : {scanner.lastEvent.id} · {scanner.lastEvent.rssi} dBm
+            </p>
+          )}
+          <div className="flex gap-2">
+            {!scanner.scanning ? (
+              <Button
+                size="sm"
+                onClick={scanner.start}
+                disabled={scanner.support !== "ok"}
+                data-testid="driver-scanner-start"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white flex-1 h-9 disabled:opacity-40"
+              >
+                <Play className="w-3.5 h-3.5 mr-1.5" /> Démarrer le scan
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={scanner.stop}
+                data-testid="driver-scanner-stop"
+                className="bg-rose-600 hover:bg-rose-500 text-white flex-1 h-9"
+              >
+                <Square className="w-3.5 h-3.5 mr-1.5" /> Arrêter
+              </Button>
+            )}
+          </div>
+        </Card>
+
+        {/* Fleet tags */}
+        <Card className="bg-slate-800/60 border-slate-700 text-slate-200 p-4" data-testid="driver-fleet-tags-card">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <Tag className="w-3 h-3" /> Tags BLE de la flotte
+            </p>
+            <span className="text-[10px] text-slate-500 font-mono">{fleetTags.length}</span>
+          </div>
+          {fleetTags.length === 0 ? (
+            <p className="text-[11px] text-slate-500 py-2">
+              Aucun tag enregistré. Demandez à un administrateur d&apos;associer vos beacons aux véhicules.
+            </p>
+          ) : (
+            <div className="max-h-[180px] overflow-y-auto -mx-1 px-1 space-y-1.5">
+              {fleetTags.map((t) => (
+                <div
+                  key={t.id}
+                  data-testid={`driver-fleet-tag-${t.id}`}
+                  className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-md bg-slate-900/60 border border-slate-700/60"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-mono text-[#9EE9FF] truncate">
+                      {t.identifier_raw || t.identifier}
+                    </p>
+                    <p className="text-[10px] text-slate-400 truncate">
+                      {t.vehicle_plate || "—"}{t.vehicle_model ? ` · ${t.vehicle_model}` : ""}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={testingTagId === t.id}
+                    onClick={() => testTag(t)}
+                    data-testid={`driver-fleet-tag-test-${t.id}`}
+                    className="h-7 text-[10px] text-[#2196F3] hover:bg-blue-500/10 px-2"
+                  >
+                    {testingTagId === t.id
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <><Bluetooth className="w-3 h-3 mr-1" /> Tester</>}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
 
         {/* Simulator (since real BLE needs native) */}
         <Card className="bg-slate-800/60 border-slate-700 border-dashed text-slate-300 p-4 mt-2"

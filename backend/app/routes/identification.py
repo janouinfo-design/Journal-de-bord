@@ -33,6 +33,41 @@ async def driver_current_session(user=Depends(get_current_user)):
     return {"session": sess}
 
 
+@router.get("/driver/fleet-tags")
+async def driver_fleet_tags(user=Depends(get_current_user)):
+    """Return all BLE tags registered for the tenant, enriched with vehicle info.
+
+    Used by the chauffeur PWA to display the list of expected beacons (with a
+    "Test this tag" button) without exposing admin-only fields.
+    """
+    db = get_db()
+    tags = await db.ble_tags.find(
+        {"tenant_id": "default"}, {"_id": 0},
+    ).to_list(500)
+    # Bulk-load vehicles to avoid N+1
+    vids = list({t.get("vehicle_id") for t in tags if t.get("vehicle_id")})
+    vehicles = {}
+    if vids:
+        async for v in db.vehicles.find(
+            {"id": {"$in": vids}}, {"_id": 0, "id": 1, "plate": 1, "model": 1},
+        ):
+            vehicles[v["id"]] = v
+    out = []
+    for t in tags:
+        v = vehicles.get(t.get("vehicle_id")) or {}
+        out.append({
+            "id": t.get("id"),
+            "identifier": t.get("identifier"),
+            "identifier_raw": t.get("identifier_raw") or t.get("identifier"),
+            "label": t.get("label"),
+            "vehicle_plate": v.get("plate"),
+            "vehicle_model": v.get("model"),
+        })
+    # Sort by vehicle plate for readability
+    out.sort(key=lambda x: (x.get("vehicle_plate") or "", x.get("identifier") or ""))
+    return out
+
+
 @router.post("/driver/manual-mode")
 async def driver_manual_mode(payload: dict, user=Depends(get_current_user)):
     mode = payload.get("mode")
