@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user, require_roles
 from app.db import get_db
+from app.fines_engine import identify_driver
 from app.routes._helpers import now_iso
 
 router = APIRouter(tags=["fines"])
@@ -282,10 +283,79 @@ async def create_fine(payload: FineIn, user=Depends(require_roles(*ROLES_RW))):
         "updated_by": user.get("email"),
     })
     fine["total_amount"] = _compute_total(fine)
+
+    # Auto-identify driver if not specified at creation time (Phase 2)
+    if not fine.get("driver_id") and fine.get("vehicle_id") and fine.get("infraction_at"):
+        try:
+            ident = await identify_driver(db, fine["vehicle_id"], fine["infraction_at"])
+            if ident.get("driver_id"):
+                fine["driver_id"] = ident["driver_id"]
+                fine["driver_name"] = ident["driver_name"]
+                fine["driver_confidence"] = ident["confidence"]
+                fine["driver_sources"] = ident["sources"]
+                fine["driver_validated_manually"] = False
+            # Persist the GPS trip ref when any source matched a trip
+            trip_ref = next((c for c in (ident.get("candidates") or []) if c.get("source") == "GPS"), None)
+            if trip_ref and trip_ref.get("trip_id"):
+                fine["gps_trip_id"] = trip_ref["trip_id"]
+        except Exception as e:
+            # Identification failure should NEVER block fine creation
+            fine["auto_identify_error"] = str(e)[:200]
+
     await db.fines.insert_one(fine)
     fine.pop("_id", None)
     await _audit(db, "create", fine["id"], user, diff={"dossier": fine["dossier_number"]})
     return fine
+
+
+@router.post("/fines/{fine_id}/identify-driver")
+async def identify_driver_endpoint(fine_id: str, user=Depends(require_roles(*ROLES_RW))):
+    """Recompute driver identification for an existing fine and persist the result.
+
+    Returns the candidates so the UI can show every source considered.
+    """
+    db = get_db()
+    fine = await db.fines.find_one({"id": fine_id, "tenant_id": "default"}, {"_id": 0})
+    if not fine:
+        raise HTTPException(404, "Amende introuvable")
+    if not fine.get("vehicle_id") or not fine.get("infraction_at"):
+        raise HTTPException(
+            400,
+            "Identification impossible : véhicule et date/heure d'infraction requis.",
+        )
+    ident = await identify_driver(db, fine["vehicle_id"], fine["infraction_at"])
+    updates = {
+        "driver_id": ident.get("driver_id"),
+        "driver_name": ident.get("driver_name"),
+        "driver_confidence": ident.get("confidence"),
+        "driver_sources": ident.get("sources") or [],
+        "driver_validated_manually": False,
+        "updated_at": now_iso(),
+        "updated_by": user.get("email"),
+    }
+    trip_ref = next((c for c in (ident.get("candidates") or []) if c.get("source") == "GPS"), None)
+    if trip_ref and trip_ref.get("trip_id"):
+        updates["gps_trip_id"] = trip_ref["trip_id"]
+    await db.fines.update_one({"id": fine_id}, {"$set": updates})
+    await _audit(db, "auto_identify", fine_id, user,
+                 diff={"confidence": ident.get("confidence"), "sources": ident.get("sources")})
+    return {
+        "fine_id": fine_id,
+        "result": ident,
+    }
+
+
+@router.get("/fines/{fine_id}/identify-candidates")
+async def identify_candidates(fine_id: str, user=Depends(require_roles(*ROLES_RW))):
+    """Read-only preview of all driver candidates (no persistence)."""
+    db = get_db()
+    fine = await db.fines.find_one({"id": fine_id, "tenant_id": "default"}, {"_id": 0})
+    if not fine:
+        raise HTTPException(404, "Amende introuvable")
+    if not fine.get("vehicle_id") or not fine.get("infraction_at"):
+        raise HTTPException(400, "Véhicule et date/heure d'infraction requis.")
+    ident = await identify_driver(db, fine["vehicle_id"], fine["infraction_at"])
+    return ident
 
 
 @router.get("/fines/{fine_id}")
@@ -314,6 +384,9 @@ async def update_fine(fine_id: str, payload: FineUpdate, user=Depends(require_ro
     if "driver_id" in updates:
         d = await db.drivers.find_one({"id": updates["driver_id"]}, {"_id": 0, "name": 1})
         updates["driver_name"] = (d or {}).get("name") or updates.get("driver_name")
+        # Manual driver assignment implies validation by a human operator
+        if "driver_validated_manually" not in updates:
+            updates["driver_validated_manually"] = True
 
     # Recompute total when financial fields change
     merged = {**existing, **updates}

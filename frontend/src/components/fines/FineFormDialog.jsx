@@ -16,7 +16,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles, Map } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import {
   FINE_STATUSES, INFRACTION_TYPES, PRIORITIES,
 } from "@/constants/fines";
@@ -53,9 +54,11 @@ function isoToDate(s) {
 }
 
 export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSaved }) {
+  const navigate = useNavigate();
   const [form, setForm] = useState(BLANK);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [identifying, setIdentifying] = useState(false);
   const isEdit = !!fineId;
 
   useEffect(() => {
@@ -80,6 +83,48 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
     () => (Number(form.amount) || 0) + (Number(form.admin_fees) || 0),
     [form.amount, form.admin_fees],
   );
+
+  async function runIdentify() {
+    if (!isEdit) {
+      toast.info("Enregistrez d'abord l'amende pour lancer l'identification.");
+      return;
+    }
+    if (!form.vehicle_id || !form.infraction_at) {
+      toast.error("Véhicule et date/heure de l'infraction requis.");
+      return;
+    }
+    setIdentifying(true);
+    try {
+      const { data } = await api.post(`/livre/fines/${fineId}/identify-driver`);
+      const result = data.result || {};
+      if (result.driver_id) {
+        setForm(f => ({
+          ...f,
+          driver_id: result.driver_id,
+          driver_name: result.driver_name,
+          driver_confidence: result.confidence,
+          driver_sources: result.sources,
+          driver_validated_manually: false,
+        }));
+        toast.success(`Chauffeur identifié : ${result.driver_name} (${result.confidence}%)`);
+      } else {
+        toast.warning("Aucun chauffeur identifié par croisement BLE/GPS/affectation.");
+      }
+      onSaved?.();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e?.response?.data?.detail));
+    } finally { setIdentifying(false); }
+  }
+
+  function openTrip() {
+    if (!form.vehicle_id || !form.infraction_at) {
+      toast.error("Véhicule et date/heure requis pour ouvrir le trajet.");
+      return;
+    }
+    const isoDate = new Date(form.infraction_at).toISOString();
+    onOpenChange(false);
+    navigate(`/livre/history/pro?vehicle=${encodeURIComponent(form.vehicle_id)}&date=${encodeURIComponent(isoDate)}`);
+  }
 
   async function submit() {
     // Light client-side checks
@@ -199,6 +244,17 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
                     </SelectContent>
                   </Select>
                 </Field>
+                <div className="sm:col-span-2">
+                  <IdentificationPanel
+                    confidence={form.driver_confidence}
+                    sources={form.driver_sources}
+                    validated={form.driver_validated_manually}
+                    identifying={identifying}
+                    onIdentify={runIdentify}
+                    onOpenTrip={openTrip}
+                    canOpenTrip={!!form.vehicle_id && !!form.infraction_at}
+                  />
+                </div>
               </div>
             </section>
 
@@ -319,6 +375,57 @@ function Field({ label, children, full }) {
     <div className={full ? "sm:col-span-2 space-y-1" : "space-y-1"}>
       <Label className="text-[11px] font-medium text-slate-600">{label}</Label>
       {children}
+    </div>
+  );
+}
+
+function IdentificationPanel({
+  confidence, sources, validated, identifying, onIdentify, onOpenTrip, canOpenTrip,
+}) {
+  const conf = Number(confidence) || 0;
+  const tone = validated
+    ? "bg-slate-100 border-slate-200 text-slate-700"
+    : conf >= 90 ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+    : conf >= 70 ? "bg-blue-50 border-blue-200 text-blue-700"
+    : conf > 0   ? "bg-amber-50 border-amber-200 text-amber-700"
+                 : "bg-slate-50 border-slate-200 text-slate-500";
+  const label = validated
+    ? "Validation manuelle"
+    : conf > 0 ? `Confiance ${conf}%`
+               : "Aucune identification";
+  return (
+    <div className={`rounded-md border px-3 py-2 ${tone}`} data-testid="fine-identify-panel">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-[10px] uppercase tracking-[0.14em] font-semibold opacity-70">
+            Identification automatique
+          </p>
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            <span className="text-sm font-semibold" data-testid="fine-identify-confidence">{label}</span>
+            {(sources || []).map(s => (
+              <span key={s}
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/70 border border-current/30">
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          <Button type="button" size="sm" variant="outline" onClick={onIdentify}
+                  disabled={identifying}
+                  data-testid="fine-identify-button"
+                  className="h-8 text-xs">
+            {identifying ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
+            Identifier
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onOpenTrip}
+                  disabled={!canOpenTrip}
+                  data-testid="fine-view-trip-button"
+                  className="h-8 text-xs">
+            <Map className="w-3 h-3 mr-1" /> Voir le trajet
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

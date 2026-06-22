@@ -242,7 +242,27 @@ export default function FinesPage() {
                         <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{r.dossier_number}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.infraction_at)}</td>
                         <td className="px-3 py-2">{r.vehicle_plate || "—"}</td>
-                        <td className="px-3 py-2">{r.driver_name || <span className="text-slate-400 italic">Non identifié</span>}</td>
+                        <td className="px-3 py-2">
+                          {r.driver_name ? (
+                            <div className="flex items-center gap-1.5">
+                              <span>{r.driver_name}</span>
+                              {r.driver_validated_manually ? (
+                                <span className="text-[9px] font-mono px-1 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                  M
+                                </span>
+                              ) : r.driver_confidence ? (
+                                <span title={`Sources : ${(r.driver_sources || []).join(", ") || "—"}`}
+                                      className={`text-[9px] font-mono px-1 py-0 rounded border ${
+                                        r.driver_confidence >= 90 ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                        r.driver_confidence >= 70 ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                                                    "bg-amber-50 text-amber-700 border-amber-200"
+                                      }`}>
+                                  {r.driver_confidence}%
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : <span className="text-slate-400 italic">Non identifié</span>}
+                        </td>
                         <td className="px-3 py-2 text-[12px] text-slate-600">{INFRACTION_LABEL[r.infraction_type] || r.infraction_type}</td>
                         <td className="px-3 py-2 text-right font-mono text-[13px]">{fmtAmount(r.total_amount, r.currency || "CHF")}</td>
                         <td className="px-3 py-2 whitespace-nowrap">

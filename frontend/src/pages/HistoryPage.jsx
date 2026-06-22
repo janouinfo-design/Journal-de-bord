@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, fmtKm, fmtDateTime, fmtDuration, downloadBlob } from "@/lib/api";
 import { TEST_IDS } from "@/constants/testIds";
 import { Card } from "@/components/ui/card";
@@ -25,6 +26,30 @@ export default function HistoryPage({ kind }) {
   const [groups, setGroups] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [filters, setFilters] = useState({ driver_id: "all", vehicle_id: "all", group: "all", company: "all", start: "", end: "" });
+
+  // Allow other pages (e.g. Fines → "Voir le trajet") to deep-link with
+  // pre-filled filters via ?vehicle=<id>&date=<ISO>. The date is mapped to a
+  // ±1h window around the given timestamp to find the matching trip.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const vehicle = searchParams.get("vehicle");
+    const date = searchParams.get("date");
+    if (!vehicle && !date) return;
+    setFilters(f => {
+      const next = { ...f };
+      if (vehicle) next.vehicle_id = vehicle;
+      if (date) {
+        const d = new Date(date);
+        if (!isNaN(d)) {
+          const s = new Date(d.getTime() - 60 * 60 * 1000);
+          const e = new Date(d.getTime() + 60 * 60 * 1000);
+          next.start = s.toISOString().slice(0, 16);
+          next.end = e.toISOString().slice(0, 16);
+        }
+      }
+      return next;
+    });
+  }, [searchParams]);
 
   async function fetchAll() {
     setLoading(true);
