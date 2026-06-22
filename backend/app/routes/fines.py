@@ -34,7 +34,7 @@ from app.db import get_db
 from app.fines_engine import identify_driver
 from app.fines_exporter import export_csv, export_excel, export_pdf
 from app.ocr_engine import extract_fine_from_document
-from app.routes._helpers import now_iso
+from app.routes._helpers import now_iso, resolve_driver_id_for_user
 
 router = APIRouter(tags=["fines"])
 
@@ -225,6 +225,41 @@ async def ocr_extract(
         "ok": True,
         "extracted": extracted or {},
         "model": "gemini-3.1-pro-preview",
+    }
+
+
+@router.get("/fines/mine")
+async def list_my_fines(user=Depends(get_current_user)):
+    """List fines belonging to the current driver — accessible to any authenticated user.
+
+    The endpoint resolves the driver record linked to the user's email and returns
+    only fines where `driver_id` matches. Read-only view; chauffeurs cannot edit /
+    delete / create / export from this endpoint.
+    """
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        # Allow admins/managers to call this gracefully; they just have no own fines
+        return {"rows": [], "total": 0, "totals": {"total_amount": 0, "paid_amount": 0, "open_amount": 0}}
+
+    rows = await db.fines.find(
+        {"tenant_id": "default", "driver_id": driver_id},
+        {"_id": 0, "internal_notes": 0},   # hide manager-private notes from chauffeurs
+    ).sort("infraction_at", -1).to_list(1000)
+
+    total_amount = sum(float(r.get("total_amount") or 0) for r in rows)
+    paid_amount = sum(float(r.get("total_amount") or 0) for r in rows if r.get("status") == "paid")
+    open_amount = sum(float(r.get("total_amount") or 0) for r in rows
+                      if r.get("status") in ("to_pay", "to_analyze", "received", "disputed",
+                                              "driver_to_identify", "awaiting_driver"))
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "totals": {
+            "total_amount": round(total_amount, 2),
+            "paid_amount": round(paid_amount, 2),
+            "open_amount": round(open_amount, 2),
+        },
     }
 
 

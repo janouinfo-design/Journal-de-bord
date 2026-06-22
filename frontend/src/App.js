@@ -12,6 +12,7 @@ import IdentificationPage from "@/pages/IdentificationPage";
 import DriverConsolePage from "@/pages/DriverConsolePage";
 import FinesPage from "@/pages/FinesPage";
 import FinesDashboardPage from "@/pages/FinesDashboardPage";
+import DriverFinesPage from "@/pages/DriverFinesPage";
 import { Toaster } from "@/components/ui/sonner";
 
 function App() {
@@ -46,6 +47,7 @@ function App() {
                 <FinesDashboardPage />
               </ProtectedRoute>
             } />
+            <Route path="mes-amendes" element={<DriverFinesPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="/driver" element={<ProtectedRoute><DriverConsolePage /></ProtectedRoute>} />

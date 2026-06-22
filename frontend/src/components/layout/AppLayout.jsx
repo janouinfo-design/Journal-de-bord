@@ -25,33 +25,39 @@ const NAV_SECTIONS = [
     label: "Consulter",
     items: [
       { to: "/livre/dashboard", label: "Tableau de bord", icon: LayoutDashboard, testId: TEST_IDS.layout.navDashboard },
-      { to: "/livre/history/pro", label: "Historique professionnel", icon: Briefcase, testId: TEST_IDS.layout.navHistoryPro },
-      { to: "/livre/history/perso", label: "Historique personnel", icon: User, testId: TEST_IDS.layout.navHistoryPerso },
+      { to: "/livre/history/pro", label: "Historique professionnel", icon: Briefcase, testId: TEST_IDS.layout.navHistoryPro, roles: ["admin", "manager"] },
+      { to: "/livre/history/perso", label: "Historique personnel", icon: User, testId: TEST_IDS.layout.navHistoryPerso, roles: ["admin", "manager"] },
     ],
   },
   {
     label: "Générer",
     items: [
-      { to: "/livre/reports/tax-swiss", label: "Rapport fiscal suisse", icon: Receipt, testId: TEST_IDS.layout.navTaxSwiss },
+      { to: "/livre/reports/tax-swiss", label: "Rapport fiscal suisse", icon: Receipt, testId: TEST_IDS.layout.navTaxSwiss, roles: ["admin", "manager"] },
     ],
   },
   {
     label: "Identification BLE",
     items: [
-      { to: "/livre/identification", label: "Identification chauffeurs", icon: Bluetooth, testId: "nav-identification", adminOnly: true },
+      { to: "/livre/identification", label: "Identification chauffeurs", icon: Bluetooth, testId: "nav-identification", roles: ["admin", "manager"] },
       { to: "/driver", label: "Console chauffeur (PWA)", icon: Smartphone, testId: "nav-driver-console" },
     ],
   },
   {
     label: "Administration",
     items: [
-      { to: "/livre/amendes", label: "Gestion des amendes", icon: ShieldAlert, testId: "nav-fines", adminOnly: true },
+      { to: "/livre/amendes", label: "Gestion des amendes", icon: ShieldAlert, testId: "nav-fines", roles: ["admin", "manager"] },
+    ],
+  },
+  {
+    label: "Mon livre",
+    items: [
+      { to: "/livre/mes-amendes", label: "Mes amendes", icon: ShieldAlert, testId: "nav-my-fines", roles: ["driver"] },
     ],
   },
   {
     label: "Configuration",
     items: [
-      { to: "/livre/settings", label: "Paramètres du livre", icon: Settings, testId: TEST_IDS.layout.navSettings },
+      { to: "/livre/settings", label: "Paramètres du livre", icon: Settings, testId: TEST_IDS.layout.navSettings, roles: ["admin", "manager"] },
     ],
   },
 ];
@@ -97,13 +103,18 @@ export default function AppLayout() {
           <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400 mt-1">Livre de Bord</p>
         </div>
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-          {NAV_SECTIONS.map((section) => (
+          {NAV_SECTIONS.map((section) => {
+            const visible = section.items.filter(
+              it => !it.roles || it.roles.includes(user?.role)
+            );
+            if (visible.length === 0) return null;
+            return (
             <div key={section.label}>
               <p className="px-3 text-[10px] uppercase tracking-[0.15em] text-slate-400 mb-2 font-semibold">
                 {section.label}
               </p>
               <div className="space-y-0.5">
-                {section.items.filter(it => !it.adminOnly || user?.role === "admin" || user?.role === "manager").map((it) => (
+                {visible.map((it) => (
                   <NavLink
                     key={it.to}
                     to={it.to}
@@ -122,7 +133,8 @@ export default function AppLayout() {
                 ))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </nav>
         <div className="border-t border-slate-100 p-3 text-[11px] text-slate-400">
           v1.0 · Données LOGITRAK
