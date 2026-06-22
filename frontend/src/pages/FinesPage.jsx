@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, fmtAmount, fmtDate, fmtDateTime, formatApiErrorDetail } from "@/lib/api";
+import { api, fmtAmount, fmtDate, fmtDateTime, formatApiErrorDetail, downloadBlob } from "@/lib/api";
 import {
   FINE_STATUSES, FINE_STATUS_MAP, STATUS_TONE_CLASS,
   INFRACTION_TYPES, INFRACTION_LABEL, isOverdue,
@@ -24,8 +24,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Loader2, Plus, Pencil, Trash2, RefreshCw, Search, AlertTriangle, Receipt, Filter,
+  Loader2, Plus, Pencil, Trash2, RefreshCw, Search, AlertTriangle,
+  Receipt, Filter, FileSpreadsheet, FileText, FileDown, BarChart3,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import FineFormDialog from "@/components/fines/FineFormDialog";
 
@@ -108,6 +110,28 @@ export default function FinesPage() {
     setPage(1);
   }
 
+  async function exportAs(fmt) {
+    const params = { fmt, sort };
+    if (filters.q.trim()) params.q = filters.q.trim();
+    if (filters.status !== "all") params.status = filters.status;
+    if (filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
+    if (filters.driver_id !== "all") params.driver_id = filters.driver_id;
+    if (filters.infraction_type !== "all") params.infraction_type = filters.infraction_type;
+    if (filters.start) params.start = filters.start;
+    if (filters.end) params.end = filters.end;
+    try {
+      const res = await api.get("/livre/fines/export", { params, responseType: "blob" });
+      const cd = res.headers["content-disposition"] || "";
+      const m = cd.match(/filename="([^"]+)"/);
+      const ext = fmt === "excel" ? "xlsx" : fmt;
+      const fallback = `logitrak_amendes.${ext}`;
+      downloadBlob(res.data, m?.[1] || fallback);
+      toast.success(`Export ${fmt.toUpperCase()} prêt`);
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e?.response?.data?.detail) || "Échec de l'export");
+    }
+  }
+
   const filtersDirty = useMemo(
     () => JSON.stringify(filters) !== JSON.stringify(DEFAULT_FILTERS),
     [filters],
@@ -130,6 +154,27 @@ export default function FinesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/livre/amendes/dashboard">
+            <Button variant="outline" size="sm" data-testid="fines-open-dashboard"
+                    className="h-9 text-[#2196F3] border-blue-200 hover:bg-blue-50">
+              <BarChart3 className="w-4 h-4 mr-1.5" /> Statistiques
+            </Button>
+          </Link>
+          <Button variant="outline" size="sm" onClick={() => exportAs("pdf")}
+                  data-testid="fines-export-pdf"
+                  className="h-9 text-rose-600 border-rose-200 hover:bg-rose-50">
+            <FileText className="w-4 h-4 mr-1.5" /> PDF
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => exportAs("excel")}
+                  data-testid="fines-export-excel"
+                  className="h-9 text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+            <FileSpreadsheet className="w-4 h-4 mr-1.5" /> Excel
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => exportAs("csv")}
+                  data-testid="fines-export-csv"
+                  className="h-9 text-slate-600 border-slate-200 hover:bg-slate-50">
+            <FileDown className="w-4 h-4 mr-1.5" /> CSV
+          </Button>
           <Button variant="outline" size="sm" onClick={load} disabled={loading}
                   data-testid="fines-refresh" className="h-9">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}

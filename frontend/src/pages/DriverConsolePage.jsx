@@ -40,8 +40,6 @@ export default function DriverConsolePage() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [tagInput, setTagInput] = useState("BUS35");
-  const [pinging, setPinging] = useState(false);
   const [fleetTags, setFleetTags] = useState([]);
   const [testingTagId, setTestingTagId] = useState(null);
   const scanner = useBleScanner();
@@ -91,26 +89,6 @@ export default function DriverConsolePage() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Échec");
     } finally { setTestingTagId(null); }
-  }
-
-  async function pingBLE() {
-    if (!tagInput.trim()) return;
-    setPinging(true);
-    try {
-      // Send 3 detections rapidly to build a quick session
-      for (let i = 0; i < 3; i++) {
-        await api.post("/livre/ble/detections", {
-          identifier: tagInput.trim(),
-          rssi: -55 - Math.floor(Math.random() * 10),
-          platform: "pwa",
-          battery: 78,
-        });
-      }
-      toast.success(`Tag ${tagInput.trim()} envoyé`);
-      await loadSession();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Échec");
-    } finally { setPinging(false); }
   }
 
   async function setMode(mode) {
@@ -359,29 +337,7 @@ export default function DriverConsolePage() {
           )}
         </Card>
 
-        {/* Simulator (since real BLE needs native) */}
-        <Card className="bg-slate-800/60 border-slate-700 border-dashed text-slate-300 p-4 mt-2"
-          data-testid="driver-sim-card">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-1.5">
-            <Wifi className="w-3 h-3" /> Simulateur BLE (test sans tag physique)
-          </p>
-          <div className="flex gap-2">
-            <Input
-              value={tagInput} onChange={(e) => setTagInput(e.target.value)}
-              placeholder="BUS35"
-              data-testid="driver-sim-input"
-              className="bg-slate-900 border-slate-700 text-white text-sm"
-            />
-            <Button size="sm" onClick={pingBLE} disabled={pinging}
-              data-testid="driver-sim-ping"
-              className="bg-[#2196F3] hover:bg-[#1E88E5] text-white">
-              {pinging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bluetooth className="w-3.5 h-3.5" />}
-            </Button>
-          </div>
-          <p className="text-[10px] text-slate-500 mt-2">
-            En production : scan BLE natif depuis l&apos;app mobile React Native.
-          </p>
-        </Card>
+        {/* Simulator removed — fleet tags list above provides a "Tester" button per tag. */}
 
         <Button variant="ghost" size="sm" onClick={loadSession}
           className="text-slate-400 hover:text-white hover:bg-slate-800 mt-2"

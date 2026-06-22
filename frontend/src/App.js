@@ -11,6 +11,7 @@ import SettingsPage from "@/pages/SettingsPage";
 import IdentificationPage from "@/pages/IdentificationPage";
 import DriverConsolePage from "@/pages/DriverConsolePage";
 import FinesPage from "@/pages/FinesPage";
+import FinesDashboardPage from "@/pages/FinesDashboardPage";
 import { Toaster } from "@/components/ui/sonner";
 
 function App() {
@@ -38,6 +39,11 @@ function App() {
             <Route path="amendes" element={
               <ProtectedRoute roles={["admin", "manager"]}>
                 <FinesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="amendes/dashboard" element={
+              <ProtectedRoute roles={["admin", "manager"]}>
+                <FinesDashboardPage />
               </ProtectedRoute>
             } />
             <Route path="settings" element={<SettingsPage />} />

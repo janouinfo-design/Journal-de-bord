@@ -20,6 +20,15 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 24 — Module Gestion des amendes Phase 2 (19/06/2026)
+- New `fines_engine.identify_driver(db, vehicle_id, infraction_at)` cross-references BLE sessions (95% conf.) + GPS trips (85%) + Assignments (60%) with multi-source bonus +5 capped at 98
+- Auto-trigger on POST /api/livre/fines when driver_id is empty + dedicated POST /fines/{id}/identify-driver (persisted with audit log) + GET /fines/{id}/identify-candidates (read-only with all candidates and per-source scores)
+- PATCH driver_id → auto-sets driver_validated_manually=true
+- New `IdentificationPanel` component in FineFormDialog with confidence label colored by tier + sources badges + "Identifier" and "Voir le trajet" buttons
+- Confidence badge in FinesPage table (90%+ emerald, 70-89% blue, <70% amber) or "M" for manual validation
+- HistoryPage accepts ?vehicle=&date= URL params; vehicle filter + ±1 day date range pre-filled
+- Testing: 14/14 backend pytest PASS + full frontend deep-link PASS (iteration_10 + iteration_11)
+
 ### Iteration 23 — Module Gestion des amendes Phase 1 (19/06/2026)
 - New module `/livre/amendes` (Administration → Gestion des amendes), admin & manager only
 - Backend route module `/app/backend/app/routes/fines.py`:

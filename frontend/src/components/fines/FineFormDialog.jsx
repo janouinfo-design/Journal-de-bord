@@ -16,8 +16,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Sparkles, Map } from "lucide-react";
+import { Loader2, Sparkles, Map, ScanLine, Upload, Download, Trash2, FileText, Image as ImageIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useRef } from "react";
 import {
   FINE_STATUSES, INFRACTION_TYPES, PRIORITIES,
 } from "@/constants/fines";
@@ -55,10 +56,12 @@ function isoToDate(s) {
 
 export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSaved }) {
   const navigate = useNavigate();
+  const fileInputRef = useRef(null);
   const [form, setForm] = useState(BLANK);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [identifying, setIdentifying] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const isEdit = !!fineId;
 
   useEffect(() => {
@@ -78,6 +81,59 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
   }, [open, fineId]);
 
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
+
+  async function reloadDocs() {
+    if (!fineId) return;
+    try {
+      const { data } = await api.get(`/livre/fines/${fineId}`);
+      setForm(f => ({ ...f, documents: data.documents || [] }));
+    } catch (e) { /* silent */ }
+  }
+
+  async function uploadDoc(file, kind) {
+    if (!fineId || !file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("kind", kind);
+    try {
+      await api.post(`/livre/fines/${fineId}/documents`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      toast.success(`${file.name} ajouté`);
+      reloadDocs();
+      onSaved?.();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e?.response?.data?.detail) || "Upload refusé");
+    }
+  }
+
+  async function deleteDoc(doc) {
+    if (!window.confirm(`Supprimer le document « ${doc.filename} » ?`)) return;
+    try {
+      await api.delete(`/livre/fines/${fineId}/documents/${doc.id}`);
+      toast.success("Document supprimé");
+      reloadDocs();
+      onSaved?.();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e?.response?.data?.detail));
+    }
+  }
+
+  function downloadDoc(doc) {
+    // Use the api client so the Authorization header is included
+    api.get(`/livre/fines/${fineId}/documents/${doc.id}/download`, { responseType: "blob" })
+      .then((res) => {
+        const url = URL.createObjectURL(res.data);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = doc.filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      })
+      .catch((e) => toast.error(formatApiErrorDetail(e?.response?.data?.detail) || "Téléchargement refusé"));
+  }
 
   const total = useMemo(
     () => (Number(form.amount) || 0) + (Number(form.admin_fees) || 0),
@@ -126,6 +182,51 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
     navigate(`/livre/history/pro?vehicle=${encodeURIComponent(form.vehicle_id)}&date=${encodeURIComponent(isoDate)}`);
   }
 
+  async function handleFileUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // allow re-selecting the same file later
+    setScanning(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data } = await api.post("/livre/fines/ocr-extract", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 60000,
+      });
+      const ex = data.extracted || {};
+      // Resolve vehicle_id from extracted plate (case-insensitive, spaces ignored)
+      let vid = form.vehicle_id;
+      if (!vid && ex.vehicle_plate && meta?.vehicles) {
+        const norm = (s) => String(s || "").replace(/\s+/g, "").toUpperCase();
+        const match = meta.vehicles.find(v => norm(v.plate) === norm(ex.vehicle_plate));
+        if (match) vid = match.id;
+      }
+      // Merge non-null extracted fields into the form
+      setForm(f => ({
+        ...f,
+        ref_fine:          ex.ref_fine          ?? f.ref_fine,
+        authority:         ex.authority         ?? f.authority,
+        country:           ex.country           ?? f.country,
+        canton:            ex.canton            ?? f.canton,
+        city:              ex.city              ?? f.city,
+        location:          ex.location          ?? f.location,
+        received_at:       ex.received_at       ?? f.received_at,
+        infraction_at:     ex.infraction_at     ?? f.infraction_at,
+        vehicle_id:        vid                  ?? f.vehicle_id,
+        amount:            (ex.amount ?? null) !== null ? ex.amount : f.amount,
+        admin_fees:        (ex.admin_fees ?? null) !== null ? ex.admin_fees : f.admin_fees,
+        currency:          ex.currency          ?? f.currency,
+        due_date:          ex.due_date          ?? f.due_date,
+        infraction_type:   ex.infraction_type   ?? f.infraction_type,
+      }));
+      const filled = Object.values(ex).filter(v => v !== null && v !== undefined && v !== "").length;
+      toast.success(`OCR : ${filled} champ${filled > 1 ? "s" : ""} pré-remplis — vérifiez avant d'enregistrer.`);
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e?.response?.data?.detail) || "Échec de l'analyse OCR");
+    } finally { setScanning(false); }
+  }
+
   async function submit() {
     // Light client-side checks
     if (form.amount === "" || form.amount == null) {
@@ -162,10 +263,38 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
         data-testid="fine-form-dialog"
       >
         <DialogHeader>
-          <DialogTitle>{isEdit ? `Modifier l'amende` : "Nouvelle amende"}</DialogTitle>
+          <DialogTitle className="flex items-center justify-between gap-3 pr-6">
+            <span>{isEdit ? `Modifier l'amende` : "Nouvelle amende"}</span>
+            {!isEdit && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={scanning}
+                data-testid="fine-ocr-upload"
+                className="h-8 text-xs text-violet-700 border-violet-300 hover:bg-violet-50"
+                title="Importer un PDF ou une photo d'amende — Gemini Vision pré-remplira le formulaire"
+              >
+                {scanning ? (
+                  <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Analyse…</>
+                ) : (
+                  <><ScanLine className="w-3 h-3 mr-1.5" /> Importer & analyser</>
+                )}
+              </Button>
+            )}
+          </DialogTitle>
           <DialogDescription className="sr-only">
             Formulaire de saisie des informations d&apos;une amende.
           </DialogDescription>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
+            className="hidden"
+            onChange={handleFileUpload}
+            data-testid="fine-ocr-file-input"
+          />
         </DialogHeader>
 
         {loading ? (
@@ -315,7 +444,17 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
               </div>
             </section>
 
-            {/* 5. Suivi */}
+            {/* 5. Documents — only when editing (need a fine_id to attach to) */}
+            {isEdit && (
+              <DocumentsSection
+                documents={form.documents}
+                onUpload={uploadDoc}
+                onDelete={deleteDoc}
+                onDownload={downloadDoc}
+              />
+            )}
+
+            {/* 6. Suivi */}
             <section className={SECTION_CLS}>
               <h3 className={SECTION_HEAD}>Suivi du dossier</h3>
               <div className={SECTION_BODY}>
@@ -370,15 +509,6 @@ export default function FineFormDialog({ open, onOpenChange, fineId, meta, onSav
   );
 }
 
-function Field({ label, children, full }) {
-  return (
-    <div className={full ? "sm:col-span-2 space-y-1" : "space-y-1"}>
-      <Label className="text-[11px] font-medium text-slate-600">{label}</Label>
-      {children}
-    </div>
-  );
-}
-
 function IdentificationPanel({
   confidence, sources, validated, identifying, onIdentify, onOpenTrip, canOpenTrip,
 }) {
@@ -427,5 +557,102 @@ function IdentificationPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+
+function Field({ label, children, full }) {
+  return (
+    <div className={full ? "sm:col-span-2 space-y-1" : "space-y-1"}>
+      <Label className="text-[11px] font-medium text-slate-600">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+const DOCUMENT_KIND_LABELS = {
+  pdf: "PDF amende",
+  photo: "Photo radar",
+  courrier: "Courrier",
+  contestation: "Contestation",
+  preuve_paiement: "Preuve paiement",
+  libre: "Document libre",
+};
+
+function DocumentsSection({ documents, onUpload, onDelete, onDownload }) {
+  const docs = Array.isArray(documents) ? documents : [];
+  const inputRef = useRef(null);
+  const [pendingKind, setPendingKind] = useState("libre");
+
+  function pickFile(kind) {
+    setPendingKind(kind);
+    inputRef.current?.click();
+  }
+
+  function onFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    onUpload(file, pendingKind);
+  }
+
+  return (
+    <section className={SECTION_CLS} data-testid="fine-documents-section">
+      <h3 className={SECTION_HEAD}>Documents joints ({docs.length})</h3>
+      <div className="p-3 space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(DOCUMENT_KIND_LABELS).map(([k, lbl]) => (
+            <Button key={k} type="button" size="sm" variant="outline"
+                    onClick={() => pickFile(k)}
+                    data-testid={`fine-doc-upload-${k}`}
+                    className="h-7 text-[11px]">
+              <Upload className="w-3 h-3 mr-1" /> {lbl}
+            </Button>
+          ))}
+          <input
+            ref={inputRef} type="file"
+            accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
+            className="hidden" onChange={onFile}
+            data-testid="fine-doc-file-input"
+          />
+        </div>
+
+        {docs.length === 0 ? (
+          <p className="text-[11px] text-slate-400 italic">Aucun document joint.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {docs.map(d => {
+              const isPdf = (d.content_type || "").includes("pdf");
+              return (
+                <div key={d.id}
+                     data-testid={`fine-doc-row-${d.id}`}
+                     className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md bg-white border border-slate-200">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {isPdf ? <FileText className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                           : <ImageIcon className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />}
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-700 truncate">{d.filename}</p>
+                      <p className="text-[10px] text-slate-400">
+                        {DOCUMENT_KIND_LABELS[d.kind] || d.kind} · {Math.round((d.size_bytes || 0) / 1024)} ko
+                      </p>
+                    </div>
+                  </div>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => onDownload(d)}
+                          data-testid={`fine-doc-download-${d.id}`}
+                          className="h-7 w-7 p-0 text-slate-500 hover:text-[#2196F3]">
+                    <Download className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => onDelete(d)}
+                          data-testid={`fine-doc-delete-${d.id}`}
+                          className="h-7 w-7 p-0 text-slate-500 hover:text-rose-600">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

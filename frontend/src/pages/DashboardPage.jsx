@@ -15,6 +15,7 @@ import {
 import {
   Briefcase, User, Activity, PieChart as PieIcon, Fuel, Gauge, Loader2, AlertCircle, Filter,
 } from "lucide-react";
+import FinesWidget from "@/components/livre/FinesWidget";
 
 const COLORS = ["#2196F3", "#94A3B8"];
 
@@ -172,6 +173,8 @@ export default function DashboardPage() {
         <KpiCard testId={TEST_IDS.dashboard.kpiFuelPerso} label="Carburant personnel" value={`${k.perso_fuel.toFixed(1)} L`} accent="warning" icon={Fuel}
           sub="Consommation perso" />
       </div>
+
+      <FinesWidget />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card data-testid={TEST_IDS.dashboard.pieChart} className="bg-white border-slate-200 shadow-sm p-5 rounded-md">
