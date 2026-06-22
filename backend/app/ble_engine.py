@@ -134,6 +134,17 @@ async def _resolve_tag(db, identifier: str) -> Optional[dict]:
     async for row in cursor:
         if normalize_identifier(row.get("identifier") or "") == canon:
             return row
+    # Alias fallback: Chrome Web Bluetooth anonymizes the device MAC and returns
+    # an opaque token instead. An admin can pair such a token to a tag via the
+    # "Apprentissage" flow — this is where we resolve it.
+    alias = await db.ble_aliases.find_one(
+        {"tenant_id": "default", "alias_id": canon}, {"_id": 0},
+    )
+    if alias and alias.get("tag_identifier"):
+        tag = await db.ble_tags.find_one(
+            {"tenant_id": "default", "identifier": alias["tag_identifier"]}, {"_id": 0},
+        )
+        return tag
     return None
 
 

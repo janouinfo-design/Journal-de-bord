@@ -35,6 +35,111 @@ async def ble_tags_delete(tag_id: str, user=Depends(require_roles("admin"))):
     return {"deleted": True}
 
 
+# ---------- Aliases (BLE pairing / "Apprentissage") ----------
+# Chrome Web Bluetooth returns an opaque, device-specific token instead of the
+# real MAC for privacy reasons. To make automatic matching work on Chrome
+# Android without changing the beacon firmware, an admin can manually pair the
+# token to an existing tag — that's what these endpoints do.
+import uuid as _uuid
+from app.ble_engine import normalize_identifier as _normalize
+
+
+@router.get("/ble/aliases")
+async def ble_aliases_list(user=Depends(require_roles("admin", "manager"))):
+    db = get_db()
+    rows = await db.ble_aliases.find(
+        {"tenant_id": "default"}, {"_id": 0},
+    ).sort("created_at", -1).to_list(1000)
+    # Enrich with vehicle plate for the UI
+    tag_idents = list({r.get("tag_identifier") for r in rows if r.get("tag_identifier")})
+    tags_by_ident = {}
+    if tag_idents:
+        async for t in db.ble_tags.find(
+            {"tenant_id": "default", "identifier": {"$in": tag_idents}},
+            {"_id": 0, "identifier": 1, "vehicle_id": 1},
+        ):
+            tags_by_ident[t["identifier"]] = t
+    vids = [t.get("vehicle_id") for t in tags_by_ident.values() if t.get("vehicle_id")]
+    veh_by_id = {}
+    if vids:
+        async for v in db.vehicles.find(
+            {"id": {"$in": vids}}, {"_id": 0, "id": 1, "plate": 1, "model": 1},
+        ):
+            veh_by_id[v["id"]] = v
+    for r in rows:
+        tag = tags_by_ident.get(r.get("tag_identifier"), {})
+        v = veh_by_id.get(tag.get("vehicle_id"), {})
+        r["vehicle_id"] = tag.get("vehicle_id")
+        r["vehicle_plate"] = v.get("plate")
+    return rows
+
+
+@router.post("/ble/aliases")
+async def ble_aliases_create(payload: dict, user=Depends(require_roles("admin"))):
+    """Pair an opaque alias_id (Chrome Web Bluetooth token) to an existing tag.
+
+    Future detections matching `alias_id` will be resolved to the same vehicle
+    and driver as the underlying tag.
+    """
+    alias_id_raw = (payload.get("alias_id") or "").strip()
+    tag_identifier_raw = (payload.get("tag_identifier") or "").strip()
+    if not alias_id_raw or not tag_identifier_raw:
+        raise HTTPException(400, "alias_id et tag_identifier sont requis")
+    alias_canon = _normalize(alias_id_raw)
+    tag_canon = _normalize(tag_identifier_raw)
+    if not alias_canon or not tag_canon:
+        raise HTTPException(400, "Identifiants invalides")
+    if alias_canon == tag_canon:
+        raise HTTPException(400, "L'alias ne peut pas être identique au tag.")
+
+    db = get_db()
+    tag = await db.ble_tags.find_one(
+        {"tenant_id": "default", "identifier": tag_canon}, {"_id": 0},
+    )
+    if not tag:
+        raise HTTPException(404, f"Aucun tag enregistré avec identifier={tag_canon}")
+
+    existing = await db.ble_aliases.find_one(
+        {"tenant_id": "default", "alias_id": alias_canon}, {"_id": 0},
+    )
+    record = {
+        "id": existing.get("id") if existing else str(_uuid.uuid4()),
+        "tenant_id": "default",
+        "alias_id": alias_canon,
+        "alias_id_raw": alias_id_raw,
+        "tag_identifier": tag_canon,
+        "label": payload.get("label"),
+        "created_at": existing.get("created_at") if existing else ble_engine.now_iso(),
+        "created_by": user.get("email"),
+        "updated_at": ble_engine.now_iso(),
+    }
+    await db.ble_aliases.update_one(
+        {"tenant_id": "default", "alias_id": alias_canon},
+        {"$set": record}, upsert=True,
+    )
+    await db.audit_log.insert_one({
+        "ts": ble_engine.now_iso(), "scope": "ble", "action": "alias_pair",
+        "actor": user.get("email"),
+        "diff": {"alias": alias_canon, "tag": tag_canon},
+    })
+    return record
+
+
+@router.delete("/ble/aliases/{alias_db_id}")
+async def ble_aliases_delete(alias_db_id: str, user=Depends(require_roles("admin"))):
+    db = get_db()
+    r = await db.ble_aliases.delete_one(
+        {"id": alias_db_id, "tenant_id": "default"},
+    )
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Alias introuvable")
+    await db.audit_log.insert_one({
+        "ts": ble_engine.now_iso(), "scope": "ble", "action": "alias_delete",
+        "actor": user.get("email"), "diff": {"id": alias_db_id},
+    })
+    return {"deleted": True}
+
+
 # ---------- Detections & simulation ----------
 @router.post("/ble/detections")
 async def ble_ingest(payload: dict, user=Depends(get_current_user)):

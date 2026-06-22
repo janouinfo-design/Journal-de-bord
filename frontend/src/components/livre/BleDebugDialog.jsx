@@ -5,7 +5,76 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, Bug, Copy, RefreshCw, Radio, Eraser } from "lucide-react";
+import { Loader2, Bug, Copy, RefreshCw, Radio, Eraser, Link as LinkIcon } from "lucide-react";
+
+/* Local sub-component imports (kept here to keep this file self-contained). */
+function PairAliasDialog({ open, onOpenChange, aliasCanon, aliasRaw, onDone }) {
+  const [tags, setTags] = useState([]);
+  const [tagId, setTagId] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    api.get("/livre/ble/tags").then(r => setTags(r.data || []));
+  }, [open]);
+  async function submit() {
+    const tag = tags.find(t => t.id === tagId);
+    if (!tag) return;
+    setBusy(true);
+    try {
+      await api.post("/livre/ble/aliases", {
+        alias_id: aliasCanon, tag_identifier: tag.identifier,
+        label: `Apparié depuis Debug BLE (raw=${aliasRaw || aliasCanon})`,
+      });
+      toast.success("Alias enregistré — les prochaines détections seront reconnues");
+      onDone?.();
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md" data-testid="ble-pair-dialog">
+        <DialogHeader>
+          <DialogTitle>Apparier ce signal à un véhicule</DialogTitle>
+          <DialogDescription>
+            Ce signal n&apos;a pas été reconnu. Choisissez à quel tag (donc véhicule) il correspond — les futures détections seront automatiquement résolues.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="text-xs">
+            <span className="text-slate-500">Identifiant capté :</span>{" "}
+            <span className="font-mono text-[#2196F3]">{aliasCanon}</span>
+          </div>
+          <div>
+            <label className="text-xs text-slate-600 mb-1 block">Tag de destination</label>
+            <select
+              value={tagId}
+              onChange={(e) => setTagId(e.target.value)}
+              data-testid="ble-pair-tag-select"
+              className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm">
+              <option value="">— Choisissez un tag —</option>
+              {tags.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.identifier} {t.label ? `· ${t.label}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
+          <Button onClick={submit} disabled={!tagId || busy}
+                  data-testid="ble-pair-submit"
+                  className="bg-[#2196F3] hover:bg-[#1976D2] text-white">
+            {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LinkIcon className="w-4 h-4 mr-2" />}
+            Apparier
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 const POLL_MS = 3000;
 
@@ -24,6 +93,8 @@ export default function BleDebugDialog({ open, onOpenChange }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
+  const [pairOpen, setPairOpen] = useState(false);
+  const [pairTarget, setPairTarget] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -218,6 +289,16 @@ export default function BleDebugDialog({ open, onOpenChange }) {
                     >
                       <Copy className="w-3 h-3 mr-1" /> Copier
                     </Button>
+                    {!r.matched_tag_id && r.identifier_canon && (
+                      <Button
+                        size="sm" variant="ghost"
+                        onClick={() => { setPairTarget({ canon: r.identifier_canon, raw: r.identifier_raw }); setPairOpen(true); }}
+                        className="h-6 text-[10px] px-2 ml-1 text-[#2196F3]"
+                        data-testid={`ble-debug-pair-${i}`}
+                      >
+                        <LinkIcon className="w-3 h-3 mr-1" /> Apparier
+                      </Button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -230,6 +311,13 @@ export default function BleDebugDialog({ open, onOpenChange }) {
             Fermer
           </Button>
         </DialogFooter>
+        <PairAliasDialog
+          open={pairOpen}
+          onOpenChange={setPairOpen}
+          aliasCanon={pairTarget?.canon}
+          aliasRaw={pairTarget?.raw}
+          onDone={load}
+        />
       </DialogContent>
     </Dialog>
   );

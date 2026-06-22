@@ -20,6 +20,11 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 26 — BLE Apprentissage + Refactor navixy + Doc beacons (22/06/2026)
+- **Mode Apprentissage BLE** : nouveaux endpoints `GET/POST/DELETE /api/livre/ble/aliases` pour mapper un ID anonyme Chrome (ex. `unJ9KACgjvi...`) à un tag MAC réel. `_resolve_tag()` du `ble_engine` consulte désormais la collection `ble_aliases` en fallback. Bouton **"Apparier"** ajouté à chaque ligne non reconnue du Debug BLE → modal `PairAliasDialog` avec sélecteur de tag. Audit log : `alias_pair` / `alias_delete`.
+- **Refactor `navixy_sync.py`** (200 lignes complexité 41 → 6 fonctions testables) : `_sync_trackers`, `_sync_employees`, `_sync_zones`, `_sync_tracks` orchestrées par `sync_navixy()` slim. Helpers `_build_trip_doc` + `_upsert_trip` + `_sync_tracks_for_vehicle`. Signature publique inchangée. Vérifié en exécution réelle : 12 trackers / 6 drivers / 28 zones / 1 new trip / 40 updated / 0 errors → résultat identique.
+- **Guide configuration beacons in-app** (`BleBeaconSetupGuide.jsx`) : modal accordéon avec procédure pas-à-pas pour 4 marques (Minew BeaconSET+, Bluecharm BC011/037, Holy IoT, nRF Connect universel). Accessible depuis Gérer les tags BLE → bouton **"Comment configurer un beacon ?"**. Format MAC sans `:` recommandé.
+
 ### Iteration 25 — Module Gestion des amendes Phases 3, 5, 6 (22/06/2026)
 - **Phase 5 (OCR IA)** : intégration Gemini Vision (`gemini-3.1-pro-preview`) via `emergentintegrations`. POST `/api/livre/fines/ocr-extract` accepte JPEG/PNG/WEBP/PDF (PyMuPDF rend la 1ère page), extrait 14 champs structurés en JSON, pré-remplit le formulaire avec bouton "Importer & analyser" violet en haut du dialog création. EMERGENT_LLM_KEY ajouté au backend/.env.
 - **Phase 6 (Exports)** : `app/fines_exporter.py` génère PDF (ReportLab, A4 paysage, bandeau totaux), Excel (openpyxl, header bleu, freeze pane, auto-fit colonnes) et CSV (UTF-8 BOM, ;-delimited). Endpoint `GET /fines/export?fmt=csv|excel|pdf` réutilise tous les filtres de la liste. 3 boutons sur la page Amendes (PDF rouge, Excel vert, CSV gris).
