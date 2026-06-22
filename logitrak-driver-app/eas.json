@@ -9,7 +9,7 @@
       "distribution": "internal",
       "channel": "development",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://dev.logitrak.ch"
+        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -22,14 +22,14 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://preview.logitrak.ch"
+        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
       }
     },
     "production": {
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://app.logitrak.ch"
+        "EXPO_PUBLIC_API_URL": "https://documents-web.logitrak.ch"
       }
     }
   },

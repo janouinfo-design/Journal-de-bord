@@ -20,6 +20,15 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 27 — Phase B Mobile Native Expo finalisée (22/06/2026)
+- Audit complet du scaffold `/app/logitrak-driver-app/` : **scanner BLE + queue offline + background task + auth JWT + WebSocket + push notifications + handlers d'actions** déjà câblés et `App.tsx` les orchestre au démarrage
+- `app.json` correctement configuré : iOS `bluetooth-central` + Android `BLUETOOTH_SCAN/CONNECT/FOREGROUND_SERVICE` + plugin `react-native-ble-plx` avec `isBackgroundEnabled: true`
+- `eas.json` mis à jour : URLs API pointant vers `trip-classifier-2.preview.emergentagent.com` (dev/preview) et `documents-web.logitrak.ch` (production)
+- TypeScript typecheck PASS (0 erreur)
+- **README.md** réécrit avec procédure complète : install Node/EAS → `eas init` → `eas build --profile preview --platform android` (~10 min) → installation APK sur Tab A9 → autorisations Bluetooth/Localisation/Notifications → test avec login chauffeur
+- Documenté : limitation continue background (iOS Core Bluetooth state preservation OK ; Android foreground service réservé Phase C)
+- ⚠️ Test final hors-sandbox : nécessite `eas login` + Tab A9 physique. Le code est prêt, le déploiement appartient à l'utilisateur.
+
 ### Iteration 26 — BLE Apprentissage + Refactor navixy + Doc beacons (22/06/2026)
 - **Mode Apprentissage BLE** : nouveaux endpoints `GET/POST/DELETE /api/livre/ble/aliases` pour mapper un ID anonyme Chrome (ex. `unJ9KACgjvi...`) à un tag MAC réel. `_resolve_tag()` du `ble_engine` consulte désormais la collection `ble_aliases` en fallback. Bouton **"Apparier"** ajouté à chaque ligne non reconnue du Debug BLE → modal `PairAliasDialog` avec sélecteur de tag. Audit log : `alias_pair` / `alias_delete`.
 - **Refactor `navixy_sync.py`** (200 lignes complexité 41 → 6 fonctions testables) : `_sync_trackers`, `_sync_employees`, `_sync_zones`, `_sync_tracks` orchestrées par `sync_navixy()` slim. Helpers `_build_trip_doc` + `_upsert_trip` + `_sync_tracks_for_vehicle`. Signature publique inchangée. Vérifié en exécution réelle : 12 trackers / 6 drivers / 28 zones / 1 new trip / 40 updated / 0 errors → résultat identique.
