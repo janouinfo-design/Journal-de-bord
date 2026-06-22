@@ -41,10 +41,13 @@ export default function HistoryPage({ kind }) {
       if (date) {
         const d = new Date(date);
         if (!isNaN(d)) {
-          const s = new Date(d.getTime() - 60 * 60 * 1000);
-          const e = new Date(d.getTime() + 60 * 60 * 1000);
-          next.start = s.toISOString().slice(0, 16);
-          next.end = e.toISOString().slice(0, 16);
+          // HistoryPage Du/Au inputs are <input type="date"> — they only accept
+          // 'YYYY-MM-DD'. We widen the range to the infraction day ± 1 day so the
+          // trip is guaranteed to be in the result set even with TZ offsets.
+          const startDay = new Date(d.getTime() - 24 * 60 * 60 * 1000);
+          const endDay = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+          next.start = startDay.toISOString().slice(0, 10);
+          next.end = endDay.toISOString().slice(0, 10);
         }
       }
       return next;

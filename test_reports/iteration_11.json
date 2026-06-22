@@ -1,0 +1,24 @@
+{
+  "summary": "Retest of HistoryPage deep-link date fix from iteration_10. The .slice(0,10) + ±1 day window approach in HistoryPage.jsx useEffect (lines 34-55) now correctly populates the <Input type='date'> Du/Au filters. Test 1 (direct URL /livre/history/pro?vehicle=<id>&date=2026-06-19T14:00:00Z): Start='2026-06-18', End='2026-06-20', vehicle pre-selected. Test 2 (Fines → 'Voir le trajet' on AMD-2026-0002 with infraction_at=2025-12-20T09:00): URL produced is /livre/history/pro?vehicle=...&date=2025-12-20T09%3A00%3A00.000Z; Start='2025-12-19', End='2025-12-21', vehicle '1-Enyaq 01 Bern' pre-selected. NO MORE console warning about 'value does not conform to yyyy-MM-dd'. Backend API filtering verified directly: vehicle b3151ad3 returns 36 trips total, 0 trips for 2026-06-18→2026-06-20, 33 trips for date-only filter — proving the filters reach the backend and reduce the dataset.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "HistoryPage.jsx useSearchParams useEffect (lines 34-55): the ±1 day window via toISOString().slice(0,10) is correct for <input type='date'>. Note: this widens the original spec's '±1h' window to ±1 day so the trip is guaranteed visible despite TZ offsets — acceptable tradeoff documented in the inline comment.",
+    "Minor observation (not part of this fix, not blocking): when navigating from Fines → 'Voir le trajet', the UI initially renders the unfiltered 500-trip list briefly before the post-deeplink filter refetch lands. This is because fetchAll runs once with the initial empty filters (mount) then again after setFilters from the URL effect. Considered safe — final state is correctly filtered (verified via direct API calls and via the populated filter inputs). If a smoother UX is desired, gate the initial fetchAll on whether searchParams contain vehicle/date.",
+    "URL-encoding side note: openTrip() correctly uses encodeURIComponent(isoDate). Tests passing a date with a '+' sign without encoding would arrive as a space (URLSearchParams quirk) and silently skip the filter. Real flow always sends a 'Z'-suffixed ISO string from .toISOString(), so this is not a production risk."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (not retested per instructions)", "frontend": "100% (2/2 deep-link scenarios)" },
+  "test_credentials": "admin@logitrak.ch / admin123",
+  "seed_data_creation": "No new seed data created; used existing AMD-2026-0002 fine which already has vehicle_id + infraction_at.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "HistoryPage deep-link date fix is RESOLVED. The bug from iteration_10 (date inputs silently rejecting 'YYYY-MM-DDTHH:mm') no longer occurs because main agent slices to 'YYYY-MM-DD' and uses ±1 day. Verified via (1) direct URL /livre/history/pro?vehicle=<uuid>&date=<ISO> and (2) end-to-end Fines edit → 'Voir le trajet' flow. Backend filters confirmed working via direct API tests (no changes needed). The brief unfiltered render flash on first paint is harmless — final state always converges to filtered.",
+  "rca of the issue": "iteration_10 bug: HistoryPage was writing a 16-char datetime-local string into filters.start/end, which <Input type='date'> rejects silently. Fix verified: .slice(0,10) trims the time portion; ±1 day window compensates for the lost ±1h granularity and TZ offsets, ensuring the relevant trip falls in the visible range. Both inputs now accept the values and the backend receives the proper start/end ISO strings."
+}
