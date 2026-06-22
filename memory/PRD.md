@@ -20,6 +20,18 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 25 — Module Gestion des amendes Phases 3, 5, 6 (22/06/2026)
+- **Phase 5 (OCR IA)** : intégration Gemini Vision (`gemini-3.1-pro-preview`) via `emergentintegrations`. POST `/api/livre/fines/ocr-extract` accepte JPEG/PNG/WEBP/PDF (PyMuPDF rend la 1ère page), extrait 14 champs structurés en JSON, pré-remplit le formulaire avec bouton "Importer & analyser" violet en haut du dialog création. EMERGENT_LLM_KEY ajouté au backend/.env.
+- **Phase 6 (Exports)** : `app/fines_exporter.py` génère PDF (ReportLab, A4 paysage, bandeau totaux), Excel (openpyxl, header bleu, freeze pane, auto-fit colonnes) et CSV (UTF-8 BOM, ;-delimited). Endpoint `GET /fines/export?fmt=csv|excel|pdf` réutilise tous les filtres de la liste. 3 boutons sur la page Amendes (PDF rouge, Excel vert, CSV gris).
+- **Phase 3 (Documents + Dashboard analytics + Widget)** :
+  - Upload disque sous `/app/backend/storage/fines/{fine_id}/{doc_id}_{filename}`, 6 types (pdf/photo/courrier/contestation/preuve_paiement/libre), cap 20 MB, mime whitelist
+  - `POST/GET-download/DELETE /fines/{id}/documents/{doc_id}` avec audit log
+  - `GET /fines/stats/extended` : KPIs (total, montants, contestées, en retard), by_status, by_type, 12 mois d'évolution, top 10 véhicules + chauffeurs + montants
+  - Nouvelle page `/livre/amendes/dashboard` avec Recharts (LineChart bi-axe, BarChart, PieChart, 3 RankingTables)
+  - `<FinesWidget>` injecté sur le Dashboard principal (gradient rosé/ambre, total/ouvert/à payer, cliquable)
+  - Section "Documents joints" dans le FineFormDialog (mode édition uniquement) avec 6 boutons typés + liste + download/delete par ligne
+- Testing : 21/21 backend pytest + frontend full flow PASS (iteration_12). Zéro bug critique.
+
 ### Iteration 24 — Module Gestion des amendes Phase 2 (19/06/2026)
 - New `fines_engine.identify_driver(db, vehicle_id, infraction_at)` cross-references BLE sessions (95% conf.) + GPS trips (85%) + Assignments (60%) with multi-source bonus +5 capped at 98
 - Auto-trigger on POST /api/livre/fines when driver_id is empty + dedicated POST /fines/{id}/identify-driver (persisted with audit log) + GET /fines/{id}/identify-candidates (read-only with all candidates and per-source scores)
