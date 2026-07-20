@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import SubTabs from "@/components/layout/SubTabs";
 import FineFormDialog from "@/components/fines/FineFormDialog";
 
 const PAGE_SIZE = 25;
@@ -185,6 +186,21 @@ export default function FinesPage() {
           </Button>
         </div>
       </div>
+
+      {/* Quick status sub-tabs (mirrors the status filter dropdown) */}
+      <SubTabs
+        current={filters.status}
+        onChange={(v) => applyFilter("status", v)}
+        tabs={[
+          { value: "all",         label: "Toutes",       testId: "fines-tab-all" },
+          { value: "received",    label: "Reçues",       testId: "fines-tab-received" },
+          { value: "to_pay",      label: "À payer",      testId: "fines-tab-to_pay" },
+          { value: "disputed",    label: "Contestées",   testId: "fines-tab-disputed" },
+          { value: "paid",        label: "Payées",       testId: "fines-tab-paid" },
+          { value: "closed",      label: "Clôturées",    testId: "fines-tab-closed" },
+          { value: "cancelled",   label: "Annulées",     testId: "fines-tab-cancelled" },
+        ]}
+      />
 
       {/* KPI band */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

@@ -15,6 +15,7 @@ import {
   MapPin, Fuel, Clock, Calendar, FileText, FileSpreadsheet, FileDown,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import SubTabs from "@/components/layout/SubTabs";
 
 export default function HistoryPage({ kind }) {
   const { user } = useAuth();
@@ -83,6 +84,44 @@ export default function HistoryPage({ kind }) {
   }, []);
 
   useEffect(() => { fetchAll(); /* eslint-disable-next-line */ }, [kind, filters]);
+
+  /** Set the start/end date filters to a named preset. Empty string keeps them open-ended. */
+  function applyDatePreset(preset) {
+    const today = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    let start = "", end = "";
+    if (preset === "today") {
+      start = end = iso(today);
+    } else if (preset === "yesterday") {
+      const y = new Date(today.getTime() - 86400000);
+      start = end = iso(y);
+    } else if (preset === "week") {
+      const dow = (today.getDay() + 6) % 7; // Monday-based
+      const monday = new Date(today.getTime() - dow * 86400000);
+      start = iso(monday); end = iso(today);
+    } else if (preset === "month") {
+      start = iso(new Date(today.getFullYear(), today.getMonth(), 1));
+      end = iso(today);
+    }
+    setFilters(f => ({ ...f, start, end }));
+  }
+
+  /** Which preset best matches the current start/end filters (for active pill). */
+  const currentPreset = useMemo(() => {
+    const { start, end } = filters;
+    if (!start && !end) return "all";
+    const today = new Date().toISOString().slice(0, 10);
+    if (start === today && end === today) return "today";
+    const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    if (start === y && end === y) return "yesterday";
+    const t = new Date();
+    const dow = (t.getDay() + 6) % 7;
+    const monday = new Date(t.getTime() - dow * 86400000).toISOString().slice(0, 10);
+    if (start === monday && end === today) return "week";
+    const firstOfMonth = new Date(t.getFullYear(), t.getMonth(), 1).toISOString().slice(0, 10);
+    if (start === firstOfMonth && end === today) return "month";
+    return "custom";
+  }, [filters.start, filters.end]);
 
   async function classify(trip, target) {
     try {
@@ -175,6 +214,27 @@ export default function HistoryPage({ kind }) {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Pro/Perso route tabs + date presets */}
+      <div className="space-y-1">
+        <SubTabs tabs={[
+          { to: "/livre/history/pro",   label: "Professionnel", icon: Briefcase, testId: "history-tab-pro" },
+          { to: "/livre/history/perso", label: "Personnel",     icon: User,      testId: "history-tab-perso" },
+        ]} />
+        <SubTabs
+          className="pl-1 border-b-0"
+          current={currentPreset}
+          onChange={(v) => v === "custom" ? null : (v === "all" ? setFilters(f => ({ ...f, start: "", end: "" })) : applyDatePreset(v))}
+          tabs={[
+            { value: "all",       label: "Tous",         testId: "history-preset-all" },
+            { value: "today",     label: "Aujourd'hui",  testId: "history-preset-today" },
+            { value: "yesterday", label: "Hier",         testId: "history-preset-yesterday" },
+            { value: "week",      label: "Cette semaine", testId: "history-preset-week" },
+            { value: "month",     label: "Ce mois",      testId: "history-preset-month" },
+            ...(currentPreset === "custom" ? [{ value: "custom", label: "Personnalisé", testId: "history-preset-custom" }] : []),
+          ]}
+        />
       </div>
 
       {isMasked && (

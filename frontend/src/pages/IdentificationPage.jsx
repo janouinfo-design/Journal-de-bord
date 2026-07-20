@@ -19,6 +19,7 @@ import {
 import { useRealtime } from "@/hooks/useRealtime";
 import BleTagsManager from "@/components/livre/BleTagsManager";
 import BleDebugDialog from "@/components/livre/BleDebugDialog";
+import SubTabs from "@/components/layout/SubTabs";
 
 const STATUS_BADGE = {
   open:       { color: "bg-blue-50 text-blue-700 border-blue-200",         label: "Ouverte" },
@@ -252,6 +253,20 @@ export default function IdentificationPage() {
           Détection automatique de l&apos;association chauffeur ↔ véhicule grâce aux tags Bluetooth installés à bord.
         </p>
       </div>
+
+      {/* Quick status sub-tabs */}
+      <SubTabs
+        current={filters.status}
+        onChange={(v) => setFilters({ ...filters, status: v })}
+        tabs={[
+          { value: "all",       label: "Toutes",       testId: "ident-tab-all" },
+          { value: "automatic", label: "Automatiques", testId: "ident-tab-auto" },
+          { value: "pending",   label: "À valider",    testId: "ident-tab-pending" },
+          { value: "conflict",  label: "Conflits",     testId: "ident-tab-conflict" },
+          { value: "manual",    label: "Manuelles",    testId: "ident-tab-manual" },
+          { value: "closed",    label: "Clôturées",    testId: "ident-tab-closed" },
+        ]}
+      />
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3" data-testid="ident-kpis">
