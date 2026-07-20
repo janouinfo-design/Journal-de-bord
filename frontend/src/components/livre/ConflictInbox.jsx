@@ -114,11 +114,11 @@ export default function ConflictInbox() {
                 <ShieldCheck className="w-6 h-6 text-emerald-500 mx-auto mb-2" />
                 Aucun conflit non résolu
               </div>
-            ) : grouped.map((arr) => {
+            ) : grouped.map((arr, gi) => {
               const head = arr[0];
               return (
-                <div key={head.vehicle_id} className="px-4 py-3 border-b border-slate-100 hover:bg-slate-50/60"
-                  data-testid={`header-conflict-row-${head.vehicle_id}`}>
+                <div key={head.vehicle_id || `head-${gi}`} className="px-4 py-3 border-b border-slate-100 hover:bg-slate-50/60"
+                  data-testid={`header-conflict-row-${head.vehicle_id || gi}`}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <Truck className="w-3.5 h-3.5 text-slate-500" />
