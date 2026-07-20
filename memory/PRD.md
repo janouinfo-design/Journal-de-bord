@@ -514,3 +514,8 @@ affectation manuelle, droits par rôle.
 ## Iframe Navixy — Fix session (20 juil. 2026)
 - CSP frame-ancestors (craco.config.js): logitrak.fr/.ch, navixy.com/.io, emergentagent.com, emergent.sh
 - Cookies auth passes en SameSite=None; Secure (backend/app/auth.py) — requis pour la session dans iframe cross-site Navixy
+
+## SSO Navixy auto-login (20 juil. 2026)
+- POST /api/auth/navixy-sso {session_key} : valide via API Navixy user/get_info, find-or-create user (role driver par defaut, jamais admin/manager, password_hash=None => login mot de passe refuse), pose cookies JWT SameSite=None
+- Frontend AuthContext.jsx : capture ?session_key= au chargement du module (avant StrictMode), appelle le SSO, nettoie l URL
+- Config Navixy requise : application utilisateur avec methode d authentification "Session key"

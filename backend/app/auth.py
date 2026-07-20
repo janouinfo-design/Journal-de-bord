@@ -133,8 +133,74 @@ async def login(payload: LoginIn, response: Response):
     db = get_db()
     email = payload.email.lower()
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+    access = create_access_token(user["id"], user["email"], user["role"])
+    refresh = create_refresh_token(user["id"])
+    _set_auth_cookies(response, access, refresh)
+    user.pop("_id", None)
+    user.pop("password_hash", None)
+    return {"user": user, "access_token": access, "refresh_token": refresh}
+
+
+class NavixySsoIn(BaseModel):
+    session_key: str
+
+
+@router.post("/navixy-sso")
+async def navixy_sso(payload: NavixySsoIn, response: Response):
+    """SSO iframe Navixy: valide la session_key auprès de l'API Navixy,
+    trouve ou crée l'utilisateur local (rôle limité), puis pose les cookies JWT."""
+    import os
+    import uuid
+    import httpx
+    from app.db import get_db
+
+    session_key = payload.session_key.strip()
+    if not session_key or len(session_key) < 16:
+        raise HTTPException(status_code=400, detail="Clé de session Navixy manquante ou invalide")
+
+    base_url = os.environ.get("NAVIXY_API_URL", "https://api.navixy.com/v2").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(f"{base_url}/user/get_info", json={"hash": session_key})
+    except Exception:
+        raise HTTPException(status_code=502, detail="Impossible de contacter l'API Navixy")
+    if r.status_code >= 500:
+        raise HTTPException(status_code=502, detail="API Navixy indisponible")
+    try:
+        data = r.json()
+    except Exception:
+        raise HTTPException(status_code=401, detail="Session Navixy invalide ou expirée")
+
+    if not data.get("success"):
+        raise HTTPException(status_code=401, detail="Session Navixy invalide ou expirée")
+
+    info = data.get("user_info", {}) or {}
+    email = (info.get("login") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=422, detail="L'utilisateur Navixy n'a pas d'email exploitable")
+    name = (info.get("title")
+            or " ".join(filter(None, [info.get("first_name"), info.get("last_name")]))
+            or email.split("@")[0])
+
+    db = get_db()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        user = {
+            "id": str(uuid.uuid4()),
+            "email": email,
+            "name": name,
+            "role": "driver",
+            "password_hash": None,
+            "auth_origin": "navixy",
+            "navixy_user_id": info.get("id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.users.insert_one(dict(user))
+    elif not user.get("navixy_user_id") and info.get("id"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"navixy_user_id": info.get("id")}})
+
     access = create_access_token(user["id"], user["email"], user["role"])
     refresh = create_refresh_token(user["id"])
     _set_auth_cookies(response, access, refresh)
