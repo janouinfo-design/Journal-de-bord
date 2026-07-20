@@ -88,6 +88,15 @@ code,
     background: #94a3b8;
 }
 
+/* Hide scrollbar utility (used by horizontal nav tabs) */
+.no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
 @layer base {
     [data-debug-wrapper="true"] {
         display: contents !important;
