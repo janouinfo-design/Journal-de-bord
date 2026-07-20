@@ -510,3 +510,7 @@ affectation manuelle, droits par rôle.
 - **(b)** Décomposer `routes.py` en routers modulaires (`ble.py`, `dashboard.py`, `reports.py`, `settings.py`)
 - Ajouter endpoints backend `auth/refresh` + `driver/push-token` pour finaliser l'intégration mobile
 - Tester l'app native sur device physique (Android/iOS) avec un vrai tag BLE
+
+## Iframe Navixy — Fix session (20 juil. 2026)
+- CSP frame-ancestors (craco.config.js): logitrak.fr/.ch, navixy.com/.io, emergentagent.com, emergent.sh
+- Cookies auth passes en SameSite=None; Secure (backend/app/auth.py) — requis pour la session dans iframe cross-site Navixy

@@ -45,12 +45,12 @@ def create_refresh_token(user_id: str) -> str:
 
 def _set_auth_cookies(response: Response, access: str, refresh: str):
     response.set_cookie(
-        "access_token", access, httponly=True, secure=False,
-        samesite="lax", max_age=ACCESS_TTL_MIN * 60, path="/",
+        "access_token", access, httponly=True, secure=True,
+        samesite="none", max_age=ACCESS_TTL_MIN * 60, path="/",
     )
     response.set_cookie(
-        "refresh_token", refresh, httponly=True, secure=False,
-        samesite="lax", max_age=REFRESH_TTL_DAYS * 86400, path="/",
+        "refresh_token", refresh, httponly=True, secure=True,
+        samesite="none", max_age=REFRESH_TTL_DAYS * 86400, path="/",
     )
 
 
@@ -189,8 +189,8 @@ async def logout(response: Response, request: Request):
                 )
     except Exception:
         pass
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
+    response.delete_cookie("access_token", path="/", samesite="none", secure=True)
+    response.delete_cookie("refresh_token", path="/", samesite="none", secure=True)
     return {"ok": True}
 
 
