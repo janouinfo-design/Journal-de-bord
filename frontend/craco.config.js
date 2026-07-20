@@ -70,7 +70,7 @@ webpackConfig.devServer = (devServerConfig) => {
     "https://*.logitrak.fr https://logitrak.fr " +
     "https://*.logitrak.ch https://logitrak.ch " +
     "https://*.navixy.com https://*.navixy.io " +
-    "https://*.emergentagent.com;";
+    "https://*.emergentagent.com https://*.emergent.sh https://emergent.sh;";
   devServerConfig.headers = {
     ...(devServerConfig.headers || {}),
     "Content-Security-Policy": iframeCsp,
