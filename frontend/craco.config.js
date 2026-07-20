@@ -61,6 +61,21 @@ let webpackConfig = {
 };
 
 webpackConfig.devServer = (devServerConfig) => {
+  // Allow the app to be embedded as an iframe inside the Navixy white-label
+  // interfaces (login.logitrak.fr / *.logitrak.fr / *.logitrak.ch / *.navixy.com).
+  // frame-ancestors must be set as an HTTP header — meta tag equivalents are
+  // ignored by browsers, so we inject it via the dev-server headers config.
+  const iframeCsp =
+    "frame-ancestors 'self' " +
+    "https://*.logitrak.fr https://logitrak.fr " +
+    "https://*.logitrak.ch https://logitrak.ch " +
+    "https://*.navixy.com https://*.navixy.io " +
+    "https://*.emergentagent.com;";
+  devServerConfig.headers = {
+    ...(devServerConfig.headers || {}),
+    "Content-Security-Policy": iframeCsp,
+  };
+
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
     const originalSetupMiddlewares = devServerConfig.setupMiddlewares;
