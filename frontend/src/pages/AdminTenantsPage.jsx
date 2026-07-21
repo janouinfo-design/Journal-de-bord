@@ -159,13 +159,16 @@ export default function AdminTenantsPage() {
             </div>
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5" /> Clé API Navixy {dialog?.mode === "edit" && "(laisser vide pour conserver)"}
+                <KeyRound className="w-3.5 h-3.5" /> Clé API Navixy du client {dialog?.mode === "edit" && "(laisser vide pour conserver)"}
               </Label>
               <Input data-testid="tenant-hash-input" value={form.navixy_hash}
                      onChange={(e) => setForm({ ...form, navixy_hash: e.target.value })}
                      placeholder="Clé API du compte maître Navixy" />
               <p className="text-xs text-slate-400">
-                La clé est validée auprès de l'API Navixy et le compte maître est identifié automatiquement.
+                Chaque client a sa propre clé API. Générez-la de préférence depuis le
+                <strong> compte principal Navixy du client</strong> (ou un utilisateur voyant toute la flotte),
+                sinon la synchronisation sera partielle. La clé est validée auprès de l'API Navixy
+                et le compte principal est identifié automatiquement — même si la clé vient d'un sous-utilisateur.
               </p>
             </div>
           </div>
