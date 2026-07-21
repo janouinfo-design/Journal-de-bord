@@ -1,0 +1,86 @@
+name: journal_logitrak
+
+services:
+  journal_database:
+    image: mongo:7
+    container_name: journal_database
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+      MONGO_APP_DB: ${DB_NAME}
+    volumes:
+      - journal_db_data:/data/db
+      - ./mongo-init/create-app-user.sh:/docker-entrypoint-initdb.d/create-app-user.sh:ro
+    networks:
+      - journal_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  journal_backend:
+    build: ./backend
+    container_name: journal_backend
+    restart: unless-stopped
+    environment:
+      MONGO_URL: mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@journal_database:27017/${DB_NAME}?authSource=${DB_NAME}
+      DB_NAME: ${DB_NAME}
+      CORS_ORIGINS: ${APP_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      MANAGER_EMAIL: ${MANAGER_EMAIL}
+      MANAGER_PASSWORD: ${MANAGER_PASSWORD}
+      DRIVER_EMAIL: ${DRIVER_EMAIL}
+      DRIVER_PASSWORD: ${DRIVER_PASSWORD}
+      NAVIXY_API_URL: ${NAVIXY_API_URL}
+      NAVIXY_HASH: ${NAVIXY_HASH}
+      EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+    volumes:
+      - ./data/storage:/app/storage
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8101}:8001"
+    depends_on:
+      journal_database:
+        condition: service_healthy
+    networks:
+      - journal_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  journal_frontend:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_BACKEND_URL: ${APP_URL}
+    container_name: journal_frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3101}:80"
+    depends_on:
+      - journal_backend
+    networks:
+      - journal_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  journal_network:
+    name: journal_network
+
+volumes:
+  journal_db_data:
+    name: journal_db_data

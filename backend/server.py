@@ -33,7 +33,7 @@ async def root():
 
 @api_router.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "journal-logitrak"}
 
 
 # Sub-routers under /api
@@ -60,7 +60,8 @@ async def on_startup():
     await db.trips.create_index("driver_id")
     await db.trips.create_index("vehicle_id")
     await seed_admin()
-    await seed_mock_data(force=False)
+    if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
+        await seed_mock_data(force=False)
     await apply_rules_to_all(db)
     await init_scheduler()
     logger.info("Startup: DB initialised, mock data seeded.")

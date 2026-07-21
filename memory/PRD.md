@@ -519,3 +519,9 @@ affectation manuelle, droits par rôle.
 - POST /api/auth/navixy-sso {session_key} : valide via API Navixy user/get_info, find-or-create user (role driver par defaut, jamais admin/manager, password_hash=None => login mot de passe refuse), pose cookies JWT SameSite=None
 - Frontend AuthContext.jsx : capture ?session_key= au chargement du module (avant StrictMode), appelle le SSO, nettoie l URL
 - Config Navixy requise : application utilisateur avec methode d authentification "Session key"
+
+## Package deploiement VPS (20 juil. 2026) — Phase 1 mono-client
+- Fichiers: docker-compose.yml (projet journal_logitrak, prefixes journal_*, reseau/volume dedies), backend/Dockerfile, frontend/Dockerfile+nginx.conf, mongo-init/create-app-user.sh (user Mongo limite), nginx/journal.logitrak.ch.conf (CSP iframe+WS), .env.example, scripts/deploy|backup|restore.sh, README_DEPLOYMENT.md
+- server.py: /api/health renvoie service journal-logitrak; SEED_DEMO_DATA=false desactive les donnees demo en prod
+- Ports VPS proposes: 3101 (front) / 8101 (back), bind 127.0.0.1, Mongo non expose
+- Phase 2 a faire: refonte multi-tenant (tenant_id partout, 1 tenant = 1 compte maitre Navixy, ecran super-admin, isolation testee A/B, audit log)
