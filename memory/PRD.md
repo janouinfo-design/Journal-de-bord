@@ -525,3 +525,12 @@ affectation manuelle, droits par rôle.
 - server.py: /api/health renvoie service journal-logitrak; SEED_DEMO_DATA=false desactive les donnees demo en prod
 - Ports VPS proposes: 3101 (front) / 8101 (back), bind 127.0.0.1, Mongo non expose
 - Phase 2 a faire: refonte multi-tenant (tenant_id partout, 1 tenant = 1 compte maitre Navixy, ecran super-admin, isolation testee A/B, audit log)
+
+## Multi-tenant + Super-Admin + Audit (21 juil. 2026) — TESTE 14/14
+- Isolation par tenant_id automatique (proxy TenantScopedDB dans db.py), collections globales: users/tenants/push_tokens/app_state
+- Collection tenants {id,name,navixy_hash,navixy_master_user_id,status}; tenant "default"=Logitrak (migration auto au demarrage via tenancy.py)
+- Superadmin (superadmin@logitrak.ch, env SUPERADMIN_*): API /api/admin/* (tenants CRUD+suspension, users CRUD+roles, audit global), header X-Tenant-Id pour impersonation
+- Frontend: pages /admin/clients, /admin/utilisateurs, /admin/audit + TenantSwitcher (localStorage sa_tenant_id)
+- SSO Navixy multi-tenant: mapping via master.id -> tenant; entreprise inconnue = 403
+- Sync scheduler par tenant (chaque tenant avec sa cle Navixy); audit: auth.login/login_failed/sso, fine.export, report.export, settings.update, tenant.*, user.*
+- Deploiement VPS: SUPERADMIN_EMAIL/PASSWORD ajoutes a .env.example + docker-compose.yml
