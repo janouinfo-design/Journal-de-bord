@@ -42,6 +42,9 @@ async def export_report(
     # Reports need most trip fields (addresses, speeds, fuel, durations) for
     # the PDF/Excel/CSV output. Cap at 10k to avoid runaway memory on huge fleets.
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).limit(10000).to_list(10000)
+    from app.audit import log_audit
+    await log_audit("report.export", user,
+                    {"classification": classification, "format": fmt, "count": len(trips)})
 
     # Privacy mode 'masked' for managers — personal report contains no per-trip data
     is_masked = (classification == "personal"

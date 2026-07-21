@@ -1,0 +1,34 @@
+{
+  "summary": "Multi-tenant refonte (superadmin, tenants, users, audit, isolation) validated end-to-end. 14/14 backend pytest tests pass, and full Playwright walkthrough of superadmin -> tenant switcher -> business tabs -> regression as admin@logitrak succeeded. Data isolation between tenants confirmed at API level (admin-b@test.ch sees 0 Logitrak fines/users, 404 on direct fine access). Regression: admin@logitrak still sees 5 fines and dashboard with 4627 trips.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard / Synthèse par chauffeur", "issues": ["React warning: 'Encountered two children with the same key' repeated ~4x — likely missing/duplicate `key` prop in DashboardPage table (POLICE 56974 has no plate, empty key). Non-blocking but should be fixed."]},
+      {"screen": "AdminTenantsPage Dialog", "issues": ["A11y warning: Missing Description/aria-describedby on DialogContent (tenant create/edit modal). Non-blocking."]},
+      {"screen": "Realtime WebSocket", "issues": ["wss://.../api/livre/realtime fails to connect after login (WebSocket closed before connection established). Preview env limitation but should be verified."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_multitenant.py", "/app/test_reports/pytest/multitenant.xml"],
+  "action_items": [
+    "Optional: fix duplicate React key warning in DashboardPage synthesis table (use vehicle_id/driver_id fallback instead of plate).",
+    "Optional: add aria-describedby / DialogDescription to tenant create/edit dialog.",
+    "Optional: cleanup script for leftover TEST_Tenant_* tenants (2 remain from run) — tests intentionally don't delete since no DELETE tenant endpoint exists.",
+    "Confirm WebSocket /api/livre/realtime works in production (ws upgrade behind preview ingress may block it)."
+  ],
+  "critical_code_review_comments": [
+    "TenantSwitcher stores tenant in localStorage and uses window.location.assign — hard reload each switch is intentional to reset all in-memory caches, good.",
+    "admin.py DELETE /tenants endpoint is missing — only PATCH status=suspended is supported. Deliberate (data preservation) but worth documenting.",
+    "list_tenants stats iterate one collection at a time (N tenants × 4 counts): fine for now, could be batched.",
+    "require_superadmin has no logging of 403 attempts — consider log_audit('admin.forbidden')."
+  ],
+  "updated_files": ["/app/backend/tests/test_multitenant.py"],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% of scripted flows"},
+  "test_credentials": "superadmin@logitrak.ch/superadmin123, admin@logitrak.ch/admin123, admin-b@test.ch/testb123 — all working.",
+  "seed_data_creation": "Created & left behind 2 tenants TEST_Tenant_cb5a9c_edited and TEST_Tenant_c6410f_edited (from tenant create+edit test). Also created + deleted transient test users. Logitrak/Client Test B data untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Multi-tenant feature is stable. Main test file: /app/backend/tests/test_multitenant.py. Frontend has cosmetic React key warning in dashboard table (non-blocking). Realtime WS may not connect through preview ingress — verify separately. Test tenants named TEST_Tenant_* linger since no DELETE endpoint; ignore or clean via Mongo directly.",
+  "rca of the issue": "None — no issues reproduced."
+}

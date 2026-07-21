@@ -312,6 +312,8 @@ async def export_fines(
     sort_dir = -1 if sort.startswith("-") else 1
     # No pagination on exports — they pull the full filtered set, capped at 10k for safety
     rows = await db.fines.find(query, {"_id": 0}).sort(sort_key, sort_dir).limit(10000).to_list(10000)
+    from app.audit import log_audit
+    await log_audit("fine.export", user, {"format": fmt, "count": len(rows)})
 
     # Aggregate totals for the PDF summary band
     totals = {"total_amount": 0.0, "paid_amount": 0.0, "open_amount": 0.0}

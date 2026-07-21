@@ -45,6 +45,8 @@ async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin
     new = {"id": "default", "mode": mode}
     await db.settings.update_one({"id": "default"}, {"$set": new}, upsert=True)
     await apply_rules_to_all(db)
+    from app.audit import log_audit
+    await log_audit("settings.update", user, {"mode": mode})
     return new
 
 

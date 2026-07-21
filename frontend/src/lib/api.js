@@ -8,6 +8,13 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+// Superadmin « voir en tant que client » — header X-Tenant-Id
+api.interceptors.request.use((config) => {
+  const tid = localStorage.getItem("sa_tenant_id");
+  if (tid) config.headers["X-Tenant-Id"] = tid;
+  return config;
+});
+
 // Global 401 handler — fires the redirect once, lets callers handle their own errors.
 let _redirecting = false;
 api.interceptors.response.use(

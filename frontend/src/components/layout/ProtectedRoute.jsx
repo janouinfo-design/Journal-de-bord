@@ -12,7 +12,7 @@ export default function ProtectedRoute({ children, roles }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  if (roles && roles.length > 0 && !roles.includes(user.role)) {
+  if (roles && roles.length > 0 && !roles.includes(user.role) && user.role !== "superadmin") {
     return <Navigate to="/livre/dashboard" replace />;
   }
   return children;

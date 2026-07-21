@@ -13,6 +13,9 @@ import DriverConsolePage from "@/pages/DriverConsolePage";
 import FinesPage from "@/pages/FinesPage";
 import FinesDashboardPage from "@/pages/FinesDashboardPage";
 import DriverFinesPage from "@/pages/DriverFinesPage";
+import AdminTenantsPage from "@/pages/AdminTenantsPage";
+import AdminUsersPage from "@/pages/AdminUsersPage";
+import AdminAuditPage from "@/pages/AdminAuditPage";
 import { Toaster } from "@/components/ui/sonner";
 
 function App() {
@@ -51,6 +54,19 @@ function App() {
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="/driver" element={<ProtectedRoute><DriverConsolePage /></ProtectedRoute>} />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute roles={["superadmin"]}>
+                <AppLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="/admin/clients" replace />} />
+            <Route path="clients" element={<AdminTenantsPage />} />
+            <Route path="utilisateurs" element={<AdminUsersPage />} />
+            <Route path="audit" element={<AdminAuditPage />} />
+          </Route>
           <Route path="*" element={<Navigate to="/livre/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

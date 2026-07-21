@@ -13,6 +13,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.db import init_db, close_db, get_db
 from app.auth import seed_admin
 from app.routes import auth_router, livre_router
+from app.routes.admin import router as admin_router
 from app.mock_navixy import seed_mock_data
 from app.rules import apply_rules_to_all
 from app.scheduler import init_scheduler, shutdown_scheduler
@@ -39,6 +40,7 @@ async def health():
 # Sub-routers under /api
 api_router.include_router(auth_router)
 api_router.include_router(livre_router)
+api_router.include_router(admin_router)
 
 app.include_router(api_router)
 
@@ -60,6 +62,8 @@ async def on_startup():
     await db.trips.create_index("driver_id")
     await db.trips.create_index("vehicle_id")
     await seed_admin()
+    from app.tenancy import ensure_tenancy
+    await ensure_tenancy(db)
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
     await apply_rules_to_all(db)

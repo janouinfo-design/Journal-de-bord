@@ -26,7 +26,8 @@ async def realtime_ws(ws: WebSocket):
         return
     await ws.accept()
     broadcaster = get_broadcaster()
-    await broadcaster.join(ws, tenant_id="default")
+    tenant_id = user.get("tenant_id") or "default"
+    await broadcaster.join(ws, tenant_id=tenant_id)
     try:
         await ws.send_text('{"type":"hello","data":{"ok":true},"ts":""}')
         while True:
@@ -38,4 +39,4 @@ async def realtime_ws(ws: WebSocket):
     except Exception:
         pass
     finally:
-        await broadcaster.leave(ws, tenant_id="default")
+        await broadcaster.leave(ws, tenant_id=tenant_id)

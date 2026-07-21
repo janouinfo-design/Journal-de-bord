@@ -71,6 +71,11 @@ async def get_current_user(request: Request):
         user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
             raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+        from app.tenant_context import set_current_tenant, NO_TENANT
+        if user.get("role") == "superadmin":
+            set_current_tenant(request.headers.get("X-Tenant-Id") or NO_TENANT)
+        else:
+            set_current_tenant(user.get("tenant_id") or "default")
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expiré")
@@ -105,6 +110,8 @@ async def get_user_from_request(req) -> dict | None:
 
 def require_roles(*roles):
     async def _dep(user=Depends(get_current_user)):
+        if user.get("role") == "superadmin":
+            return user
         if user.get("role") not in roles:
             raise HTTPException(status_code=403, detail="Accès refusé")
         return user
@@ -134,12 +141,16 @@ async def login(payload: LoginIn, response: Response):
     email = payload.email.lower()
     user = await db.users.find_one({"email": email})
     if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
+        from app.audit import log_audit
+        await log_audit("auth.login_failed", None, {"email": email})
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     access = create_access_token(user["id"], user["email"], user["role"])
     refresh = create_refresh_token(user["id"])
     _set_auth_cookies(response, access, refresh)
     user.pop("_id", None)
     user.pop("password_hash", None)
+    from app.audit import log_audit
+    await log_audit("auth.login", user)
     return {"user": user, "access_token": access, "refresh_token": refresh}
 
 
@@ -184,21 +195,38 @@ async def navixy_sso(payload: NavixySsoIn, response: Response):
             or " ".join(filter(None, [info.get("first_name"), info.get("last_name")]))
             or email.split("@")[0])
 
+    # Rattachement au client (tenant) via le compte maître Navixy
+    master = data.get("master") or {}
+    navixy_owner_id = master.get("id") or info.get("id")
+
     db = get_db()
+    tenant = await db.tenants.find_one(
+        {"navixy_master_user_id": navixy_owner_id, "status": "active"}, {"_id": 0})
+
     user = await db.users.find_one({"email": email})
-    if not user:
+    if user:
+        ut = await db.tenants.find_one({"id": user.get("tenant_id")}, {"_id": 0, "status": 1})
+        if ut and ut.get("status") != "active":
+            raise HTTPException(status_code=403,
+                                detail="Votre entreprise est suspendue. Contactez Logitrak.")
+    else:
+        if not tenant:
+            raise HTTPException(
+                status_code=403,
+                detail="Votre entreprise n'est pas encore activée sur le Journal de bord. Contactez Logitrak.")
         user = {
             "id": str(uuid.uuid4()),
             "email": email,
             "name": name,
             "role": "driver",
+            "tenant_id": tenant["id"],
             "password_hash": None,
             "auth_origin": "navixy",
             "navixy_user_id": info.get("id"),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.users.insert_one(dict(user))
-    elif not user.get("navixy_user_id") and info.get("id"):
+    if not user.get("navixy_user_id") and info.get("id"):
         await db.users.update_one({"id": user["id"]}, {"$set": {"navixy_user_id": info.get("id")}})
 
     access = create_access_token(user["id"], user["email"], user["role"])
@@ -206,14 +234,21 @@ async def navixy_sso(payload: NavixySsoIn, response: Response):
     _set_auth_cookies(response, access, refresh)
     user.pop("_id", None)
     user.pop("password_hash", None)
+    from app.audit import log_audit
+    await log_audit("auth.sso", user, {"navixy_user_id": info.get("id")},
+                    tenant_id=user.get("tenant_id"))
     return {"user": user, "access_token": access, "refresh_token": refresh}
 
 
 @router.post("/register")
 async def register(payload: RegisterIn, response: Response, current=Depends(require_roles("admin"))):
     from app.db import get_db
+    from app.tenant_context import get_effective_tenant_id
     import uuid
     db = get_db()
+    tenant_id = get_effective_tenant_id()
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Sélectionnez d'abord un client")
     email = payload.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email déjà utilisé")
@@ -222,12 +257,15 @@ async def register(payload: RegisterIn, response: Response, current=Depends(requ
         "email": email,
         "name": payload.name,
         "role": payload.role,
+        "tenant_id": tenant_id,
         "password_hash": hash_password(payload.password),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user)
     user.pop("_id", None)
     user.pop("password_hash", None)
+    from app.audit import log_audit
+    await log_audit("user.create", current, {"email": email, "role": payload.role})
     return {"user": user}
 
 
@@ -314,9 +352,14 @@ async def list_users(current=Depends(require_roles("admin"))):
     Excludes the password hash from the response.
     """
     from app.db import get_db
+    from app.tenant_context import get_effective_tenant_id
     db = get_db()
+    q = {}
+    tid = get_effective_tenant_id() if current.get("role") == "superadmin" else (current.get("tenant_id") or "default")
+    if tid:
+        q["tenant_id"] = tid
     rows = await db.users.find(
-        {}, {"_id": 0, "password_hash": 0},
+        q, {"_id": 0, "password_hash": 0},
     ).to_list(1000)
     return rows
 
@@ -340,6 +383,7 @@ async def seed_admin():
                 "email": email,
                 "name": name,
                 "role": role,
+                "tenant_id": "default",
                 "password_hash": hash_password(password),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })

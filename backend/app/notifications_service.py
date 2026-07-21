@@ -272,7 +272,7 @@ async def dispatch(
     event: str,
     payload: dict[str, Any],
     *,
-    tenant_id: str = "default",
+    tenant_id: str | None = None,
     user_ids: list[str] | None = None,
     driver_ids: list[str] | None = None,
     role_filter: list[str] | None = None,
@@ -283,7 +283,9 @@ async def dispatch(
     audience drive the `role_filter` (admin gets admin events, etc.).
     """
     from app.db import get_db
+    from app.tenant_context import get_effective_tenant_id
     db = get_db()
+    tenant_id = tenant_id or get_effective_tenant_id() or "default"
 
     meta = EVENT_CATALOG.get(event)
     if not meta:

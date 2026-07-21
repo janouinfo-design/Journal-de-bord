@@ -16,10 +16,18 @@ class NavixyError(Exception):
 
 
 def _base_url() -> str:
+    from app.tenant_context import get_tenant_doc
+    t = get_tenant_doc()
+    if t and t.get("navixy_api_url"):
+        return t["navixy_api_url"].rstrip("/")
     return os.environ.get("NAVIXY_API_URL", "https://api.navixy.com/v2").rstrip("/")
 
 
 def _hash() -> str:
+    from app.tenant_context import get_tenant_doc
+    t = get_tenant_doc()
+    if t and t.get("navixy_hash"):
+        return t["navixy_hash"]
     h = os.environ.get("NAVIXY_HASH", "").strip()
     if not h:
         raise NavixyError("Clé d'intégration LOGITRAK non configurée")
@@ -27,6 +35,10 @@ def _hash() -> str:
 
 
 def is_configured() -> bool:
+    from app.tenant_context import get_tenant_doc, get_tenant_id
+    if get_tenant_id():
+        t = get_tenant_doc()
+        return bool(t and t.get("navixy_hash"))
     return bool(os.environ.get("NAVIXY_HASH", "").strip())
 
 

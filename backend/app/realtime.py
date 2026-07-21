@@ -37,7 +37,10 @@ class _Broadcaster:
         async with self._lock:
             self._rooms.get(tenant_id, set()).discard(ws)
 
-    async def publish(self, msg_type: str, data: dict, tenant_id: str = "default") -> None:
+    async def publish(self, msg_type: str, data: dict, tenant_id: str | None = None) -> None:
+        if tenant_id is None:
+            from app.tenant_context import get_tenant_id
+            tenant_id = get_tenant_id() or "default"
         payload = json.dumps({
             "type": msg_type,
             "data": data,

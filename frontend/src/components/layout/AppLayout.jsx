@@ -1,4 +1,8 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate, Navigate } from "react-router-dom";
+
+function NavigateToAdmin() {
+  return <Navigate to="/admin/clients" replace />;
+}
 import { useAuth } from "@/contexts/AuthContext";
 import { TEST_IDS } from "@/constants/testIds";
 import {
@@ -10,14 +14,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   LayoutDashboard, Briefcase, ShieldAlert, Bluetooth, Receipt,
-  Settings, Smartphone, LogOut, Layers,
+  Settings, Smartphone, LogOut, Layers, Building2, Users, ScrollText,
 } from "lucide-react";
 import ConflictInbox from "@/components/livre/ConflictInbox";
+import TenantSwitcher from "@/components/layout/TenantSwitcher";
 
 const ROLE_LABEL = {
   admin: "Administrateur",
   manager: "Gestionnaire flotte",
   driver: "Chauffeur",
+  superadmin: "Super Admin Logitrak",
 };
 
 // Horizontal top-nav tabs. Each item can be restricted by role. When null/undefined
@@ -33,6 +39,9 @@ const TABS = [
   { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console" },
   { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager"] },
   { to: "/livre/settings",        label: "Paramètres",      icon: Settings,        testId: TEST_IDS.layout.navSettings, roles: ["admin", "manager"] },
+  { to: "/admin/clients",         label: "Clients",         icon: Building2,       testId: "nav-admin-tenants", roles: ["superadmin"] },
+  { to: "/admin/utilisateurs",    label: "Utilisateurs",    icon: Users,           testId: "nav-admin-users",   roles: ["superadmin"] },
+  { to: "/admin/audit",           label: "Audit",           icon: ScrollText,      testId: "nav-admin-audit",   roles: ["superadmin"] },
 ];
 
 export default function AppLayout() {
@@ -41,11 +50,28 @@ export default function AppLayout() {
   const initials = (user?.name || user?.email || "?")
     .split(" ").map((s) => s[0]).slice(0, 2).join("").toUpperCase();
 
+  // Superadmin sans client sélectionné → redirection vers l'écran Clients
+  const needsAdminRedirect =
+    user?.role === "superadmin" &&
+    !localStorage.getItem("sa_tenant_id") &&
+    window.location.pathname.startsWith("/livre");
+  if (needsAdminRedirect) {
+    return <NavigateToAdmin />;
+  }
+
   function onLogout() { logout(); navigate("/login"); }
 
-  const visibleTabs = TABS.filter(
-    (t) => !t.roles || t.roles.includes(user?.role),
-  );
+  const isSuperAdmin = user?.role === "superadmin";
+  const saTenant = isSuperAdmin ? localStorage.getItem("sa_tenant_id") : null;
+
+  const visibleTabs = TABS.filter((t) => {
+    if (isSuperAdmin) {
+      if (t.roles?.includes("superadmin")) return true;
+      // Onglets métier visibles seulement quand un client est sélectionné
+      return !!saTenant && (!t.roles || t.roles.includes("admin"));
+    }
+    return !t.roles || t.roles.includes(user?.role);
+  });
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F4F6F8] font-[IBM_Plex_Sans,sans-serif]">
@@ -69,8 +95,9 @@ export default function AppLayout() {
             </div>
           </div>
 
-          {/* Right actions: conflict inbox + user menu */}
+          {/* Right actions: tenant switcher (superadmin) + conflict inbox + user menu */}
           <div className="flex items-center gap-3">
+            {isSuperAdmin && <TenantSwitcher />}
             {(user?.role === "admin" || user?.role === "manager") && <ConflictInbox />}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
