@@ -148,6 +148,38 @@ async def update_tenant(tenant_id: str, payload: TenantUpdate, current=Depends(r
     return _tenant_out(fresh)
 
 
+@router.post("/tenants/{tenant_id}/sync")
+async def sync_tenant_now(tenant_id: str, current=Depends(require_superadmin)):
+    """Déclenche manuellement la synchronisation Navixy d'un client."""
+    from app.navixy_sync import sync_navixy
+    from app.tenant_context import set_current_tenant, reset_current_tenant
+
+    db = get_raw_db()
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(404, "Client introuvable")
+    if not tenant.get("navixy_hash"):
+        raise HTTPException(400, "Aucune clé API Navixy configurée pour ce client")
+
+    started = datetime.now(timezone.utc).isoformat()
+    token = set_current_tenant(tenant_id)
+    try:
+        result = await sync_navixy(days=7, force_reclassify=True)
+    except Exception as e:
+        result = {"error": str(e)}
+    finally:
+        reset_current_tenant(token)
+
+    await db.tenants.update_one(
+        {"id": tenant_id},
+        {"$set": {"last_sync_at": started, "last_sync_result": result}})
+    await log_audit("tenant.sync_manual", current,
+                    {"result": "error" if result.get("error") else "ok"}, tenant_id=tenant_id)
+    if result.get("error"):
+        raise HTTPException(502, f"Échec de synchronisation : {result['error']}")
+    return {"tenant_id": tenant_id, "last_sync_at": started, "result": result}
+
+
 # ---------- Utilisateurs ----------
 class UserIn(BaseModel):
     email: EmailStr

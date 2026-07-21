@@ -534,3 +534,7 @@ affectation manuelle, droits par rôle.
 - SSO Navixy multi-tenant: mapping via master.id -> tenant; entreprise inconnue = 403
 - Sync scheduler par tenant (chaque tenant avec sa cle Navixy); audit: auth.login/login_failed/sso, fine.export, report.export, settings.update, tenant.*, user.*
 - Deploiement VPS: SUPERADMIN_EMAIL/PASSWORD ajoutes a .env.example + docker-compose.yml
+
+## Tableau Sante Clients (21 juil. 2026)
+- POST /api/admin/tenants/{id}/sync : sync manuelle par tenant (superadmin), stocke last_sync_at/result, audit tenant.sync_manual
+- AdminTenantsPage: colonne Synchro Navixy (badges OK/Echec/Jamais/Cle non configuree), banniere alerte rouge si echec, bouton relance par client

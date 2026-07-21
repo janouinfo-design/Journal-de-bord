@@ -8,9 +8,16 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Building2, Plus, Pencil, KeyRound } from "lucide-react";
+import { Building2, Plus, Pencil, KeyRound, RefreshCw, AlertTriangle } from "lucide-react";
 
 const EMPTY = { name: "", navixy_hash: "" };
+
+function syncHealth(t) {
+  if (!t.has_navixy_hash) return { code: "no_key", label: "Clé non configurée", cls: "bg-amber-100 text-amber-700" };
+  if (!t.last_sync_at) return { code: "never", label: "Jamais synchronisé", cls: "bg-slate-100 text-slate-500" };
+  if (t.last_sync_result?.error) return { code: "error", label: "Échec", cls: "bg-red-100 text-red-700" };
+  return { code: "ok", label: "OK", cls: "bg-emerald-100 text-emerald-700" };
+}
 
 export default function AdminTenantsPage() {
   const [tenants, setTenants] = useState([]);
@@ -18,6 +25,21 @@ export default function AdminTenantsPage() {
   const [dialog, setDialog] = useState(null); // {mode:'create'|'edit', tenant?}
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(null);
+
+  async function syncNow(t) {
+    setSyncing(t.id);
+    try {
+      const { data } = await api.post(`/admin/tenants/${t.id}/sync`);
+      const r = data.result || {};
+      toast.success(`Synchro « ${t.name} » OK — ${r.trackers ?? 0} véhicules, ${(r.trips_new ?? 0) + (r.trips_updated ?? 0)} trajets`);
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+    } finally {
+      setSyncing(null);
+      load();
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -87,6 +109,18 @@ export default function AdminTenantsPage() {
         </Button>
       </div>
 
+      {tenants.some((t) => syncHealth(t).code === "error") && (
+        <div data-testid="sync-alert-banner"
+             className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            Synchronisation Navixy en échec pour :{" "}
+            <strong>{tenants.filter((t) => syncHealth(t).code === "error").map((t) => t.name).join(", ")}</strong>
+            {" "}— vérifiez la clé API ou relancez manuellement.
+          </span>
+        </div>
+      )}
+
       <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -98,7 +132,7 @@ export default function AdminTenantsPage() {
               <th className="px-4 py-3">Utilisateurs</th>
               <th className="px-4 py-3">Véhicules</th>
               <th className="px-4 py-3">Trajets</th>
-              <th className="px-4 py-3">Dernière sync</th>
+              <th className="px-4 py-3">Synchro Navixy</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
@@ -126,7 +160,36 @@ export default function AdminTenantsPage() {
                 <td className="px-4 py-3">{t.stats?.users ?? 0}</td>
                 <td className="px-4 py-3">{t.stats?.vehicles ?? 0}</td>
                 <td className="px-4 py-3">{t.stats?.trips ?? 0}</td>
-                <td className="px-4 py-3 text-xs text-slate-500">{t.last_sync_at ? fmtDateTime(t.last_sync_at) : "—"}</td>
+                <td className="px-4 py-3">
+                  {(() => {
+                    const h = syncHealth(t);
+                    return (
+                      <div className="flex items-center gap-2">
+                        <span data-testid={`sync-status-${t.id}`}
+                              className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${h.cls}`}
+                              title={h.code === "error" ? String(t.last_sync_result?.error || "") : undefined}>
+                          {h.label}
+                        </span>
+                        <span className="text-[11px] text-slate-400 whitespace-nowrap">
+                          {t.last_sync_at ? fmtDateTime(t.last_sync_at) : ""}
+                        </span>
+                        {t.has_navixy_hash && (
+                          <Button data-testid={`sync-now-${t.id}`} variant="ghost" size="sm"
+                                  className="h-7 px-1.5" disabled={syncing === t.id}
+                                  onClick={() => syncNow(t)} title="Synchroniser maintenant">
+                            <RefreshCw className={`w-3.5 h-3.5 ${syncing === t.id ? "animate-spin" : ""}`} />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {syncHealth(t).code === "error" && (
+                    <p className="mt-1 text-[11px] text-red-600 max-w-[260px] truncate"
+                       title={String(t.last_sync_result?.error || "")}>
+                      {String(t.last_sync_result?.error || "")}
+                    </p>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
                   <Button data-testid={`tenant-edit-${t.id}`} variant="ghost" size="sm" onClick={() => openEdit(t)}>
                     <Pencil className="w-4 h-4" />
