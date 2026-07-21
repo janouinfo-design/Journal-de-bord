@@ -56,7 +56,7 @@ cd /opt/apps/journal-logitrak
 mkdir -p data/storage backups logs
 
 # 1.3 Créer le fichier d'environnement à partir du modèle
-cp .env.example .env
+cp env.example .env
 chmod 600 .env
 nano .env
 ```

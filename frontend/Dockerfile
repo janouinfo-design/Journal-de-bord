@@ -1,8 +1,9 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile --network-timeout 300000
+COPY package.json yarn.lock* yarn.lock.prod* ./
+RUN if [ ! -f yarn.lock ] && [ -f yarn.lock.prod ]; then mv yarn.lock.prod yarn.lock; fi \
+    && yarn install --frozen-lockfile --network-timeout 300000
 
 COPY . .
 
