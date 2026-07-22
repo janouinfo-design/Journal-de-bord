@@ -16,6 +16,8 @@ import DriverFinesPage from "@/pages/DriverFinesPage";
 import AdministrationLayout from "@/pages/AdministrationLayout";
 import TeamUsersPage from "@/pages/TeamUsersPage";
 import TeamDriversPage from "@/pages/TeamDriversPage";
+import TeamImpersonationPage from "@/pages/TeamImpersonationPage";
+import InvitationPage from "@/pages/InvitationPage";
 import AdminTenantsPage from "@/pages/AdminTenantsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import AdminAuditPage from "@/pages/AdminAuditPage";
@@ -29,6 +31,7 @@ function App() {
         <ImpersonationBanner />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/invitation" element={<InvitationPage />} />
           <Route
             path="/livre"
             element={
@@ -64,10 +67,19 @@ function App() {
               <Route index element={<Navigate to="/livre/administration/utilisateurs" replace />} />
               <Route path="utilisateurs" element={<TeamUsersPage />} />
               <Route path="chauffeurs" element={<TeamDriversPage />} />
+              <Route path="apercus" element={<TeamImpersonationPage />} />
             </Route>
-            <Route path="settings" element={<SettingsPage />} />
+            <Route path="settings" element={
+              <ProtectedRoute roles={["admin", "manager"]}>
+                <SettingsPage />
+              </ProtectedRoute>
+            } />
           </Route>
-          <Route path="/driver" element={<ProtectedRoute><DriverConsolePage /></ProtectedRoute>} />
+          <Route path="/driver" element={
+            <ProtectedRoute roles={["admin", "manager", "driver"]}>
+              <DriverConsolePage />
+            </ProtectedRoute>
+          } />
           <Route
             path="/admin"
             element={

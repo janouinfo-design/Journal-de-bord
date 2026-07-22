@@ -23,6 +23,7 @@ const ROLE_LABEL = {
   admin: "Administrateur",
   manager: "Gestionnaire flotte",
   driver: "Chauffeur",
+  lecture_seule: "Lecture seule",
   superadmin: "Super Admin Logitrak",
 };
 
@@ -30,14 +31,14 @@ const ROLE_LABEL = {
 // the item is visible to everyone.
 const TABS = [
   { to: "/livre/dashboard",       label: "Tableau de bord", icon: LayoutDashboard, testId: "nav-dashboard" },
-  { to: "/livre/history/pro",     label: "Historique",      icon: Briefcase,       testId: "nav-history",       roles: ["admin", "manager"],
+  { to: "/livre/history/pro",     label: "Historique",      icon: Briefcase,       testId: "nav-history",       roles: ["admin", "manager", "lecture_seule"],
     matchPrefix: "/livre/history" },
-  { to: "/livre/amendes",         label: "Amendes",         icon: ShieldAlert,     testId: "nav-fines",         roles: ["admin", "manager"],
+  { to: "/livre/amendes",         label: "Amendes",         icon: ShieldAlert,     testId: "nav-fines",         roles: ["admin", "manager", "lecture_seule"],
     matchPrefix: "/livre/amendes" },
   { to: "/livre/mes-amendes",     label: "Mes amendes",     icon: ShieldAlert,     testId: "nav-my-fines",      roles: ["driver"] },
   { to: "/livre/identification",  label: "Identification",  icon: Bluetooth,       testId: "nav-identification", roles: ["admin", "manager"] },
-  { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console" },
-  { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager"] },
+  { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console", roles: ["admin", "manager", "driver"] },
+  { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager", "lecture_seule"] },
   { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration", roles: ["admin"] },
   { to: "/livre/settings",        label: "Paramètres",      icon: Settings,        testId: TEST_IDS.layout.navSettings, roles: ["admin", "manager"] },
   { to: "/admin/clients",         label: "Clients",         icon: Building2,       testId: "nav-admin-tenants", roles: ["superadmin"] },

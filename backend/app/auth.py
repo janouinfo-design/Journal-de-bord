@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr
 JWT_ALGORITHM = "HS256"
 ACCESS_TTL_MIN = 60 * 24  # 1 day for convenience
 REFRESH_TTL_DAYS = 7
+IMP_ACCESS_TTL_MIN = 60  # durée max d'une session d'aperçu « Se connecter comme… »
 
 
 def _secret() -> str:
@@ -23,12 +24,13 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
-def create_access_token(user_id: str, email: str, role: str, extra_claims: dict | None = None) -> str:
+def create_access_token(user_id: str, email: str, role: str, extra_claims: dict | None = None,
+                        ttl_minutes: int | None = None) -> str:
     payload = {
         "sub": user_id,
         "email": email,
         "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TTL_MIN),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes or ACCESS_TTL_MIN),
         "type": "access",
     }
     if extra_claims:
@@ -75,6 +77,11 @@ async def get_current_user(request: Request):
         user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
             raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+        # Rôle « Lecture seule » : blocage serveur de toute action d'écriture
+        if user.get("role") == "lecture_seule" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            _p = request.url.path
+            if not any(_p.endswith(s) for s in ("/auth/logout", "/auth/refresh", "/auth/impersonate/end")):
+                raise HTTPException(status_code=403, detail="Compte en lecture seule — action non autorisée")
         if payload.get("imp"):
             user["impersonated_by"] = {
                 "user_id": payload.get("imp_actor_id"),
@@ -269,8 +276,13 @@ async def impersonate_exchange(payload: ImpersonateExchangeIn, request: Request)
     th = hashlib.sha256(payload.token.encode()).hexdigest()
     rec = await db.impersonation_tokens.find_one({"token_hash": th})
     now = datetime.now(timezone.utc)
-    if (not rec or rec.get("used")
-            or datetime.fromisoformat(rec["expires_at"]) < now):
+    if not rec:
+        raise HTTPException(status_code=401, detail="Lien d'aperçu invalide ou expiré")
+    if rec.get("used"):
+        await db.impersonation_tokens.update_one({"id": rec["id"]}, {"$inc": {"replay_attempts": 1}})
+        raise HTTPException(status_code=401, detail="Lien d'aperçu invalide ou expiré")
+    if datetime.fromisoformat(rec["expires_at"]) < now:
+        await db.impersonation_tokens.update_one({"id": rec["id"]}, {"$set": {"denied_at": now.isoformat()}})
         raise HTTPException(status_code=401, detail="Lien d'aperçu invalide ou expiré")
     await db.impersonation_tokens.update_one(
         {"id": rec["id"]}, {"$set": {"used": True, "used_at": now.isoformat()}})
@@ -287,7 +299,8 @@ async def impersonate_exchange(payload: ImpersonateExchangeIn, request: Request)
             "imp_actor_email": rec["actor_email"],
             "imp_session_id": rec["id"],
             "auth_source": rec["auth_source"],
-        })
+        },
+        ttl_minutes=IMP_ACCESS_TTL_MIN)
     from app.audit import log_audit
     await log_audit("user.impersonate_open",
                     {"id": rec["actor_user_id"], "email": rec["actor_email"],
@@ -312,10 +325,82 @@ async def impersonate_end(request: Request, user=Depends(get_current_user)):
     imp = user.get("impersonated_by")
     if imp:
         from app.audit import log_audit
+        from app.db import get_raw_db
         await log_audit("user.impersonate_end", user,
                         {"actor": imp.get("email"), "session_id": imp.get("session_id"),
                          "ip": request.client.host if request.client else None})
+        if imp.get("session_id"):
+            await get_raw_db().impersonation_tokens.update_one(
+                {"id": imp["session_id"]},
+                {"$set": {"ended_at": datetime.now(timezone.utc).isoformat()}})
     return {"ended": True}
+
+
+# ===== Invitations chauffeur — liens publics de création de mot de passe =====
+@router.get("/invitation/{token}")
+async def invitation_info(token: str):
+    import hashlib
+    from app.db import get_raw_db
+    db = get_raw_db()
+    th = hashlib.sha256(token.encode()).hexdigest()
+    rec = await db.invitations.find_one({"token_hash": th}, {"_id": 0})
+    now = datetime.now(timezone.utc)
+    if (not rec or rec.get("used")
+            or datetime.fromisoformat(rec["expires_at"]) < now):
+        raise HTTPException(status_code=404, detail="Invitation invalide ou expirée")
+    tenant = await db.tenants.find_one({"id": rec["tenant_id"]}, {"_id": 0, "name": 1})
+    return {"driver_name": rec.get("driver_name"), "email": rec["email"],
+            "company": (tenant or {}).get("name") or "Logitrak"}
+
+
+class InvitationAcceptIn(BaseModel):
+    password: str
+
+
+@router.post("/invitation/{token}/accept")
+async def invitation_accept(token: str, payload: InvitationAcceptIn, response: Response):
+    import hashlib
+    import uuid
+    from app.db import get_raw_db
+    db = get_raw_db()
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 8 caractères")
+    th = hashlib.sha256(token.encode()).hexdigest()
+    rec = await db.invitations.find_one({"token_hash": th}, {"_id": 0})
+    now = datetime.now(timezone.utc)
+    if (not rec or rec.get("used")
+            or datetime.fromisoformat(rec["expires_at"]) < now):
+        raise HTTPException(status_code=404, detail="Invitation invalide ou expirée")
+    driver = await db.drivers.find_one({"id": rec["driver_id"], "tenant_id": rec["tenant_id"]}, {"_id": 0})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Chauffeur introuvable")
+    if driver.get("user_id"):
+        raise HTTPException(status_code=400, detail="Ce chauffeur a déjà un compte actif")
+    email = rec["email"].lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400,
+                            detail="Un compte existe déjà avec cet email — contactez votre administrateur")
+    user = {
+        "id": str(uuid.uuid4()), "email": email,
+        "name": driver.get("name") or rec.get("driver_name") or email,
+        "role": "driver", "tenant_id": rec["tenant_id"], "driver_id": rec["driver_id"],
+        "password_hash": hash_password(payload.password),
+        "auth_origin": "invitation",
+        "created_at": now.isoformat(),
+    }
+    await db.users.insert_one(dict(user))
+    await db.drivers.update_one({"id": rec["driver_id"], "tenant_id": rec["tenant_id"]},
+                                {"$set": {"user_id": user["id"], "email": driver.get("email") or email}})
+    await db.invitations.update_one({"id": rec["id"]}, {"$set": {"used": True, "used_at": now.isoformat()}})
+    user.pop("password_hash", None)
+    from app.audit import log_audit
+    await log_audit("driver.invite_accepted", user,
+                    {"driver": driver.get("name"), "invited_by": rec.get("invited_by")},
+                    tenant_id=rec["tenant_id"])
+    access = create_access_token(user["id"], user["email"], user["role"])
+    refresh = create_refresh_token(user["id"])
+    _set_auth_cookies(response, access, refresh)
+    return {"user": user, "access_token": access}
 
 
 @router.post("/register")
@@ -327,8 +412,8 @@ async def register(payload: RegisterIn, response: Response, current=Depends(requ
     tenant_id = get_effective_tenant_id()
     if not tenant_id:
         raise HTTPException(status_code=400, detail="Sélectionnez d'abord un client")
-    if payload.role not in ("admin", "manager", "driver"):
-        raise HTTPException(status_code=400, detail="Rôle invalide (admin, manager, driver)")
+    if payload.role not in ("admin", "manager", "driver", "lecture_seule"):
+        raise HTTPException(status_code=400, detail="Rôle invalide (admin, manager, driver, lecture_seule)")
     email = payload.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email déjà utilisé")

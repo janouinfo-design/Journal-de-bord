@@ -1,0 +1,58 @@
+{
+  "summary": "Iteration 18 — Rôle lecture seule, invitation chauffeur par email, historique aperçus (avec motif). Backend: 25/26 pytest OK sur /app/backend/tests/test_iteration18_readonly_invite.py. Frontend smoke via Playwright: OK sur lecture seule (4 onglets, boutons fines-create/fines-edit-* absents), /livre/settings redirige vers /livre/dashboard, page /invitation gère bien token invalide/absent, page Aperçus affiche 30 sessions avec toutes les colonnes et filtres (actor/target/role/status/from/to) + colonne Motif remplie ('Test historique #42', TEST_REASON_*), dialog invitation chauffeur avec 2 modes (invite/manuel) fonctionne. 1 BUG BACKEND détecté (voir critical).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/livre/team/drivers",
+        "issue": "Le champ `pending_invitation` N'EST PAS peuplé dans la réponse. La spec exige : « Invitations listées dans GET /team/drivers via champ pending_invitation ». Résultat : le frontend (TeamDriversPage.jsx lignes 70/173/177 qui utilise `d.pending_invitation`) N'AFFICHERA JAMAIS le badge 'Invitation envoyée' (data-testid=driver-invited-{id}) ni le bouton 'Renvoyer' (driver-reinvite-{id}). Test créé : test_pending_invitation_exposed_in_drivers_list — FAILED. Confirmé côté UI : après avoir créé plusieurs invitations en attente, 0 badge driver-invited-* et 0 bouton driver-reinvite-* trouvés sur la page /livre/administration/chauffeurs.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Guard rôle lecture_seule",
+        "issue": "Navigation directe /livre/identification NE redirige PAS vers /dashboard (contrairement à /livre/settings qui redirige bien). La page reste sur /livre/identification et affiche 4 x 403 dans la console. Comportement fonctionnel (backend bloque) mais spec attend une redirection.",
+        "selector": "route /livre/identification pour role=lecture_seule",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Badge 'Invitation envoyée' sur page chauffeurs",
+        "issue": "Impossible d'afficher le badge après envoi d'invitation car backend ne renvoie pas pending_invitation. Cf. bug backend critical.",
+        "affected_selectors": ["driver-invited-{id}", "driver-reinvite-{id}"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration18_readonly_invite.py",
+    "/app/test_reports/pytest/iteration_18.xml"
+  ],
+  "action_items": [
+    "[HIGH] Backend team.team_list_drivers : peupler `pending_invitation` en cherchant dans db.invitations les enregistrements {driver_id, used:false, expires_at>now}. Exemple minimal : joindre les invitations pending par driver_id et exposer {email, expires_at, id} — le frontend est déjà prêt à consommer ce champ (TeamDriversPage.jsx utilise d.pending_invitation.email).",
+    "[LOW] Frontend : ajouter la redirection lecture_seule pour /livre/identification (comme déjà fait pour /livre/settings)."
+  ],
+  "critical_code_review_comments": [
+    "auth.py::get_current_user (ligne 80-84) — Guard lecture_seule global bien centralisé, whitelist path claire (logout/refresh/impersonate/end). Bon.",
+    "team.py::_imp_status — Logique des 5 statuts (denied/pending/expired/active/ended) claire et déterministe. Bon.",
+    "team.py::list_impersonation_sessions — Exclut correctement token_hash. Duration_seconds calculée aussi bien pour ended que active. Bon.",
+    "team.py::team_impersonate_user — payload optionnel (Optional[ImpersonateIn] = None) : bien rétrocompatible avec appels sans body (test_impersonate_accepts_empty_body OK).",
+    "team.py::team_list_drivers (ligne 256-268) — MANQUE : ne peuple pas pending_invitation. Ajouter aggregation avec db.invitations filtré sur used=false et expires_at futur.",
+    "auth.py::invitation_accept — Vérifie password >=8, driver.user_id vide, email pas déjà pris, pose bien cookies + retour access_token. Idempotence par used flag. Bon.",
+    "emailer.py::is_smtp_configured — Check bien SMTP_HOST + SMTP_FROM. Non configuré en preview → email_sent=false comme attendu."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration18_readonly_invite.py (nouveau, 26 tests)"
+  ],
+  "success_rate": {"backend": "96% (25/26)", "frontend": "~90% (readonly nav OK, invitation error page OK, apercus page OK, drivers dialog OK; 1 gap redirection /livre/identification + bug badge invitation)"},
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123, lecture@logitrak.ch/lecture123, superadmin@logitrak.ch/superadmin123, admin-b@test.ch/testb123",
+  "seed_data_creation": "Test crée des chauffeurs TEST_INV_*/TEST_PEND_* + users test@client.ch temporaires. Tous les users sont supprimés via DELETE /team/users et les chauffeurs sont désactivés (active=false) en teardown. Quelques chauffeurs de test peuvent rester en state inactif (pas de DELETE endpoint pour les drivers). Paul Test, lecture@logitrak.ch, invite.test@client.ch et Invite Test préservés.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Le bug pending_invitation est isolé dans team.py::team_list_drivers — dès qu'il est corrigé, relancer test_pending_invitation_exposed_in_drivers_list. Le frontend attend `d.pending_invitation.email` (voir TeamDriversPage.jsx:70,173,177). test_iteration18_readonly_invite.py est complet pour régression. Attention aux timeouts intermittents sur le tunnel preview (login retry ×3 déjà en place).",
+  "rca of the issue": "Bug pending_invitation : le code de team_list_drivers ne joint que la collection `users` pour peupler `account`, mais ignore la collection `invitations`. La spec exige de retourner aussi les invitations en attente. Fix trivial (10 lignes) : after récupération des drivers, faire `raw.invitations.find({tenant_id, driver_id: {$in: [...]}, used: False, expires_at: {$gt: now.isoformat()}})` puis mapper par driver_id."
+}

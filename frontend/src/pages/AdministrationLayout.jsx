@@ -1,6 +1,6 @@
 import { Outlet } from "react-router-dom";
 import SubTabs from "@/components/layout/SubTabs";
-import { Users, IdCard } from "lucide-react";
+import { Users, IdCard, Eye } from "lucide-react";
 
 export default function AdministrationLayout() {
   return (
@@ -16,6 +16,7 @@ export default function AdministrationLayout() {
       <SubTabs tabs={[
         { to: "/livre/administration/utilisateurs", label: "Utilisateurs", icon: Users, testId: "subtab-team-users" },
         { to: "/livre/administration/chauffeurs", label: "Chauffeurs", icon: IdCard, testId: "subtab-team-drivers" },
+        { to: "/livre/administration/apercus", label: "Aperçus", icon: Eye, testId: "subtab-team-impersonation" },
       ]} />
       <Outlet />
     </div>

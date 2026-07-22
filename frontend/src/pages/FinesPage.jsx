@@ -42,6 +42,7 @@ const DEFAULT_FILTERS = {
 export default function FinesPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const canEdit = user?.role === "admin" || user?.role === "manager";
   const [rows, setRows] = useState([]);
   const [totals, setTotals] = useState({ total_amount: 0, paid_amount: 0, open_amount: 0 });
   const [total, setTotal] = useState(0);
@@ -180,10 +181,12 @@ export default function FinesPage() {
                   data-testid="fines-refresh" className="h-9">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           </Button>
-          <Button onClick={openCreate} data-testid="fines-create"
-                  className="bg-[#2196F3] hover:bg-[#1976D2] text-white h-9">
-            <Plus className="w-4 h-4 mr-1.5" /> Nouvelle amende
-          </Button>
+          {canEdit && (
+            <Button onClick={openCreate} data-testid="fines-create"
+                    className="bg-[#2196F3] hover:bg-[#1976D2] text-white h-9">
+              <Plus className="w-4 h-4 mr-1.5" /> Nouvelle amende
+            </Button>
+          )}
         </div>
       </div>
 
@@ -342,11 +345,13 @@ export default function FinesPage() {
                           </span>
                         </td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(r.id)}
-                                  data-testid={`fines-edit-${r.id}`}
-                                  className="h-7 w-7 p-0 text-slate-500 hover:text-[#2196F3]">
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
+                          {canEdit && (
+                            <Button variant="ghost" size="sm" onClick={() => openEdit(r.id)}
+                                    data-testid={`fines-edit-${r.id}`}
+                                    className="h-7 w-7 p-0 text-slate-500 hover:text-[#2196F3]">
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                           {isAdmin && (
                             <Button variant="ghost" size="sm" onClick={() => onDelete(r)}
                                     data-testid={`fines-delete-${r.id}`}

@@ -3,21 +3,25 @@
 Réservé au rôle `admin` (de l'entreprise) — le superadmin y accède via impersonation.
 Toutes les données sont automatiquement scopées au tenant courant (proxy DB).
 """
+import hashlib
+import os
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
 from app.audit import log_audit
-from app.auth import get_current_user, require_roles, hash_password
+from app.auth import get_current_user, require_roles, hash_password, IMP_ACCESS_TTL_MIN
 from app.db import get_db, get_raw_db
+from app.emailer import is_smtp_configured, send_invitation_email
 from app.tenant_context import get_effective_tenant_id
 
 router = APIRouter(prefix="/team", tags=["team"])
 
-TEAM_ROLES = ("admin", "manager", "driver")
+TEAM_ROLES = ("admin", "manager", "driver", "lecture_seule")
 
 
 def _tenant_or_400() -> str:
@@ -122,14 +126,15 @@ async def team_delete_user(user_id: str, current=Depends(require_roles("admin"))
     return {"deleted": True, "id": user_id}
 
 
+class ImpersonateIn(BaseModel):
+    reason: Optional[str] = None
+
+
 @router.post("/users/{user_id}/impersonate")
 async def team_impersonate_user(user_id: str, request: Request,
+                                payload: Optional[ImpersonateIn] = None,
                                 current=Depends(require_roles("admin"))):
     """Génère un token d'aperçu à usage unique (60 s) pour « Se connecter comme… »."""
-    import hashlib
-    import secrets
-    from datetime import timedelta
-
     tid = _tenant_or_400()
     if current.get("impersonated_by"):
         raise HTTPException(403, "Impossible d'imbriquer les sessions d'aperçu")
@@ -149,12 +154,16 @@ async def team_impersonate_user(user_id: str, request: Request,
     now = datetime.now(timezone.utc)
     auth_source = ("super_admin_impersonation" if current.get("role") == "superadmin"
                    else "admin_client_impersonation")
+    reason = (payload.reason or "").strip() if payload else ""
     rec = {
         "id": str(uuid.uuid4()),
         "token_hash": hashlib.sha256(token.encode()).hexdigest(),
         "actor_user_id": current["id"], "actor_email": current["email"],
+        "actor_name": current.get("name"),
         "target_user_id": target["id"], "target_email": target["email"],
+        "target_name": target.get("name"), "target_role": target.get("role"),
         "tenant_id": tid, "auth_source": auth_source,
+        "reason": reason or None,
         "used": False,
         "created_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=60)).isoformat(),
@@ -164,9 +173,51 @@ async def team_impersonate_user(user_id: str, request: Request,
     await log_audit("user.impersonate_start", current,
                     {"target": target["email"], "target_role": target["role"],
                      "session_id": rec["id"], "auth_source": auth_source,
-                     "ip": rec["ip"]})
+                     "reason": reason or None, "ip": rec["ip"]})
     return {"token": token, "expires_in": 60,
             "target": {"name": target.get("name"), "email": target["email"], "role": target["role"]}}
+
+
+def _imp_status(rec: dict, now: datetime) -> str:
+    if rec.get("denied_at"):
+        return "denied"
+    if not rec.get("used"):
+        return "expired" if datetime.fromisoformat(rec["expires_at"]) < now else "pending"
+    if rec.get("ended_at"):
+        return "ended"
+    used_at = datetime.fromisoformat(rec["used_at"])
+    return "active" if used_at + timedelta(minutes=IMP_ACCESS_TTL_MIN) > now else "ended"
+
+
+@router.get("/impersonation-sessions")
+async def list_impersonation_sessions(tenant_id: Optional[str] = None,
+                                      current=Depends(require_roles("admin"))):
+    """Historique des sessions « Se connecter comme… » — lecture seule, non modifiable."""
+    raw = get_raw_db()
+    if current.get("role") == "superadmin":
+        if tenant_id == "all":
+            q = {}
+        elif tenant_id:
+            q = {"tenant_id": tenant_id}
+        else:
+            tid = get_effective_tenant_id()
+            q = {"tenant_id": tid} if tid else {}
+    else:
+        q = {"tenant_id": current.get("tenant_id") or "default"}
+    rows = await raw.impersonation_tokens.find(
+        q, {"_id": 0, "token_hash": 0}).sort("created_at", -1).to_list(500)
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        r["status"] = _imp_status(r, now)
+        if r.get("used_at") and r.get("ended_at"):
+            delta = datetime.fromisoformat(r["ended_at"]) - datetime.fromisoformat(r["used_at"])
+            r["duration_seconds"] = max(0, int(delta.total_seconds()))
+        elif r["status"] == "active":
+            delta = now - datetime.fromisoformat(r["used_at"])
+            r["duration_seconds"] = max(0, int(delta.total_seconds()))
+        else:
+            r["duration_seconds"] = None
+    return rows
 
 
 # ====================== CHAUFFEURS (personnes qui conduisent) ======================
@@ -279,6 +330,56 @@ async def grant_driver_access(driver_id: str, payload: GrantAccessIn,
     await db.drivers.update_one({"id": driver_id}, {"$set": {"user_id": user["id"], "email": driver.get("email") or email}})
     await log_audit("driver.grant_access", current, {"driver": driver.get("name"), "email": email})
     return {"driver_id": driver_id, "user_id": user["id"], "email": email}
+
+
+class InviteIn(BaseModel):
+    email: EmailStr
+
+
+@router.post("/drivers/{driver_id}/invite")
+async def invite_driver(driver_id: str, payload: InviteIn, request: Request,
+                        background_tasks: BackgroundTasks,
+                        current=Depends(require_roles("admin"))):
+    """Envoie une invitation par email (lien de création de mot de passe, valable 7 jours).
+    Si le SMTP n'est pas configuré, retourne le lien à copier manuellement."""
+    tid = _tenant_or_400()
+    db = get_db()
+    raw = get_raw_db()
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
+    if not driver:
+        raise HTTPException(404, "Chauffeur introuvable")
+    if driver.get("user_id"):
+        raise HTTPException(400, "Ce chauffeur a déjà un compte lié")
+    email = payload.email.lower()
+    if await raw.users.find_one({"email": email}):
+        raise HTTPException(400, "Email déjà utilisé — utilisez « Lier un compte existant »")
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    await raw.invitations.delete_many({"driver_id": driver_id, "used": False})
+    rec = {
+        "id": str(uuid.uuid4()),
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "driver_id": driver_id, "driver_name": driver.get("name"),
+        "tenant_id": tid, "email": email,
+        "invited_by": current["email"],
+        "used": False,
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(days=7)).isoformat(),
+    }
+    await raw.invitations.insert_one(dict(rec))
+
+    base = (os.environ.get("APP_URL") or request.headers.get("origin") or "").rstrip("/")
+    invite_url = f"{base}/invitation?token={token}"
+    email_sent = False
+    if is_smtp_configured():
+        tenant = await raw.tenants.find_one({"id": tid}, {"_id": 0, "name": 1})
+        background_tasks.add_task(send_invitation_email, email, driver.get("name") or email,
+                                  invite_url, (tenant or {}).get("name") or "Logitrak")
+        email_sent = True
+    await log_audit("driver.invite_sent", current,
+                    {"driver": driver.get("name"), "email": email, "email_sent": email_sent})
+    return {"invite_url": invite_url, "email_sent": email_sent, "email": email, "expires_days": 7}
 
 
 class LinkUserIn(BaseModel):

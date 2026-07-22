@@ -9,7 +9,8 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, KeySquare, Smartphone, Link2Off, Eye } from "lucide-react";
+import { Plus, Pencil, KeySquare, Smartphone, Link2Off, Eye, Copy, Send } from "lucide-react";
+import ImpersonateDialog from "@/components/livre/ImpersonateDialog";
 
 const EMPTY = {
   name: "", internal_number: "", phone: "", email: "", active: true,
@@ -22,6 +23,9 @@ export default function TeamDriversPage() {
   const [form, setForm] = useState(EMPTY);
   const [access, setAccess] = useState(null); // driver for grant-access dialog
   const [accessForm, setAccessForm] = useState({ email: "", password: "" });
+  const [accessMode, setAccessMode] = useState("invite"); // invite | manual
+  const [inviteResult, setInviteResult] = useState(null);
+  const [impTarget, setImpTarget] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -61,6 +65,13 @@ export default function TeamDriversPage() {
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
 
+  function openAccess(d) {
+    setAccess(d);
+    setAccessForm({ email: d.pending_invitation?.email || d.email || "", password: "" });
+    setAccessMode("invite");
+    setInviteResult(null);
+  }
+
   async function grantAccess() {
     setSaving(true);
     try {
@@ -72,11 +83,31 @@ export default function TeamDriversPage() {
     finally { setSaving(false); }
   }
 
-  async function impersonate(d) {
+  async function sendInvite() {
+    setSaving(true);
     try {
-      const { data } = await api.post(`/livre/team/users/${d.account.user_id}/impersonate`);
+      const { data } = await api.post(`/livre/team/drivers/${access.id}/invite`, { email: accessForm.email });
+      setInviteResult(data);
+      if (data.email_sent) toast.success(`Invitation envoyée à ${data.email}`);
+      else toast.info("Email non configuré — copiez le lien d'invitation ci-dessous");
+      load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  }
+
+  function copyInviteLink() {
+    navigator.clipboard.writeText(inviteResult.invite_url)
+      .then(() => toast.success("Lien copié dans le presse-papier"))
+      .catch(() => toast.error("Impossible de copier — sélectionnez le lien manuellement"));
+  }
+
+  async function impersonate(reason) {
+    const t = impTarget;
+    try {
+      const { data } = await api.post(`/livre/team/users/${t.userId}/impersonate`, { reason: reason || null });
       window.open(`/driver?imp_token=${encodeURIComponent(data.token)}`, "_blank");
-      toast.success(`Aperçu Console PWA ouvert — ${d.name}`);
+      toast.success(`Aperçu Console PWA ouvert — ${t.name}`);
+      setImpTarget(null);
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
 
@@ -139,9 +170,22 @@ export default function TeamDriversPage() {
                     <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
                       <Smartphone className="w-3.5 h-3.5" /> {d.account.email}
                     </span>
+                  ) : d.pending_invitation ? (
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                      <Badge data-testid={`driver-invited-${d.id}`}
+                             className="bg-amber-100 text-amber-700 hover:bg-amber-100"
+                             title={`Invitation envoyée à ${d.pending_invitation.email}`}>
+                        Invitation envoyée
+                      </Badge>
+                      <Button data-testid={`driver-reinvite-${d.id}`} variant="ghost" size="sm"
+                              className="h-6 px-1.5 text-[11px] text-slate-500"
+                              onClick={() => openAccess(d)}>
+                        Renvoyer
+                      </Button>
+                    </span>
                   ) : (
                     <Button data-testid={`driver-grant-${d.id}`} variant="outline" size="sm" className="h-7 text-xs"
-                            onClick={() => { setAccess(d); setAccessForm({ email: d.email || "", password: "" }); }}>
+                            onClick={() => openAccess(d)}>
                       <KeySquare className="w-3.5 h-3.5 mr-1" /> Activer
                     </Button>
                   )}
@@ -155,7 +199,7 @@ export default function TeamDriversPage() {
                     <Button data-testid={`driver-impersonate-${d.id}`} variant="ghost" size="sm"
                             className="text-sky-600"
                             title={`Ouvrir la Console PWA comme ${d.name} dans un nouvel onglet`}
-                            onClick={() => impersonate(d)}>
+                            onClick={() => setImpTarget({ name: d.name, email: d.account.email, userId: d.account.user_id })}>
                       <Eye className="w-4 h-4" />
                     </Button>
                   ) : (
@@ -237,36 +281,94 @@ export default function TeamDriversPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog accès PWA */}
+      {/* Dialog accès PWA — invitation email ou mot de passe manuel */}
       <Dialog open={!!access} onOpenChange={(o) => !o && setAccess(null)}>
         <DialogContent data-testid="driver-access-dialog">
           <DialogHeader>
             <DialogTitle>Activer l'accès PWA — {access?.name}</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-slate-500">
-            Crée un compte « chauffeur » lié : il verra uniquement ses trajets, sa classification et ses amendes.
-          </p>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <Label>Email de connexion</Label>
-              <Input data-testid="driver-access-email" type="email" value={accessForm.email}
-                     onChange={(e) => setAccessForm({ ...accessForm, email: e.target.value })} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Mot de passe</Label>
-              <Input data-testid="driver-access-password" type="password" value={accessForm.password}
-                     onChange={(e) => setAccessForm({ ...accessForm, password: e.target.value })} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAccess(null)}>Annuler</Button>
-            <Button data-testid="driver-access-save" onClick={grantAccess}
-                    disabled={saving || !accessForm.email || !accessForm.password}>
-              {saving ? "Activation…" : "Activer l'accès"}
+          <div className="flex gap-2">
+            <Button data-testid="driver-access-mode-invite" size="sm"
+                    variant={accessMode === "invite" ? "default" : "outline"}
+                    onClick={() => { setAccessMode("invite"); setInviteResult(null); }}>
+              <Send className="w-3.5 h-3.5 mr-1.5" /> Inviter par email
             </Button>
-          </DialogFooter>
+            <Button data-testid="driver-access-mode-manual" size="sm"
+                    variant={accessMode === "manual" ? "default" : "outline"}
+                    onClick={() => { setAccessMode("manual"); setInviteResult(null); }}>
+              <KeySquare className="w-3.5 h-3.5 mr-1.5" /> Mot de passe manuel
+            </Button>
+          </div>
+          {accessMode === "invite" ? (
+            <>
+              <p className="text-sm text-slate-500">
+                Le chauffeur recevra un lien de création de mot de passe (valable 7 jours, usage unique).
+                Il verra uniquement ses trajets, sa classification et ses amendes.
+              </p>
+              <div className="space-y-3 py-1">
+                <div className="space-y-1.5">
+                  <Label>Email du chauffeur</Label>
+                  <Input data-testid="driver-invite-email" type="email" value={accessForm.email}
+                         onChange={(e) => setAccessForm({ ...accessForm, email: e.target.value })} />
+                </div>
+                {inviteResult && (
+                  <div data-testid="driver-invite-result"
+                       className={`rounded-md border p-3 space-y-2 ${inviteResult.email_sent
+                         ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+                    <p className="text-xs font-medium text-slate-700">
+                      {inviteResult.email_sent
+                        ? `Email envoyé à ${inviteResult.email}. Lien de secours à copier si besoin :`
+                        : "Envoi d'email non configuré (SMTP) — copiez ce lien et transmettez-le au chauffeur :"}
+                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <Input readOnly value={inviteResult.invite_url} data-testid="driver-invite-link"
+                             className="h-8 text-[11px] font-mono bg-white" onFocus={(e) => e.target.select()} />
+                      <Button data-testid="driver-invite-copy" variant="outline" size="sm" className="h-8 shrink-0"
+                              onClick={copyInviteLink}>
+                        <Copy className="w-3.5 h-3.5 mr-1" /> Copier
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAccess(null)}>Fermer</Button>
+                <Button data-testid="driver-invite-send" onClick={sendInvite}
+                        disabled={saving || !accessForm.email}>
+                  {saving ? "Envoi…" : inviteResult ? "Renvoyer l'invitation" : "Envoyer l'invitation"}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-slate-500">
+                Crée immédiatement un compte « chauffeur » lié avec le mot de passe saisi ci-dessous.
+              </p>
+              <div className="space-y-3 py-1">
+                <div className="space-y-1.5">
+                  <Label>Email de connexion</Label>
+                  <Input data-testid="driver-access-email" type="email" value={accessForm.email}
+                         onChange={(e) => setAccessForm({ ...accessForm, email: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Mot de passe</Label>
+                  <Input data-testid="driver-access-password" type="password" value={accessForm.password}
+                         onChange={(e) => setAccessForm({ ...accessForm, password: e.target.value })} />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAccess(null)}>Annuler</Button>
+                <Button data-testid="driver-access-save" onClick={grantAccess}
+                        disabled={saving || !accessForm.email || !accessForm.password}>
+                  {saving ? "Activation…" : "Activer l'accès"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
+
+      <ImpersonateDialog target={impTarget} onOpenChange={setImpTarget} onConfirm={impersonate} />
     </div>
   );
 }

@@ -48,7 +48,8 @@ INFRACTION_TYPES = [
     "forbidden_zone", "phone", "seatbelt", "other",
 ]
 PRIORITIES = ["low", "normal", "high", "urgent"]
-ROLES_RW = ("admin", "manager")           # read + create + update
+# lecture_seule : accès GET uniquement (toute écriture est bloquée globalement dans get_current_user)
+ROLES_RW = ("admin", "manager", "lecture_seule")  # read + create + update
 ROLES_DELETE = ("admin",)                  # delete-only by admin
 
 DOCUMENT_KINDS = ("pdf", "photo", "courrier", "contestation", "preuve_paiement", "libre")

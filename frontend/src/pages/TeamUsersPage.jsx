@@ -35,7 +35,7 @@ export default function TeamUsersPage() {
   async function changeRole(u, role) {
     try {
       await api.patch(`/livre/team/users/${u.id}`, { role });
-      toast.success(`${u.email} → ${role === "admin" ? "Admin" : role === "manager" ? "Gestionnaire" : "Chauffeur"}`);
+      toast.success(`${u.email} → ${ROLE_LABEL[role] || role}`);
       load();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
@@ -49,12 +49,14 @@ export default function TeamUsersPage() {
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
 
-  async function impersonate(u) {
+  async function impersonate(reason) {
+    const u = impTarget;
     try {
-      const { data } = await api.post(`/livre/team/users/${u.id}/impersonate`);
+      const { data } = await api.post(`/livre/team/users/${u.id}/impersonate`, { reason: reason || null });
       const path = u.role === "driver" ? "/driver" : "/livre/dashboard";
       window.open(`${path}?imp_token=${encodeURIComponent(data.token)}`, "_blank");
       toast.success(`Aperçu ouvert dans un nouvel onglet — ${u.name || u.email}`);
+      setImpTarget(null);
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
 
@@ -105,6 +107,7 @@ export default function TeamUsersPage() {
                       <SelectItem value="admin">Admin</SelectItem>
                       <SelectItem value="manager">Gestionnaire</SelectItem>
                       <SelectItem value="driver">Chauffeur</SelectItem>
+                      <SelectItem value="lecture_seule">Lecture seule</SelectItem>
                     </SelectContent>
                   </Select>
                 </td>
@@ -124,7 +127,7 @@ export default function TeamUsersPage() {
                     <Button data-testid={`team-user-impersonate-${u.email}`} variant="ghost" size="sm"
                             className="text-sky-600"
                             title={`Ouvrir l'application comme ${u.name || u.email} dans un nouvel onglet`}
-                            onClick={() => impersonate(u)}>
+                            onClick={() => setImpTarget(u)}>
                       <Eye className="w-4 h-4" />
                     </Button>
                   )}
@@ -169,6 +172,7 @@ export default function TeamUsersPage() {
                     <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="manager">Gestionnaire</SelectItem>
                     <SelectItem value="driver">Chauffeur</SelectItem>
+                    <SelectItem value="lecture_seule">Lecture seule</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -183,6 +187,8 @@ export default function TeamUsersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ImpersonateDialog target={impTarget} onOpenChange={setImpTarget} onConfirm={impersonate} />
     </div>
   );
 }

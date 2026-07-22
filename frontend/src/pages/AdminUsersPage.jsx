@@ -11,8 +11,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Users, Plus, Trash2, Eye } from "lucide-react";
+import ImpersonateDialog from "@/components/livre/ImpersonateDialog";
 
-const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", superadmin: "Super Admin" };
+const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", lecture_seule: "Lecture seule", superadmin: "Super Admin" };
 const EMPTY = { email: "", name: "", password: "", role: "driver", tenant_id: "" };
 
 export default function AdminUsersPage() {
@@ -22,6 +23,7 @@ export default function AdminUsersPage() {
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [impTarget, setImpTarget] = useState(null);
 
   const tenantName = (tid) => tenants.find((t) => t.id === tid)?.name || tid || "—";
 
@@ -62,14 +64,16 @@ export default function AdminUsersPage() {
     }
   }
 
-  async function impersonate(u) {
+  async function impersonate(reason) {
+    const u = impTarget;
     try {
-      const { data } = await api.post(`/livre/team/users/${u.id}/impersonate`, {}, {
+      const { data } = await api.post(`/livre/team/users/${u.id}/impersonate`, { reason: reason || null }, {
         headers: { "X-Tenant-Id": u.tenant_id },
       });
       const path = u.role === "driver" ? "/driver" : "/livre/dashboard";
       window.open(`${path}?imp_token=${encodeURIComponent(data.token)}`, "_blank");
       toast.success(`Aperçu ouvert dans un nouvel onglet — ${u.name || u.email}`);
+      setImpTarget(null);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail));
     }
@@ -146,6 +150,7 @@ export default function AdminUsersPage() {
                         <SelectItem value="admin">Admin</SelectItem>
                         <SelectItem value="manager">Gestionnaire</SelectItem>
                         <SelectItem value="driver">Chauffeur</SelectItem>
+                        <SelectItem value="lecture_seule">Lecture seule</SelectItem>
                       </SelectContent>
                     </Select>
                   )}
@@ -161,7 +166,7 @@ export default function AdminUsersPage() {
                         <Button data-testid={`user-impersonate-${u.email}`} variant="ghost" size="sm"
                                 className="text-sky-600"
                                 title={`Ouvrir l'application comme ${u.name || u.email} dans un nouvel onglet`}
-                                onClick={() => impersonate(u)}>
+                                onClick={() => setImpTarget(u)}>
                           <Eye className="w-4 h-4" />
                         </Button>
                       )}
@@ -217,6 +222,7 @@ export default function AdminUsersPage() {
                     <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="manager">Gestionnaire</SelectItem>
                     <SelectItem value="driver">Chauffeur</SelectItem>
+                    <SelectItem value="lecture_seule">Lecture seule</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -231,6 +237,8 @@ export default function AdminUsersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ImpersonateDialog target={impTarget} onOpenChange={setImpTarget} onConfirm={impersonate} />
     </div>
   );
 }

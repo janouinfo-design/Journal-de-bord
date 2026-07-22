@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Eye, LogOut, CheckCircle2, AlertTriangle } from "lucide-react";
 
-const ROLE_LABEL = { admin: "Administrateur", manager: "Gestionnaire", driver: "Chauffeur" };
+const ROLE_LABEL = { admin: "Administrateur", manager: "Gestionnaire", driver: "Chauffeur", lecture_seule: "Lecture seule" };
 
 export default function ImpersonationBanner() {
   const { user, endImpersonation, impersonationEnded, impersonationError, clearImpersonationError } = useAuth();

@@ -18,7 +18,7 @@ from app.tenant_context import refresh_tenant_cache
 
 router = APIRouter(prefix="/admin", tags=["superadmin"])
 
-TENANT_ROLES = ("admin", "manager", "driver")
+TENANT_ROLES = ("admin", "manager", "driver", "lecture_seule")
 
 
 async def require_superadmin(user=Depends(get_current_user)):
