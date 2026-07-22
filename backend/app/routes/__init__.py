@@ -22,6 +22,7 @@ from app.routes import (
     realtime as _realtime,
     reports as _reports,
     settings as _settings,
+    team as _team,
 )
 
 # Re-export the auth router (kept under /auth — sibling of /livre)
@@ -38,5 +39,6 @@ livre_router.include_router(_realtime.router)
 livre_router.include_router(_identification.router)
 livre_router.include_router(_notifications.router)
 livre_router.include_router(_fines.router)
+livre_router.include_router(_team.router)
 
 __all__ = ["auth_router", "livre_router"]

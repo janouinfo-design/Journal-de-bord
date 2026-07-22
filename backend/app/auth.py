@@ -214,11 +214,14 @@ async def navixy_sso(payload: NavixySsoIn, response: Response):
             raise HTTPException(
                 status_code=403,
                 detail="Votre entreprise n'est pas encore activée sur le Journal de bord. Contactez Logitrak.")
+        # Compte principal Navixy → admin de son entreprise ; sous-utilisateur → gestionnaire
+        is_master_account = not master.get("id") or master.get("id") == info.get("id")
+        role = "admin" if is_master_account else "manager"
         user = {
             "id": str(uuid.uuid4()),
             "email": email,
             "name": name,
-            "role": "driver",
+            "role": role,
             "tenant_id": tenant["id"],
             "password_hash": None,
             "auth_origin": "navixy",
@@ -249,6 +252,8 @@ async def register(payload: RegisterIn, response: Response, current=Depends(requ
     tenant_id = get_effective_tenant_id()
     if not tenant_id:
         raise HTTPException(status_code=400, detail="Sélectionnez d'abord un client")
+    if payload.role not in ("admin", "manager", "driver"):
+        raise HTTPException(status_code=400, detail="Rôle invalide (admin, manager, driver)")
     email = payload.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email déjà utilisé")

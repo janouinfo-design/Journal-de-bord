@@ -1,0 +1,34 @@
+{
+  "summary": "Administration client (team.py) — testing complet backend (16/16 pytest OK) et smoke UI (admin, manager, driver PWA). Tous les critères de la review_request validés: subtabs, création/suppression utilisateur, protection anti-suppression de soi, protection anti-rétrogradation de soi, rôle superadmin refusé par /auth/register, manager 403 sur users mais 200 sur drivers, isolation stricte tenant B ↔ Logitrak, chauffeurs Navixy + Paul Test manuel avec compte lié, grant-access crée un compte driver fonctionnel, SSO Navixy avec NAVIXY_HASH promeut logitrak@logitrak.ch en admin, régression /admin/tenants et /livre/fines OK (5 amendes).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Console (partout)", "issues": ["React warning 'Encountered two children with the same key, null' (probablement dans une liste — origine non identifiée, à investiguer dans un composant partagé)", "Radix DialogContent warning 'Missing Description or aria-describedby' sur les Dialogs de TeamUsersPage et TeamDriversPage — ajouter DialogDescription pour l'accessibilité"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_administration.py", "/app/test_reports/pytest/iteration_16.xml"],
+  "action_items": [
+    "(Faible priorité) Ajouter DialogDescription (ou aria-describedby) aux <DialogContent> de TeamUsersPage.jsx et TeamDriversPage.jsx pour supprimer le warning Radix",
+    "(À investiguer) React key=null warning au chargement — probablement dans un composant nav/menu partagé (pas bloquant)"
+  ],
+  "critical_code_review_comments": [
+    "team.py: import get_current_user importé mais non utilisé (ligne 14) — nettoyage mineur",
+    "team.py::team_create_driver: retourne doc sans _id mais le pop est redondant (get_raw_db pas utilisé) — cosmétique",
+    "auth.py::register: valide bien 'admin/manager/driver' → refuse 'superadmin' avec 400 (conforme). Rôle superadmin ne peut plus être créé via API publique.",
+    "team.py::grant_driver_access: après grant, met à jour driver.email = driver.email or email — cohérent",
+    "Isolation: team_list_drivers utilise get_db() (proxy filtrant par tenant) ; team_list_users utilise get_raw_db() avec filtre explicite tenant_id → OK",
+    "Manque un endpoint team/drivers DELETE — actuellement on ne peut que désactiver via active=False (choix produit acceptable mais à documenter)"
+  ],
+  "updated_files": ["/app/backend/tests/test_administration.py (nouveau)"],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% (smoke)"},
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, superadmin@logitrak.ch/superadmin123, admin-b@test.ch/testb123, paul.test@client.ch/paul1234, NAVIXY_HASH=a25480874b7492bd01ff1d926061e491",
+  "seed_data_creation": "Aucune donnée persistante créée (tous utilisateurs/chauffeurs TEST créés ont été supprimés par les tests eux-mêmes). Paul Test préservé comme demandé.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Toutes les APIs /api/livre/team/* fonctionnent correctement, isolation multi-tenant validée, SSO Navixy promotion admin validée avec le vrai NAVIXY_HASH. Le fichier /app/backend/tests/test_administration.py est réutilisable comme régression pour toute future modification. Un warning console React (key=null) existe mais n'affecte pas les fonctionnalités."
+}

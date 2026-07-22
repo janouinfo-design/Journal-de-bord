@@ -13,6 +13,9 @@ import DriverConsolePage from "@/pages/DriverConsolePage";
 import FinesPage from "@/pages/FinesPage";
 import FinesDashboardPage from "@/pages/FinesDashboardPage";
 import DriverFinesPage from "@/pages/DriverFinesPage";
+import AdministrationLayout from "@/pages/AdministrationLayout";
+import TeamUsersPage from "@/pages/TeamUsersPage";
+import TeamDriversPage from "@/pages/TeamDriversPage";
 import AdminTenantsPage from "@/pages/AdminTenantsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import AdminAuditPage from "@/pages/AdminAuditPage";
@@ -51,6 +54,15 @@ function App() {
               </ProtectedRoute>
             } />
             <Route path="mes-amendes" element={<DriverFinesPage />} />
+            <Route path="administration" element={
+              <ProtectedRoute roles={["admin"]}>
+                <AdministrationLayout />
+              </ProtectedRoute>
+            }>
+              <Route index element={<Navigate to="/livre/administration/utilisateurs" replace />} />
+              <Route path="utilisateurs" element={<TeamUsersPage />} />
+              <Route path="chauffeurs" element={<TeamDriversPage />} />
+            </Route>
             <Route path="settings" element={<SettingsPage />} />
           </Route>
           <Route path="/driver" element={<ProtectedRoute><DriverConsolePage /></ProtectedRoute>} />
