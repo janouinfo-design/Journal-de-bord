@@ -1,0 +1,38 @@
+{
+  "summary": "Impersonation (« Se connecter comme… ») — Testing complet backend et frontend. 19/19 tests backend pytest OK. Playwright: admin impersonation manager → nouvel onglet /livre/dashboard avec bandeau + admin@logitrak.ch ; chauffeur → /driver ; superadmin cross-tenant admin-b→ /livre/dashboard avec 'session ouverte par superadmin@logitrak.ch' ; audit page affiche 9 markers 'aperçu par …' ; exit btn ferme l'onglet automatiquement ; logout dans onglet aperçu = exit (ferme l'onglet, cookies admin intacts, reload sans re-login OK). Backend: usage unique, expiration 60s, imbrication interdite, self interdit, superadmin invisible pour admin client, cross-tenant refusé (404), manager 403, tenant suspendu → 403 'Client suspendu', /impersonate/end ne pose aucun cookie access_token/refresh_token, audit trace bien impersonation.actor_email + session_id + note française sur les actions modifiantes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/admin/tenants/{id}", "issue": "Pas d'endpoint DELETE — 405. Impossible de nettoyer les tenants de test créés via API. J'ai dû faire un delete raw via MongoDB. Envisager un DELETE (ou moins soft-delete via status='deleted') pour permettre le nettoyage."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_impersonation.py",
+    "/app/test_reports/pytest/iteration_17.xml"
+  ],
+  "action_items": [
+    "(Optionnel, faible priorité) Ajouter un endpoint DELETE /api/admin/tenants/{id} (ou soft-delete) — pour permettre nettoyage des tenants de test créés programmatiquement. Actuellement le seul moyen d'en supprimer est via MongoDB direct."
+  ],
+  "critical_code_review_comments": [
+    "auth.py::get_current_user — Bearer prioritaire sur cookie: OK. impersonated_by est correctement injecté depuis les claims JWT imp_*. Bon pattern.",
+    "team.py::team_impersonate_user — Ordre des guards: imbrication → tenant suspendu → target 404 → self → superadmin. Ordre logique.",
+    "auth.py::impersonate_exchange — Utilise SHA256 pour hash du token (non réversible). Usage unique validé côté DB (used flag). Aucun cookie posé (Set-Cookie observés = uniquement __cf_bm de Cloudflare, jamais access_token/refresh_token) ✔.",
+    "audit.py — Note française bien formatée: 'Action réalisée par {actor} en mode « Se connecter comme {target} »'. impersonation.session_id présent dans chaque doc audit d'une action réalisée en aperçu ✔.",
+    "Petite remarque cosmétique — impersonate_end retourne toujours {ended:true} même si l'utilisateur n'est pas en mode aperçu. Comportement acceptable (idempotent) mais pourrait renvoyer 400 pour être plus strict."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_impersonation.py (nouveau, 19 tests)"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% (13/13 features testées)"},
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123, superadmin@logitrak.ch/superadmin123, admin-b@test.ch/testb123, paul.test@client.ch/paul1234",
+  "seed_data_creation": "Aucune donnée persistante. Le tenant TEST Suspend créé par le test 'suspended_tenant_blocks_impersonation' + les users associés ont été nettoyés (users via API DELETE, tenants via MongoDB raw car pas de endpoint DELETE /api/admin/tenants). Paul Test et tous les seed accounts préservés.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_impersonation.py couvre toute la fonctionnalité et sert de régression. Attention: si /api/admin/tenants gagne un endpoint DELETE, mettre à jour le cleanup fixture du test_suspended_tenant. Le hot-reload StrictMode a été validé (memoïzation module-level dans AuthContext.jsx) — pas de double-exchange du token à usage unique observé côté UI.",
+  "rca of the issue": "N/A — aucun bug fonctionnel détecté. Deux échecs initiaux de tests étaient dus à des cookies __cf_bm de Cloudflare confondus avec des cookies auth ; corrigé en filtrant sur access_token=/refresh_token= dans les assertions."
+}

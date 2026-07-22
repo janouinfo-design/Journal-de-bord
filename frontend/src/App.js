@@ -19,12 +19,14 @@ import TeamDriversPage from "@/pages/TeamDriversPage";
 import AdminTenantsPage from "@/pages/AdminTenantsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import AdminAuditPage from "@/pages/AdminAuditPage";
+import ImpersonationBanner from "@/components/layout/ImpersonationBanner";
 import { Toaster } from "@/components/ui/sonner";
 
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+        <ImpersonationBanner />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route

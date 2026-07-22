@@ -10,11 +10,13 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Trash2, IdCard } from "lucide-react";
+import { Plus, Trash2, IdCard, Eye } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 const EMPTY = { email: "", name: "", password: "", role: "driver" };
 
 export default function TeamUsersPage() {
+  const { user: me } = useAuth();
   const [users, setUsers] = useState([]);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(EMPTY);
@@ -44,6 +46,15 @@ export default function TeamUsersPage() {
       await api.delete(`/livre/team/users/${u.id}`);
       toast.success("Compte supprimé");
       load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  }
+
+  async function impersonate(u) {
+    try {
+      const { data } = await api.post(`/livre/team/users/${u.id}/impersonate`);
+      const path = u.role === "driver" ? "/driver" : "/livre/dashboard";
+      window.open(`${path}?imp_token=${encodeURIComponent(data.token)}`, "_blank");
+      toast.success(`Aperçu ouvert dans un nouvel onglet — ${u.name || u.email}`);
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
 
@@ -108,7 +119,15 @@ export default function TeamUsersPage() {
                   {u.auth_origin === "navixy" ? "SSO Navixy" : "Local"}
                 </td>
                 <td className="px-4 py-3 text-xs text-slate-500">{u.created_at ? fmtDateTime(u.created_at) : "—"}</td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  {me && u.id !== me.id && u.role !== "superadmin" && !me.impersonated_by && (
+                    <Button data-testid={`team-user-impersonate-${u.email}`} variant="ghost" size="sm"
+                            className="text-sky-600"
+                            title={`Ouvrir l'application comme ${u.name || u.email} dans un nouvel onglet`}
+                            onClick={() => impersonate(u)}>
+                      <Eye className="w-4 h-4" />
+                    </Button>
+                  )}
                   <Button data-testid={`team-user-delete-${u.email}`} variant="ghost" size="sm"
                           className="text-red-600" onClick={() => removeUser(u)}>
                     <Trash2 className="w-4 h-4" />

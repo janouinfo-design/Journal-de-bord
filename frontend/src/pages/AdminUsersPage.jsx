@@ -10,7 +10,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Users, Plus, Trash2 } from "lucide-react";
+import { Users, Plus, Trash2, Eye } from "lucide-react";
 
 const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", superadmin: "Super Admin" };
 const EMPTY = { email: "", name: "", password: "", role: "driver", tenant_id: "" };
@@ -57,6 +57,19 @@ export default function AdminUsersPage() {
       await api.delete(`/admin/users/${u.id}`);
       toast.success("Utilisateur supprimé");
       load();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+    }
+  }
+
+  async function impersonate(u) {
+    try {
+      const { data } = await api.post(`/livre/team/users/${u.id}/impersonate`, {}, {
+        headers: { "X-Tenant-Id": u.tenant_id },
+      });
+      const path = u.role === "driver" ? "/driver" : "/livre/dashboard";
+      window.open(`${path}?imp_token=${encodeURIComponent(data.token)}`, "_blank");
+      toast.success(`Aperçu ouvert dans un nouvel onglet — ${u.name || u.email}`);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail));
     }
@@ -141,12 +154,22 @@ export default function AdminUsersPage() {
                   {u.auth_origin === "navixy" ? "SSO Navixy" : "Local"}
                 </td>
                 <td className="px-4 py-3 text-xs text-slate-500">{u.created_at ? fmtDateTime(u.created_at) : "—"}</td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right whitespace-nowrap">
                   {u.role !== "superadmin" && (
-                    <Button data-testid={`user-delete-${u.email}`} variant="ghost" size="sm"
-                            className="text-red-600" onClick={() => removeUser(u)}>
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <>
+                      {tenants.find((t) => t.id === u.tenant_id)?.status === "active" && (
+                        <Button data-testid={`user-impersonate-${u.email}`} variant="ghost" size="sm"
+                                className="text-sky-600"
+                                title={`Ouvrir l'application comme ${u.name || u.email} dans un nouvel onglet`}
+                                onClick={() => impersonate(u)}>
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                      )}
+                      <Button data-testid={`user-delete-${u.email}`} variant="ghost" size="sm"
+                              className="text-red-600" onClick={() => removeUser(u)}>
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </>
                   )}
                 </td>
               </tr>

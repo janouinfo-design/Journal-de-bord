@@ -8,10 +8,18 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+// Session d'aperçu « Se connecter comme… » — Bearer par onglet (sessionStorage)
+export const IMP_TOKEN_KEY = "imp_access_token";
+
 // Superadmin « voir en tant que client » — header X-Tenant-Id
 api.interceptors.request.use((config) => {
-  const tid = localStorage.getItem("sa_tenant_id");
-  if (tid) config.headers["X-Tenant-Id"] = tid;
+  const imp = sessionStorage.getItem(IMP_TOKEN_KEY);
+  if (imp) {
+    config.headers["Authorization"] = `Bearer ${imp}`;
+  } else {
+    const tid = localStorage.getItem("sa_tenant_id");
+    if (tid && !config.headers["X-Tenant-Id"]) config.headers["X-Tenant-Id"] = tid;
+  }
   return config;
 });
 

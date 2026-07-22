@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, KeySquare, Smartphone, Link2Off } from "lucide-react";
+import { Plus, Pencil, KeySquare, Smartphone, Link2Off, Eye } from "lucide-react";
 
 const EMPTY = {
   name: "", internal_number: "", phone: "", email: "", active: true,
@@ -70,6 +70,14 @@ export default function TeamDriversPage() {
       load();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
+  }
+
+  async function impersonate(d) {
+    try {
+      const { data } = await api.post(`/livre/team/users/${d.account.user_id}/impersonate`);
+      window.open(`/driver?imp_token=${encodeURIComponent(data.token)}`, "_blank");
+      toast.success(`Aperçu Console PWA ouvert — ${d.name}`);
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   }
 
   async function unlink(d) {
@@ -143,6 +151,17 @@ export default function TeamDriversPage() {
                           onCheckedChange={() => toggleActive(d)} />
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
+                  {d.account && d.active !== false ? (
+                    <Button data-testid={`driver-impersonate-${d.id}`} variant="ghost" size="sm"
+                            className="text-sky-600"
+                            title={`Ouvrir la Console PWA comme ${d.name} dans un nouvel onglet`}
+                            onClick={() => impersonate(d)}>
+                      <Eye className="w-4 h-4" />
+                    </Button>
+                  ) : (
+                    <span data-testid={`driver-no-access-${d.id}`}
+                          className="text-[10px] text-slate-300 italic mr-1">Aucun accès PWA actif</span>
+                  )}
                   <Button data-testid={`driver-edit-${d.id}`} variant="ghost" size="sm" onClick={() => openEdit(d)}>
                     <Pencil className="w-4 h-4" />
                   </Button>

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { api, formatApiErrorDetail } from "@/lib/api";
+import { api, formatApiErrorDetail, IMP_TOKEN_KEY } from "@/lib/api";
 
 const AuthContext = createContext(null);
 
@@ -15,15 +15,51 @@ const NAVIXY_SSO_KEY = (() => {
   return key;
 })();
 
+// Token d'aperçu « Se connecter comme… » (usage unique, 60 s) transmis via l'URL
+const IMPERSONATION_TOKEN = (() => {
+  const params = new URLSearchParams(window.location.search);
+  const t = params.get("imp_token");
+  if (t) {
+    params.delete("imp_token");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }
+  return t;
+})();
+
+// Échange mémoïsé au niveau module : le token est à usage unique, StrictMode
+// (double mount) ne doit déclencher qu'UNE seule requête d'échange.
+let _impExchangePromise = null;
+function exchangeImpersonationToken() {
+  if (!_impExchangePromise) {
+    _impExchangePromise = api.post("/auth/impersonate", { token: IMPERSONATION_TOKEN })
+      .then(({ data }) => {
+        sessionStorage.setItem(IMP_TOKEN_KEY, data.access_token);
+        return null;
+      })
+      .catch((e) => {
+        sessionStorage.removeItem(IMP_TOKEN_KEY);
+        return formatApiErrorDetail(e.response?.data?.detail) || "Lien d'aperçu invalide ou expiré";
+      });
+  }
+  return _impExchangePromise;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);     // user object | null
   const [loading, setLoading] = useState(true);
+  const [impersonationEnded, setImpersonationEnded] = useState(false);
+  const [impersonationError, setImpersonationError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // SSO Navixy : si l'iframe a été chargée avec ?session_key=..., connexion auto
-      if (NAVIXY_SSO_KEY) {
+      // Aperçu utilisateur : échange du token contre une session Bearer (isolée à cet onglet)
+      if (IMPERSONATION_TOKEN) {
+        const err = await exchangeImpersonationToken();
+        if (err && !cancelled) setImpersonationError(err);
+      } else if (NAVIXY_SSO_KEY) {
+        // SSO Navixy : si l'iframe a été chargée avec ?session_key=..., connexion auto
         try {
           const { data } = await api.post("/auth/navixy-sso", { session_key: NAVIXY_SSO_KEY });
           if (!cancelled) {
@@ -57,7 +93,22 @@ export function AuthProvider({ children }) {
     }
   }
 
+  async function endImpersonation() {
+    try {
+      await api.post("/auth/impersonate/end");
+    } catch (e) {
+      console.debug("[AuthContext] impersonate/end failed (session cleared anyway):", e);
+    }
+    sessionStorage.removeItem(IMP_TOKEN_KEY);
+    setImpersonationEnded(true);
+    window.close();
+  }
+
   async function logout() {
+    // En mode aperçu : ne JAMAIS détruire la session admin (les cookies sont partagés entre onglets)
+    if (sessionStorage.getItem(IMP_TOKEN_KEY)) {
+      return endImpersonation();
+    }
     try {
       await api.post("/auth/logout");
     } catch (e) {
@@ -67,7 +118,11 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{
+      user, loading, login, logout,
+      endImpersonation, impersonationEnded, impersonationError,
+      clearImpersonationError: () => setImpersonationError(null),
+    }}>
       {children}
     </AuthContext.Provider>
   );

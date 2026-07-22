@@ -134,6 +134,9 @@ async def team_impersonate_user(user_id: str, request: Request,
     if current.get("impersonated_by"):
         raise HTTPException(403, "Impossible d'imbriquer les sessions d'aperçu")
     raw = get_raw_db()
+    tenant = await raw.tenants.find_one({"id": tid}, {"_id": 0, "status": 1})
+    if tenant and tenant.get("status") != "active":
+        raise HTTPException(403, "Client suspendu — aperçu indisponible")
     target = await raw.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0})
     if not target:
         raise HTTPException(404, "Utilisateur introuvable dans votre entreprise")

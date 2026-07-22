@@ -13,7 +13,7 @@ function detailsToText(row) {
   if (d) return JSON.stringify(d);
   const extra = Object.entries(row)
     .filter(([k]) => !["id", "action", "at", "ts", "tenant_id", "user_id",
-                       "user_email", "user_role", "details"].includes(k))
+                       "user_email", "user_role", "details", "impersonation", "note"].includes(k))
     .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
   return extra.join(" · ");
 }
@@ -97,7 +97,15 @@ export default function AdminAuditPage() {
                   {fmtDateTime(r.at || r.ts)}
                 </td>
                 <td className="px-4 py-2.5 text-xs">{tenantName(r.tenant_id)}</td>
-                <td className="px-4 py-2.5 text-xs">{r.user_email || r.actor || "—"}</td>
+                <td className="px-4 py-2.5 text-xs">
+                  {r.user_email || r.actor || "—"}
+                  {r.impersonation?.actor_email && (
+                    <span data-testid={`audit-impersonation-${r.id}`}
+                          className="block text-[10px] text-amber-600 font-medium">
+                      aperçu par {r.impersonation.actor_email}
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-2.5">
                   <span className="font-mono text-xs bg-slate-100 rounded px-1.5 py-0.5">
                     {r.action || "—"}
