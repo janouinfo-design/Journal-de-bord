@@ -47,14 +47,18 @@ function App() {
             <Route path="reports/pro" element={<Navigate to="/livre/history/pro" replace />} />
             <Route path="reports/perso" element={<Navigate to="/livre/history/perso" replace />} />
             <Route path="reports/tax-swiss" element={<TaxSwissPage />} />
-            <Route path="identification" element={<IdentificationPage />} />
-            <Route path="amendes" element={
+            <Route path="identification" element={
               <ProtectedRoute roles={["admin", "manager"]}>
+                <IdentificationPage />
+              </ProtectedRoute>
+            } />
+            <Route path="amendes" element={
+              <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}>
                 <FinesPage />
               </ProtectedRoute>
             } />
             <Route path="amendes/dashboard" element={
-              <ProtectedRoute roles={["admin", "manager"]}>
+              <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}>
                 <FinesDashboardPage />
               </ProtectedRoute>
             } />

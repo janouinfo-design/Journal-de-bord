@@ -12,12 +12,15 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, Trash2, IdCard, Eye } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import ImpersonateDialog from "@/components/livre/ImpersonateDialog";
 
+const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", lecture_seule: "Lecture seule" };
 const EMPTY = { email: "", name: "", password: "", role: "driver" };
 
 export default function TeamUsersPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState([]);
+  const [impTarget, setImpTarget] = useState(null);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);

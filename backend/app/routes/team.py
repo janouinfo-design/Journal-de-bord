@@ -255,16 +255,24 @@ DRIVER_FIELDS = ("name", "internal_number", "phone", "email", "active",
 
 @router.get("/drivers")
 async def team_list_drivers(user=Depends(require_roles("admin", "manager"))):
-    _tenant_or_400()
+    tid = _tenant_or_400()
     db = get_db()
     drivers = await db.drivers.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
     raw = get_raw_db()
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
     users = await raw.users.find({"id": {"$in": user_ids}}, {"_id": 0, "id": 1, "email": 1}).to_list(1000) if user_ids else []
     by_id = {u["id"]: u for u in users}
+    now = datetime.now(timezone.utc).isoformat()
+    invitations = await raw.invitations.find(
+        {"tenant_id": tid, "used": False, "expires_at": {"$gt": now}},
+        {"_id": 0, "driver_id": 1, "email": 1, "expires_at": 1, "created_at": 1}).to_list(1000)
+    inv_by_driver = {i["driver_id"]: i for i in invitations}
     for d in drivers:
         acc = by_id.get(d.get("user_id"))
         d["account"] = {"user_id": acc["id"], "email": acc["email"]} if acc else None
+        inv = inv_by_driver.get(d["id"]) if not acc else None
+        d["pending_invitation"] = ({"email": inv["email"], "expires_at": inv["expires_at"],
+                                    "created_at": inv["created_at"]} if inv else None)
     return drivers
 
 
