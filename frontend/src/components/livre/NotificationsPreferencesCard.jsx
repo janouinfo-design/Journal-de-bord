@@ -197,7 +197,7 @@ export default function NotificationsPreferencesCard() {
       <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
         <div className="flex items-start gap-3">
           <span className="shrink-0 w-7 h-7 rounded-full bg-[#2196F3] text-white text-xs font-semibold flex items-center justify-center mt-0.5">
-            5
+            6
           </span>
           <div className="flex-1">
             <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">

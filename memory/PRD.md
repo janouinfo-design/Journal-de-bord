@@ -20,6 +20,12 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 30 — Test SMTP Intégré (22/07/2026) — TESTÉ curl + envoi réel (aiosmtpd local) + UI
+- `GET /api/livre/settings/smtp-status` (admin) : {configured, host, port, from_addr, user_set} — jamais le mot de passe.
+- `POST /api/livre/settings/smtp-test {to?}` (admin, défaut = email de l'admin) : 400 si non configuré (variables manquantes citées), envoi synchrone réel sinon, 502 avec l'erreur SMTP précise en cas d'échec. Audit `settings.smtp_test`.
+- UI : Paramètres → carte n°5 « Emails (SMTP) » (`SmtpTestCard.jsx`, masquée pour manager) : badge Configuré (host:port + expéditeur) ou encadré ambre avec instructions .env VPS ; champ destinataire + bouton « Tester l'envoi » (désactivé si non configuré). Carte notifications renumérotée 6.
+- Validé : status/400/403-manager via curl, envoi réel OK via serveur SMTP local (aiosmtpd = dépendance de TEST, non ajoutée aux requirements), exception propagée, screenshot UI conforme.
+
 ### Iteration 29 — Lecture Seule + Invitation Chauffeur Email + Historique des Aperçus (22/07/2026) — TESTÉ 26/26 pytest + UI Playwright
 - **Rôle « lecture_seule »** : blocage GLOBAL serveur de toute écriture (POST/PUT/PATCH/DELETE → 403, whitelist logout/refresh/impersonate-end) dans `auth.py::get_current_user`. Accès : Tableau de bord, Historique, Amendes (consultation + exports), Rapports (exports PDF/Excel/CSV). Pas d'accès : Identification, Console PWA, Administration, Paramètres (guards ProtectedRoute + TABS). Rôle disponible dans les selects TeamUsersPage/AdminUsersPage, mapping labels partout. Compte test : lecture@logitrak.ch/lecture123.
 - **Invitation chauffeur par email (SMTP client)** : `POST /api/livre/team/drivers/{id}/invite {email}` → token 7 jours usage unique (sha256, collection globale `invitations`) → email via SMTP .env (`SMTP_HOST/PORT/USER/PASSWORD/FROM`, `app/emailer.py`, smtplib+to_thread, 465 SSL/587 STARTTLS) avec fallback lien copiable si SMTP non configuré (email_sent=false). Endpoints publics `GET/POST /api/auth/invitation/{token}[/accept]` (mdp min 8, création compte driver lié + login auto → /driver). UI : dialog Accès PWA 2 modes (Inviter par email / Mot de passe manuel), badge « Invitation envoyée » + Renvoyer, page publique `/invitation`. Vars SMTP ajoutées à .env.example + docker-compose.yml.

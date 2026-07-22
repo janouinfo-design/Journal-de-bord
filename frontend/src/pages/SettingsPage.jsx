@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 import {
   Shield, Eye, EyeOff, Loader2, Save, RefreshCw, Cloud, CloudOff, Truck,
-  Power, Calendar, ShieldCheck,
+  Power, Calendar, ShieldCheck, Mail,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import AssignmentsDialog from "@/components/livre/AssignmentsDialog";
@@ -22,6 +22,7 @@ import ScheduleEditor from "@/components/livre/ScheduleEditor";
 import PrivacyCompatCard from "@/components/livre/PrivacyCompatCard";
 import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
 import NotificationsPreferencesCard from "@/components/livre/NotificationsPreferencesCard";
+import SmtpTestCard from "@/components/livre/SmtpTestCard";
 
 const MODE_OPTIONS = [
   {
@@ -375,6 +376,15 @@ export default function SettingsPage() {
               <PrivacyEnforcementCard />
             </div>
           </div>
+        </Card>
+      )}
+
+      {/* SECTION 5 — EMAILS SMTP (admin uniquement) */}
+      {user?.role !== "manager" && (
+        <Card className="bg-white border-slate-200 shadow-sm rounded-lg p-5">
+          <SectionHeader n={5} title="Emails (SMTP)" icon={Mail}
+            subtitle="Serveur d'envoi utilisé pour les invitations chauffeur et les futurs rappels. Vérifiez votre configuration en un clic." />
+          <SmtpTestCard />
         </Card>
       )}
 

@@ -1,14 +1,16 @@
 """Global settings, schedules and privacy enforcement controls."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from app.auth import get_current_user, require_roles
 from app.db import get_db
+from app.emailer import is_smtp_configured, send_test_email
 from app.privacy_enforcer import enforce_all_vehicles, kill_switch, list_states
 from app.privacy_scan import scan_all_vehicles, scan_vehicle
 from app.rules import apply_rules_to_all, _get_schedule_for
@@ -48,6 +50,41 @@ async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin
     from app.audit import log_audit
     await log_audit("settings.update", user, {"mode": mode})
     return new
+
+
+# ---------- SMTP (test d'envoi) ----------
+@router.get("/settings/smtp-status")
+async def smtp_status(user=Depends(require_roles("admin"))):
+    return {
+        "configured": is_smtp_configured(),
+        "host": os.environ.get("SMTP_HOST") or None,
+        "port": int(os.environ.get("SMTP_PORT") or 587),
+        "from_addr": os.environ.get("SMTP_FROM") or None,
+        "user_set": bool(os.environ.get("SMTP_USER")),
+    }
+
+
+class SmtpTestIn(BaseModel):
+    to: Optional[EmailStr] = None
+
+
+@router.post("/settings/smtp-test")
+async def smtp_test(payload: SmtpTestIn, user=Depends(require_roles("admin"))):
+    from app.audit import log_audit
+    if not is_smtp_configured():
+        missing = [k for k in ("SMTP_HOST", "SMTP_FROM") if not os.environ.get(k)]
+        raise HTTPException(
+            400,
+            f"SMTP non configuré — renseignez {', '.join(missing)} dans le fichier .env du serveur "
+            "puis redémarrez le backend (docker compose restart backend)")
+    to = (payload.to or user["email"]).lower()
+    try:
+        await send_test_email(to)
+    except Exception as e:
+        await log_audit("settings.smtp_test", user, {"to": to, "ok": False, "error": str(e)[:300]})
+        raise HTTPException(502, f"Échec de l'envoi SMTP : {e}")
+    await log_audit("settings.smtp_test", user, {"to": to, "ok": True})
+    return {"sent": True, "to": to}
 
 
 # ---------- Schedules (per-day work periods) ----------

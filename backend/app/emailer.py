@@ -57,6 +57,26 @@ async def send_email(to: str, subject: str, text: str, html: str) -> bool:
         return False
 
 
+async def send_test_email(to: str):
+    """Envoi synchrone d'un email de test — propage l'exception SMTP pour diagnostic."""
+    subject = "Test SMTP — Journal de bord Logitrak"
+    text = (
+        "Ceci est un email de test envoyé depuis le Journal de bord Logitrak.\n"
+        "Votre configuration SMTP fonctionne correctement.\n"
+    )
+    html = """\
+<!DOCTYPE html>
+<html><body style="font-family:Arial,Helvetica,sans-serif;background:#f4f6f8;padding:24px;">
+  <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:8px;padding:32px;border:1px solid #e2e8f0;">
+    <h2 style="margin:0 0 8px;color:#0f172a;">✓ Test SMTP réussi</h2>
+    <p style="color:#334155;">Ceci est un email de test envoyé depuis le <strong>Journal de bord Logitrak</strong>.</p>
+    <p style="color:#334155;">Votre configuration SMTP fonctionne correctement — les invitations chauffeur
+       et les futurs rappels par email seront bien délivrés.</p>
+  </div>
+</body></html>"""
+    await asyncio.to_thread(_send_sync, to, subject, text, html)
+
+
 async def send_invitation_email(to: str, driver_name: str, invite_url: str, company: str):
     subject = f"Invitation — Journal de bord {company}"
     text = (
