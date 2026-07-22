@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
 from app.audit import log_audit
@@ -120,6 +120,50 @@ async def team_delete_user(user_id: str, current=Depends(require_roles("admin"))
     await get_db().drivers.update_many({"user_id": user_id}, {"$unset": {"user_id": ""}})
     await log_audit("user.delete", current, {"email": target["email"]})
     return {"deleted": True, "id": user_id}
+
+
+@router.post("/users/{user_id}/impersonate")
+async def team_impersonate_user(user_id: str, request: Request,
+                                current=Depends(require_roles("admin"))):
+    """Génère un token d'aperçu à usage unique (60 s) pour « Se connecter comme… »."""
+    import hashlib
+    import secrets
+    from datetime import timedelta
+
+    tid = _tenant_or_400()
+    if current.get("impersonated_by"):
+        raise HTTPException(403, "Impossible d'imbriquer les sessions d'aperçu")
+    raw = get_raw_db()
+    target = await raw.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0})
+    if not target:
+        raise HTTPException(404, "Utilisateur introuvable dans votre entreprise")
+    if target.get("role") == "superadmin":
+        raise HTTPException(400, "Ce compte ne peut pas être ouvert en aperçu")
+    if target["id"] == current["id"]:
+        raise HTTPException(400, "Vous êtes déjà connecté avec ce compte")
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    auth_source = ("super_admin_impersonation" if current.get("role") == "superadmin"
+                   else "admin_client_impersonation")
+    rec = {
+        "id": str(uuid.uuid4()),
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "actor_user_id": current["id"], "actor_email": current["email"],
+        "target_user_id": target["id"], "target_email": target["email"],
+        "tenant_id": tid, "auth_source": auth_source,
+        "used": False,
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(seconds=60)).isoformat(),
+        "ip": request.client.host if request.client else None,
+    }
+    await raw.impersonation_tokens.insert_one(dict(rec))
+    await log_audit("user.impersonate_start", current,
+                    {"target": target["email"], "target_role": target["role"],
+                     "session_id": rec["id"], "auth_source": auth_source,
+                     "ip": rec["ip"]})
+    return {"token": token, "expires_in": 60,
+            "target": {"name": target.get("name"), "email": target["email"], "role": target["role"]}}
 
 
 # ====================== CHAUFFEURS (personnes qui conduisent) ======================

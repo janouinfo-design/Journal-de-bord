@@ -23,7 +23,7 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
+def create_access_token(user_id: str, email: str, role: str, extra_claims: dict | None = None) -> str:
     payload = {
         "sub": user_id,
         "email": email,
@@ -31,6 +31,8 @@ def create_access_token(user_id: str, email: str, role: str) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TTL_MIN),
         "type": "access",
     }
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
 
 
@@ -57,11 +59,13 @@ def _set_auth_cookies(response: Response, access: str, refresh: str):
 async def get_current_user(request: Request):
     from app.db import get_db
     db = get_db()
-    token = request.cookies.get("access_token")
+    # Bearer (session d'aperçu par onglet) prioritaire sur le cookie
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
     if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
+        token = request.cookies.get("access_token")
     if not token:
         raise HTTPException(status_code=401, detail="Non authentifié")
     try:
@@ -71,6 +75,13 @@ async def get_current_user(request: Request):
         user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
             raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+        if payload.get("imp"):
+            user["impersonated_by"] = {
+                "user_id": payload.get("imp_actor_id"),
+                "email": payload.get("imp_actor_email"),
+                "session_id": payload.get("imp_session_id"),
+                "auth_source": payload.get("auth_source"),
+            }
         from app.tenant_context import set_current_tenant, NO_TENANT
         if user.get("role") == "superadmin":
             set_current_tenant(request.headers.get("X-Tenant-Id") or NO_TENANT)
@@ -241,6 +252,70 @@ async def navixy_sso(payload: NavixySsoIn, response: Response):
     await log_audit("auth.sso", user, {"navixy_user_id": info.get("id")},
                     tenant_id=user.get("tenant_id"))
     return {"user": user, "access_token": access, "refresh_token": refresh}
+
+
+class ImpersonateExchangeIn(BaseModel):
+    token: str
+
+
+@router.post("/impersonate")
+async def impersonate_exchange(payload: ImpersonateExchangeIn, request: Request):
+    """Échange un token d'aperçu à usage unique contre une session Bearer (par onglet).
+    Aucun cookie n'est posé : la session de l'administrateur reste intacte."""
+    import hashlib
+    from app.db import get_raw_db
+    db = get_raw_db()
+
+    th = hashlib.sha256(payload.token.encode()).hexdigest()
+    rec = await db.impersonation_tokens.find_one({"token_hash": th})
+    now = datetime.now(timezone.utc)
+    if (not rec or rec.get("used")
+            or datetime.fromisoformat(rec["expires_at"]) < now):
+        raise HTTPException(status_code=401, detail="Lien d'aperçu invalide ou expiré")
+    await db.impersonation_tokens.update_one(
+        {"id": rec["id"]}, {"$set": {"used": True, "used_at": now.isoformat()}})
+
+    target = await db.users.find_one({"id": rec["target_user_id"]}, {"_id": 0, "password_hash": 0})
+    if not target or target.get("role") == "superadmin":
+        raise HTTPException(status_code=404, detail="Utilisateur cible introuvable")
+
+    access = create_access_token(
+        target["id"], target["email"], target["role"],
+        extra_claims={
+            "imp": True,
+            "imp_actor_id": rec["actor_user_id"],
+            "imp_actor_email": rec["actor_email"],
+            "imp_session_id": rec["id"],
+            "auth_source": rec["auth_source"],
+        })
+    from app.audit import log_audit
+    await log_audit("user.impersonate_open",
+                    {"id": rec["actor_user_id"], "email": rec["actor_email"],
+                     "tenant_id": rec.get("tenant_id")},
+                    {"target": target["email"], "target_role": target["role"],
+                     "ip": request.client.host if request.client else None,
+                     "session_id": rec["id"]},
+                    tenant_id=rec.get("tenant_id"))
+    return {
+        "user": target,
+        "access_token": access,
+        "impersonation": {
+            "actor_email": rec["actor_email"],
+            "session_id": rec["id"],
+            "started_at": now.isoformat(),
+        },
+    }
+
+
+@router.post("/impersonate/end")
+async def impersonate_end(request: Request, user=Depends(get_current_user)):
+    imp = user.get("impersonated_by")
+    if imp:
+        from app.audit import log_audit
+        await log_audit("user.impersonate_end", user,
+                        {"actor": imp.get("email"), "session_id": imp.get("session_id"),
+                         "ip": request.client.host if request.client else None})
+    return {"ended": True}
 
 
 @router.post("/register")

@@ -17,6 +17,12 @@ async def log_audit(action: str, user: dict | None = None, details: dict | None 
         "user_role": (user or {}).get("role"),
         "details": details or {},
     }
+    imp = (user or {}).get("impersonated_by")
+    if imp:
+        doc["impersonation"] = {"actor_id": imp.get("user_id"), "actor_email": imp.get("email"),
+                                "session_id": imp.get("session_id")}
+        doc["note"] = (f"Action réalisée par {imp.get('email')} en mode "
+                       f"« Se connecter comme {(user or {}).get('email')} »")
     try:
         await get_raw_db().audit_log.insert_one(doc)
     except Exception:
