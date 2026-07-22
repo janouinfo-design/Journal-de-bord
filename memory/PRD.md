@@ -538,3 +538,11 @@ affectation manuelle, droits par rôle.
 ## Tableau Sante Clients (21 juil. 2026)
 - POST /api/admin/tenants/{id}/sync : sync manuelle par tenant (superadmin), stocke last_sync_at/result, audit tenant.sync_manual
 - AdminTenantsPage: colonne Synchro Navixy (badges OK/Echec/Jamais/Cle non configuree), banniere alerte rouge si echec, bouton relance par client
+
+## Administration client (22 juil. 2026) — TESTE 16/16
+- SSO roles: compte principal Navixy -> admin auto; sous-utilisateur -> manager; existant garde son role
+- routes/team.py: /api/livre/team/users (CRUD, admin only, tenant-scope) + /team/drivers (CRUD, actif/inactif, grant-access PWA cree compte driver lie, link/unlink user)
+- Chauffeurs = entites separees des comptes (import Navixy sans login, champs manuels: n interne, tel, iButton/RFID/BLE, groupe)
+- Frontend: onglet Administration (admin) -> sous-onglets Utilisateurs/Chauffeurs (AdministrationLayout, TeamUsersPage, TeamDriversPage)
+- Securite: /auth/register refuse role superadmin; anti auto-suppression/retrogradation
+- BACKLOG (spec user non implemente): role lecture_seule, perimetres gestionnaire (groupes/vehicules), file "Trajets a attribuer" avec attribution en masse, proposition de lien chauffeur/utilisateur par email
