@@ -20,6 +20,24 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 28 — « Se connecter comme… » (Impersonation) (22/07/2026) — TESTÉ 19/19 + 13/13 UI
+- **Backend** (déjà en place, complété) :
+  - `POST /api/livre/team/users/{id}/impersonate` (admin/superadmin) : token éphémère 60 s, usage unique, hash SHA256 en DB (`impersonation_tokens`, collection globale), guards : imbrication interdite (403), tenant suspendu (403), cible superadmin (400), soi-même (400), cross-tenant admin client (404). Audit `user.impersonate_start`.
+  - `POST /api/auth/impersonate` : échange token → Bearer JWT avec claims `imp_*` (AUCUN cookie posé → session admin intacte). Audit `user.impersonate_open`. Réutilisation → 401.
+  - `POST /api/auth/impersonate/end` : audit `user.impersonate_end`.
+  - `get_current_user` : Bearer prioritaire sur cookie ; attache `user.impersonated_by` depuis les claims.
+  - `audit.py` : toute action en aperçu logge `impersonation{actor_id, actor_email, session_id}` + note FR.
+- **Frontend** (nouveau) :
+  - `lib/api.js` : `IMP_TOKEN_KEY` (sessionStorage, par onglet) → header `Authorization: Bearer` prioritaire ; skip `X-Tenant-Id` en aperçu.
+  - `AuthContext.jsx` : capture `?imp_token=` module-level, **échange mémoïsé (StrictMode-safe : bug double-échange du token à usage unique corrigé)**, `endImpersonation()` (end + clear + window.close + écran fallback « fermez cet onglet »), logout en aperçu = endImpersonation (ne détruit JAMAIS les cookies admin).
+  - `ImpersonationBanner.jsx` (nouveau) : bandeau ambre fixe bas sur TOUTES les pages (y compris Console PWA /driver), bouton « Retour au compte administrateur », écran « Aperçu terminé », bandeau rouge si token invalide/expiré. Monté dans App.js.
+  - `TeamUsersPage` : bouton œil par ligne (sauf soi-même/superadmin), tooltip « Ouvrir l'application comme X dans un nouvel onglet ». Chauffeur → `/driver`, autres → `/livre/dashboard`.
+  - `TeamDriversPage` : bouton œil si compte lié + actif, sinon texte « Aucun accès PWA actif ».
+  - `AdminUsersPage` (superadmin) : bouton œil cross-tenant (header `X-Tenant-Id` explicite = tenant du user), masqué si tenant suspendu.
+  - `AdminAuditPage` : mention ambre « aperçu par {admin} » sous l'utilisateur effectif.
+- Tests : `/app/backend/tests/test_impersonation.py` (19/19 PASS, régression réutilisable) + Playwright full flow (iteration_17.json). Aucun bug.
+- Backlog mineur issu du test : endpoint `DELETE /api/admin/tenants/{id}` (ou soft-delete) inexistant (405).
+
 ### Iteration 27 — Phase B Mobile Native Expo finalisée (22/06/2026)
 - Audit complet du scaffold `/app/logitrak-driver-app/` : **scanner BLE + queue offline + background task + auth JWT + WebSocket + push notifications + handlers d'actions** déjà câblés et `App.tsx` les orchestre au démarrage
 - `app.json` correctement configuré : iOS `bluetooth-central` + Android `BLUETOOTH_SCAN/CONNECT/FOREGROUND_SERVICE` + plugin `react-native-ble-plx` avec `isBackgroundEnabled: true`
