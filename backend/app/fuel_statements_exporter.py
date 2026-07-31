@@ -73,7 +73,7 @@ def build_pdf(stmt: dict, lines: list[dict], tenant_name: str = "") -> bytes:
     vn = _version_note(stmt)
     if vn:
         story.append(Paragraph(vn, warn))
-    if stmt.get("close_exception", {}).get("applied"):
+    if (stmt.get("close_exception") or {}).get("applied"):
         exc = stmt["close_exception"]
         story.append(Paragraph(
             f"Exception de clôture appliquée : {exc.get('excluded_count')} transaction(s) reportée(s). "

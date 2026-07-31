@@ -20,6 +20,24 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 32 — Taux de change BCE + Décomptes & Clôtures (31/07/2026) — TESTÉ curl complet + testing agent iteration_20 (bug PDF corrigé après)
+- **Taux de change BCE** (`app/fuel_fx.py`, sans correction manuelle — reportée sur demande utilisateur) :
+  - Flux public eurofxref-hist-90d (sans clé), sync APScheduler quotidienne 16h20 Europe/Zurich (lun-ven) + seed au démarrage + `POST /fx/sync` admin (audit `fuel.fx_sync`).
+  - Collection GLOBALE `fuel_exchange_rates` (date+currency unique) ; formule : CHF = montant × taux(CHF)/taux(devise) ; week-end/férié → dernier taux antérieur (fx_rate_date enregistrée) ; devise sans taux → `fx_status=pending` (« Conversion en attente », badge amber liste+détail) reconvertie au prochain sync ; montant+devise d'origine JAMAIS modifiés ; tx `locked` JAMAIS recalculées ; champs tx : amount_chf, fx_rate, fx_rate_date, fx_source(ecb/none), fx_status.
+  - Endpoints : GET /fx/status, GET /fx/rates?date=, POST /fx/sync (admin). UI : carte FX dans Paramètres (dernier taux, sync, pending), bloc conversion dans TxDetailDialog, ≈CHF dans les listes, overview amount_chf_total+fx_pending, filtre fx_status=pending via query param.
+- **Décomptes & Clôtures** (`app/fuel_statements.py`, `app/fuel_statements_exporter.py`, `app/routes/fuel_statements.py`, pages FuelStatementsPage + FuelStatementDetailPage, onglet Décomptes admin/manager/lecture_seule) :
+  - Numéro DEC-YYYY-NNNN, période mensuelle (défaut) ou personnalisée, type régulier/correctif, périmètre flotte, fuseau Europe/Zurich, date comptable fournisseur sinon date transaction (base affichée), transactions antérieures non clôturées incluses en section « reportées/tardives ».
+  - Statuts : draft → to_review → validated → closed. Contrôle (check) : validated si 0 bloquant. Bloquants = non rapprochées + conversions en attente ; avertissement = contrôle recommandé. Bloc rouge UI avec compteurs/montants + liens vers transactions pré-filtrées.
+  - Clôture : refuse (409 détaillé) si bloquants ; exception admin avec motif → tx bloquantes REPORTÉES (deferred_from_statement_id, jamais exclues silencieusement) ; clôture verrouille les tx (locked+statement_id), fige totaux/lignes (snapshot versionné fuel_statement_lines) ; non-chevauchement de clôturés ; PATCH match sur tx verrouillée → 409 ; match/run ignore les locked.
+  - Réouverture : admin, motif + confirmation renforcée UI, interdite si période postérieure clôturée (conseil correctif), V archivée « Annulée et remplacée » (versions[]), version++, retour to_review, tx déverrouillées, écarts financiers affichés. Transactions tardives (post-clôture) listées séparément, jamais intégrées silencieusement.
+  - Exports serveur PDF/Excel(9 onglets)/CSV depuis snapshot, mention « PROVISOIRE — ÉLÉMENTS À CONTRÔLER » + suffixe _PROVISOIRE si non clôturé, note version corrigée V2 + écarts, sha256 dans audit `fuel.statement.export`. Audit complet fuel.statement.create/check/close/reopen/delete/refresh.
+  - RBAC : create/check/close/reopen/refresh/delete=admin ; list/get/export=admin/manager/lecture_seule ; chauffeur 403 + redirection URL directe. Isolation tenant B validée.
+- **Bug corrigé post-test** : build_pdf crashait (500) sur close_exception=None → `(stmt.get("close_exception") or {})`. PDF revalidé par curl. Note test agent : « overview 666.33 vs ~758 attendu » = fausse alerte (l'estimation du brief était erronée, 666.33 est mathématiquement correct).
+- État de démo : DEC-2026-0001 en V2 « À contrôler » (11 tx, 9 non rapprochées + 1 conversion en attente XXX) + 3 tx TEST_FX (EUR convertie, USD week-end, XXX pending).
+- Reporté (phases suivantes) : correction manuelle du taux (fx-override taux fournisseur), Alertes anomalies, Widget carburant dashboard, connecteurs fournisseurs.
+
+## Implemented (précédent)
+
 ### Iteration 31 — Module Carburant & Décomptes Phase 1 COMPLET (31/07/2026) — TESTÉ 26/26 backend + frontend 4 rôles (iteration_19.json)
 - **Backend** (`app/routes/fuel.py` ~1010 LOC, `app/fuel_engine.py`, `app/fuel_import.py`) :
   - Cartes : CRUD admin, numéro JAMAIS stocké (HMAC `FUEL_CARD_HMAC_SECRET` + last4), doublon 409, statuts avec motif, affectations historisées véhicule/chauffeur/pool, documents.
