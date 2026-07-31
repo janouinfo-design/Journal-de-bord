@@ -27,9 +27,13 @@ export default function FuelOverviewPage() {
 
   if (!data) return <p className="text-sm text-slate-400">Chargement…</p>;
 
-  const chf = data.amount_by_currency?.CHF || 0;
+  const chf = data.amount_chf_total ?? (data.amount_by_currency?.CHF || 0);
   const otherCur = Object.entries(data.amount_by_currency || {}).filter(([c]) => c !== "CHF");
   const ms = data.match_statuses || {};
+  const amountSub = [
+    ...(otherCur.length ? [otherCur.map(([c, v]) => `dont ${fmtAmount(v, c)} (origine)`).join(" · ")] : []),
+    ...(data.fx_pending ? [`${data.fx_pending} conversion(s) en attente`] : []),
+  ].join(" — ") || null;
 
   return (
     <div data-testid="fuel-overview-page" className="space-y-4">
@@ -37,7 +41,7 @@ export default function FuelOverviewPage() {
         <Stat icon={ReceiptText} label="Transactions" value={data.transactions_count}
               testId="fuel-stat-count" />
         <Stat icon={ReceiptText} label="Montant total (CHF)" value={fmtAmount(chf)}
-              sub={otherCur.length ? otherCur.map(([c, v]) => `+ ${fmtAmount(v, c)} (origine)`).join(" · ") : null}
+              sub={amountSub}
               testId="fuel-stat-amount" />
         <Stat icon={Droplets} label="Litres" value={fmtQty(data.quantities?.L, "L")} testId="fuel-stat-liters" />
         <Stat icon={Zap} label="Recharge" value={fmtQty(data.quantities?.kWh, "kWh")} testId="fuel-stat-kwh" />

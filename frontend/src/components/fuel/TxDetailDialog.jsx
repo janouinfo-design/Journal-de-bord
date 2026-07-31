@@ -135,6 +135,28 @@ export default function TxDetailDialog({ txId, onClose, onChanged }) {
               {tx.forced_import_reason && <Row label="Import forcé — motif">{tx.forced_import_reason}</Row>}
             </div>
 
+            {/* Conversion devise → CHF */}
+            {tx.currency && tx.currency !== "CHF" && (
+              tx.fx_status === "pending" ? (
+                <div data-testid="fuel-tx-fx-pending"
+                     className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700">
+                  <strong>Conversion en attente</strong> — aucun taux BCE disponible pour cette date.
+                  Le montant original ({fmtAmount(tx.amount_total, tx.currency)}) est conservé ;
+                  la conversion en CHF sera appliquée automatiquement dès la prochaine synchronisation des taux.
+                </div>
+              ) : tx.amount_chf != null && (
+                <div data-testid="fuel-tx-fx-block" className="rounded-md border border-slate-200 p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2">Conversion en CHF</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+                    <Row label="Montant d'origine">{fmtAmount(tx.amount_total, tx.currency)}</Row>
+                    <Row label="Montant converti"><strong data-testid="fuel-tx-fx-chf">{fmtAmount(tx.amount_chf)}</strong></Row>
+                    <Row label="Taux appliqué">1 {tx.currency} = {tx.fx_rate} CHF</Row>
+                    <Row label="Taux du">{tx.fx_rate_date || "—"} — source BCE (taux de référence)</Row>
+                  </div>
+                </div>
+              )
+            )}
+
             {/* Score explicable */}
             <div className="rounded-md border border-slate-200 p-3">
               <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2 flex items-center gap-1.5">

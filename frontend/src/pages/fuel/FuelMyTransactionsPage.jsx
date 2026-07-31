@@ -54,7 +54,12 @@ export default function FuelMyTransactionsPage() {
                   <td className="px-4 py-2.5 text-xs">{t.station_name || "—"}</td>
                   <td className="px-4 py-2.5 text-xs">{PRODUCT_LABEL[t.product_type] || t.product_type || "—"}</td>
                   <td className="px-4 py-2.5 text-xs">{t.quantity != null ? fmtQty(t.quantity, t.unit) : "—"}</td>
-                  <td className="px-4 py-2.5 text-xs font-medium">{fmtAmount(t.amount_total, t.currency)}</td>
+                  <td className="px-4 py-2.5 text-xs font-medium">
+                    {fmtAmount(t.amount_total, t.currency)}
+                    {t.currency !== "CHF" && (t.fx_status === "pending"
+                      ? <span className="block text-[10px] text-amber-600 font-semibold">Conversion en attente</span>
+                      : t.amount_chf != null && <span className="block text-[10px] text-slate-400">≈ {fmtAmount(t.amount_chf)}</span>)}
+                  </td>
                   <td className="px-4 py-2.5 text-xs">{t.vehicle_plate || "—"}</td>
                   <td className="px-4 py-2.5 text-xs">
                     {(t.documents || []).length > 0

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 from app.navixy_client import is_configured as navixy_configured
 from app.navixy_sync import sync_navixy
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 JOB_ID = "navixy_sync_job"
 PRIVACY_JOB_ID = "privacy_enforcement_job"
+FUEL_FX_JOB_ID = "fuel_fx_job"
 PRIVACY_INTERVAL_MIN = int(os.environ.get("PRIVACY_ENFORCE_INTERVAL_MIN", "5"))
 STATE_ID = "scheduler"
 
@@ -104,6 +106,16 @@ async def _run_privacy_enforcement():
             reset_current_tenant(token)
 
 
+async def _run_fuel_fx():
+    """Job quotidien 16h20 Europe/Zurich — taux BCE + conversion des transactions en attente."""
+    from app.db import get_raw_db
+    from app.fuel_fx import sync_ecb_rates, convert_pending
+    raw = get_raw_db()
+    result = await sync_ecb_rates(raw)
+    conv = await convert_pending(raw) if result.get("ok") else {"skipped": True}
+    logger.info("Sync taux BCE: %s | conversions: %s", result, conv)
+
+
 async def _persist_next_run(db):
     if _scheduler is None:
         return
@@ -132,6 +144,17 @@ async def init_scheduler():
         _run_privacy_enforcement, IntervalTrigger(minutes=PRIVACY_INTERVAL_MIN),
         id=PRIVACY_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
     )
+    # Taux BCE : publiés ~16h CET les jours ouvrés → job à 16h20 Europe/Zurich (lun-ven)
+    _scheduler.add_job(
+        _run_fuel_fx,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=20, timezone="Europe/Zurich"),
+        id=FUEL_FX_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # Amorçage : si aucun taux en base, synchronisation immédiate en tâche de fond
+    from app.db import get_raw_db
+    if await get_raw_db().fuel_exchange_rates.count_documents({}) == 0:
+        _scheduler.add_job(_run_fuel_fx, id="fuel_fx_seed",
+                           next_run_time=datetime.now(timezone.utc))
     await _persist_next_run(db)
     logger.info("Scheduler initialised (enabled=%s, interval_min=%s)",
                 state.get("enabled"), state.get("interval_min"))

@@ -12,7 +12,8 @@ from app.tenant_context import get_tenant_id
 _client = None
 _db = None
 
-GLOBAL_COLLECTIONS = {"users", "tenants", "push_tokens", "app_state", "impersonation_tokens", "invitations"}
+GLOBAL_COLLECTIONS = {"users", "tenants", "push_tokens", "app_state", "impersonation_tokens", "invitations",
+                      "fuel_exchange_rates"}
 
 
 class _ScopedCollection:

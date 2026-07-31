@@ -27,6 +27,12 @@ export const ASSIGNMENT_TYPE_LABEL = {
   vehicle: "Véhicule", driver: "Chauffeur", pool: "Carte de pool", other: "Autre",
 };
 
+export const FX_STATUS = {
+  pending:    { label: "Conversion en attente", cls: "bg-amber-100 text-amber-700 border-amber-200" },
+  converted:  { label: "Converti (BCE)",        cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+  not_needed: { label: "CHF",                   cls: "bg-slate-100 text-slate-500 border-slate-200" },
+};
+
 export const ROW_STATUS = {
   ok:              { label: "Valide",             cls: "bg-emerald-100 text-emerald-700" },
   duplicate:       { label: "Doublon probable",   cls: "bg-amber-100 text-amber-700" },

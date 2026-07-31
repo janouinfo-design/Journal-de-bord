@@ -22,6 +22,7 @@ from app.fuel_engine import (
     CARD_STATUSES, PRODUCT_TYPES, apply_match, card_fingerprint, dedup_key,
     get_fuel_settings, match_transaction,
 )
+from app.fuel_fx import FX_STATE_ID, compute_fx, convert_pending, sync_ecb_rates
 from app.fuel_import import INTERNAL_FIELDS, guess_mapping, normalize_row, parse_file
 from app.tenant_context import get_effective_tenant_id
 
@@ -437,6 +438,7 @@ async def create_manual_transaction(payload: ManualTxIn, user=Depends(require_ro
         raise HTTPException(409, "Doublon probable détecté (même carte, date, station, montant). "
                                  "Confirmez avec force=true si c'est bien une transaction distincte.")
     now = _now()
+    fx = await compute_fx(db, payload.amount_total, payload.currency, payload.tx_datetime)
     tx = {
         "id": str(uuid.uuid4()),
         "external_transaction_id": None,
@@ -453,7 +455,7 @@ async def create_manual_transaction(payload: ManualTxIn, user=Depends(require_ro
         "unit_price": payload.unit_price,
         "amount_net": None, "vat_amount": payload.vat_amount, "vat_rate": payload.vat_rate,
         "amount_total": payload.amount_total, "currency": payload.currency.upper(),
-        "fx_rate": None, "amount_chf": payload.amount_total if payload.currency.upper() == "CHF" else None,
+        **fx,
         "mileage": payload.mileage,
         "vehicle_id": payload.vehicle_id, "driver_id": payload.driver_id, "trip_id": None,
         "classification": "unclassified",
@@ -803,6 +805,7 @@ async def import_rows(job_id: str, status: Optional[str] = None, page: int = 1, 
 async def _row_to_transaction(db, job, row, user, forced_reason=None):
     n = row["normalized"]
     now = _now()
+    fx = await compute_fx(db, n["amount_total"], n.get("currency") or "CHF", n["tx_datetime"])
     card = await db.fuel_cards.find_one({"id": n.get("card_id")},
                                         {"_id": 0, "last4": 1}) if n.get("card_id") else None
     ext = n.get("external_transaction_id")
@@ -828,8 +831,7 @@ async def _row_to_transaction(db, job, row, user, forced_reason=None):
         "amount_net": n.get("amount_net"), "vat_amount": n.get("vat_amount"),
         "vat_rate": n.get("vat_rate"),
         "amount_total": n["amount_total"], "currency": n.get("currency") or "CHF",
-        "fx_rate": None,
-        "amount_chf": n["amount_total"] if (n.get("currency") or "CHF") == "CHF" else None,
+        **fx,
         "mileage": n.get("mileage"),
         "vehicle_hint": n.get("vehicle_hint"), "driver_hint": n.get("driver_hint"),
         "vehicle_id": None, "driver_id": None, "trip_id": None,
@@ -964,12 +966,18 @@ async def fuel_overview(date_from: Optional[str] = None, date_to: Optional[str] 
     q = _tx_query(date_from, date_to, None, None, None, None, None, None)
     txs = await db.fuel_transactions.find(
         q, {"_id": 0, "amount_total": 1, "currency": 1, "match_status": 1,
-            "quantity": 1, "unit": 1, "classification": 1}).to_list(20000)
+            "quantity": 1, "unit": 1, "classification": 1,
+            "amount_chf": 1, "fx_status": 1}).to_list(20000)
     by_currency, by_status, qty = {}, {}, {"L": 0.0, "kWh": 0.0}
     by_class = {"professional": 0.0, "personal": 0.0, "unclassified": 0.0}
+    chf_total, fx_pending = 0.0, 0
     for t in txs:
         cur = t.get("currency") or "CHF"
         by_currency[cur] = round(by_currency.get(cur, 0) + (t.get("amount_total") or 0), 2)
+        if t.get("amount_chf") is not None:
+            chf_total += t["amount_chf"]
+        if t.get("fx_status") == "pending":
+            fx_pending += 1
         st = t.get("match_status") or "unmatched"
         by_status[st] = by_status.get(st, 0) + 1
         if t.get("quantity") and t.get("unit") in qty:
@@ -985,12 +993,69 @@ async def fuel_overview(date_from: Optional[str] = None, date_to: Optional[str] 
     return {
         "transactions_count": len(txs),
         "amount_by_currency": by_currency,
+        "amount_chf_total": round(chf_total, 2),
+        "fx_pending": fx_pending,
         "match_statuses": by_status,
         "quantities": qty,
         "amount_by_classification": {k: round(v, 2) for k, v in by_class.items()},
         "cards_by_status": card_statuses,
         "recent": recent,
     }
+
+
+# ============================================================
+# TAUX DE CHANGE (BCE)
+# ============================================================
+@router.get("/fx/status")
+async def fx_status(user=Depends(require_roles(*READ_ROLES))):
+    _tenant_or_400()
+    db = get_db()
+    state = await db.app_state.find_one({"id": FX_STATE_ID}, {"_id": 0}) or {}
+    pending = await db.fuel_transactions.count_documents({"fx_status": "pending"})
+    sample = []
+    latest = state.get("latest_rate_date")
+    if latest:
+        sample = await db.fuel_exchange_rates.find(
+            {"date": latest, "currency": {"$in": ["CHF", "USD", "GBP"]}},
+            {"_id": 0, "currency": 1, "rate_per_eur": 1}).to_list(10)
+    return {"last_success_at": state.get("last_success_at"),
+            "last_attempt_at": state.get("last_attempt_at"),
+            "last_error": state.get("last_error"),
+            "latest_rate_date": latest,
+            "pending_count": pending, "sample_rates": sample}
+
+
+@router.get("/fx/rates")
+async def fx_rates(date: Optional[str] = None, user=Depends(require_roles(*READ_ROLES))):
+    _tenant_or_400()
+    db = get_db()
+    d = (date or _now())[:10]
+    latest = await db.fuel_exchange_rates.find_one(
+        {"currency": "CHF", "date": {"$lte": d}}, {"_id": 0, "date": 1}, sort=[("date", -1)])
+    if not latest:
+        return {"requested_date": d, "effective_date": None, "rates": []}
+    rows = await db.fuel_exchange_rates.find(
+        {"date": latest["date"]}, {"_id": 0}).sort("currency", 1).to_list(100)
+    return {"requested_date": d, "effective_date": latest["date"], "rates": rows}
+
+
+@router.post("/fx/sync")
+async def fx_sync(user=Depends(require_roles("admin"))):
+    """Synchronisation manuelle BCE + conversion des transactions en attente."""
+    _tenant_or_400()
+    from app.db import get_raw_db
+    raw = get_raw_db()
+    result = await sync_ecb_rates(raw)
+    if not result.get("ok"):
+        raise HTTPException(502, f"Source BCE indisponible : {result.get('error')} — "
+                                 "les taux existants sont conservés, réessayez plus tard.")
+    conv = await convert_pending(raw)
+    db = get_db()
+    still_pending = await db.fuel_transactions.count_documents({"fx_status": "pending"})
+    await log_audit("fuel.fx_sync", user,
+                    {"upserted": result["upserted"], "latest_rate_date": result["latest_rate_date"],
+                     "converted": conv["converted"], "still_pending_tenant": still_pending})
+    return {**result, "converted": conv["converted"], "pending_in_tenant": still_pending}
 
 
 # ============================================================
