@@ -1,6 +1,6 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/layout/ProtectedRoute";
 import AppLayout from "@/components/layout/AppLayout";
 import LoginPage from "@/pages/LoginPage";
@@ -22,7 +22,21 @@ import AdminTenantsPage from "@/pages/AdminTenantsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import AdminAuditPage from "@/pages/AdminAuditPage";
 import ImpersonationBanner from "@/components/layout/ImpersonationBanner";
+import FuelLayout from "@/pages/fuel/FuelLayout";
+import FuelOverviewPage from "@/pages/fuel/FuelOverviewPage";
+import FuelCardsPage from "@/pages/fuel/FuelCardsPage";
+import FuelTransactionsPage from "@/pages/fuel/FuelTransactionsPage";
+import FuelMatchingPage from "@/pages/fuel/FuelMatchingPage";
+import FuelImportsPage from "@/pages/fuel/FuelImportsPage";
+import FuelSettingsPage from "@/pages/fuel/FuelSettingsPage";
+import FuelMyTransactionsPage from "@/pages/fuel/FuelMyTransactionsPage";
 import { Toaster } from "@/components/ui/sonner";
+
+function FuelIndexRedirect() {
+  const { user } = useAuth();
+  return <Navigate to={user?.role === "driver"
+    ? "/livre/carburant/mes-transactions" : "/livre/carburant/apercu"} replace />;
+}
 
 function App() {
   return (
@@ -63,6 +77,23 @@ function App() {
               </ProtectedRoute>
             } />
             <Route path="mes-amendes" element={<DriverFinesPage />} />
+            <Route path="carburant" element={<FuelLayout />}>
+              <Route index element={<FuelIndexRedirect />} />
+              <Route path="apercu" element={
+                <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}><FuelOverviewPage /></ProtectedRoute>} />
+              <Route path="transactions" element={
+                <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}><FuelTransactionsPage /></ProtectedRoute>} />
+              <Route path="cartes" element={
+                <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}><FuelCardsPage /></ProtectedRoute>} />
+              <Route path="rapprochements" element={
+                <ProtectedRoute roles={["admin", "manager"]}><FuelMatchingPage /></ProtectedRoute>} />
+              <Route path="importations" element={
+                <ProtectedRoute roles={["admin"]}><FuelImportsPage /></ProtectedRoute>} />
+              <Route path="parametres" element={
+                <ProtectedRoute roles={["admin"]}><FuelSettingsPage /></ProtectedRoute>} />
+              <Route path="mes-transactions" element={
+                <ProtectedRoute roles={["driver", "admin", "manager"]}><FuelMyTransactionsPage /></ProtectedRoute>} />
+            </Route>
             <Route path="administration" element={
               <ProtectedRoute roles={["admin"]}>
                 <AdministrationLayout />

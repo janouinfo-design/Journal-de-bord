@@ -50,6 +50,7 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      FUEL_CARD_HMAC_SECRET: ${FUEL_CARD_HMAC_SECRET}
     volumes:
       - ./data/storage:/app/storage
     ports:

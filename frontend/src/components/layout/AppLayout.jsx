@@ -13,7 +13,7 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
-  LayoutDashboard, Briefcase, ShieldAlert, Bluetooth, Receipt,
+  LayoutDashboard, Briefcase, ShieldAlert, Bluetooth, Receipt, Fuel,
   Settings, Smartphone, LogOut, Layers, Building2, Users, ScrollText, UserCog,
 } from "lucide-react";
 import ConflictInbox from "@/components/livre/ConflictInbox";
@@ -36,6 +36,10 @@ const TABS = [
   { to: "/livre/amendes",         label: "Amendes",         icon: ShieldAlert,     testId: "nav-fines",         roles: ["admin", "manager", "lecture_seule"],
     matchPrefix: "/livre/amendes" },
   { to: "/livre/mes-amendes",     label: "Mes amendes",     icon: ShieldAlert,     testId: "nav-my-fines",      roles: ["driver"] },
+  { to: "/livre/carburant/apercu", label: "Carburant",      icon: Fuel,            testId: "nav-fuel",          roles: ["admin", "manager", "lecture_seule"],
+    matchPrefix: "/livre/carburant" },
+  { to: "/livre/carburant/mes-transactions", label: "Mes transactions", icon: Fuel, testId: "nav-my-fuel",     roles: ["driver"],
+    matchPrefix: "/livre/carburant" },
   { to: "/livre/identification",  label: "Identification",  icon: Bluetooth,       testId: "nav-identification", roles: ["admin", "manager"] },
   { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console", roles: ["admin", "manager", "driver"] },
   { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager", "lecture_seule"] },

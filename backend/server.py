@@ -64,6 +64,8 @@ async def on_startup():
     await seed_admin()
     from app.tenancy import ensure_tenancy
     await ensure_tenancy(db)
+    from app.fuel_engine import ensure_fuel_indexes
+    await ensure_fuel_indexes(db)
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
     await apply_rules_to_all(db)
