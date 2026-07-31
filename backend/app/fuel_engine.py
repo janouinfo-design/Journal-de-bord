@@ -28,6 +28,7 @@ DEFAULT_FUEL_SETTINGS = {
         "amount_enabled": True,
         "amount_multiplier": 3.0,
         "amount_min_history": 5,
+        "notify_roles": ["admin"],
     },
     "weights": {
         "card_assigned_vehicle": 50,

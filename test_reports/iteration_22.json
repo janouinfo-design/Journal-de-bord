@@ -1,0 +1,41 @@
+{
+  "summary": "E2E final review of Logitrak Fuel module + newly-added critical anomaly in-app notification. Backend pytest: 29 pass + 1 xfail (documented pre-existing RBAC bug). Frontend Playwright: bell/badge/panel/deep-link/ring-highlight/mark-all-read all verified with admin@logitrak.ch. Coverage: (1) fuel.anomaly_critical creates one notification per anomaly with correct link and body (values compared: 150 L vs 65 L capacity), rescan does not duplicate (created:0), notifications_log dedup enforced; (2) Inbox RBAC: driver + admin tenant B do not see admin-of-tenant-default notifications, cross-tenant/driver mark-read → 404, admin mark-read decrements unread, mark-all-read zeros the badge; (3) Default preferences: fuel.anomaly_critical = {push:true, email:false, sms:false}; (4) notify_roles validation: lecture_seule → 400, admin+manager persists and manager receives new notifications, reset to [admin] verified; (5) Widget totals for tenant default match direct MongoDB aggregate (tx_count, amount_chf, liters strictly identical), tenant B widget all zero, driver widget 403; (6) FX status readable by all read roles, sync manager 403; (7) Statements: DEC-2026-0001 exists (status to_review, v2), driver 403, PDF export starts with %PDF-, excel + csv exports 200; (8) RBAC transversal: lecture/manager cannot POST /cards (403), driver cannot list all tx (403), tenant B GET /transactions/{tenantA tx} → 404. UI verified visually: 4 open critical anomalies (all tank_overflow) plus 1 warning double_plein; ring-blue highlight on deep-linked anomaly. DEC-2026-0001 preserved untouched. All TEST_E2E test data cleaned. notify_roles reset to ['admin'].",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/livre/fuel/transactions/{tx_id}", "issue": "Driver RBAC bypass: user record for chauffeur@logitrak.ch has no driver_id field, so `tx.driver_id (None) != user.driver_id (None)` evaluates False and the driver can read admin-created manual TXs that have no driver_id set. Also affects /my-transactions which returns 0 items instead of Jean Dupont's 18 tx. Root cause: users collection missing driver_id link for chauffeur@logitrak.ch (a drivers doc for Jean Dupont exists but is not referenced from users). Fix suggestion: in seed_admin / login, resolve driver_id from drivers collection by email and attach to user; OR in fuel routes, resolve driver_id server-side by user email when missing."},
+      {"endpoint": "GET /api/livre/fuel/statements/{id}/export", "issue": "fmt parameter accepts 'excel' (not 'xlsx'). Consider accepting both aliases for a more standard REST API. Currently returns 400 'Format invalide' for fmt=xlsx."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AppLayout header", "issues": ["Two bell-like icons appear side-by-side in the header (one is the notifications bell with badge, the other appears to be a legacy/duplicate bell icon with no data-testid). Consider removing the duplicate icon."]}
+    ],
+    "console_warnings": ["React: 'Encountered two children with the same key, null' warning printed 4× on dashboard render — indicates a list rendered with a null key. Non-blocking but should be fixed for cleanliness."]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration22_final_review.py",
+    "/app/test_reports/pytest/iteration22.xml"
+  ],
+  "action_items": [
+    "Attach driver_id to the users doc for chauffeur@logitrak.ch (and any driver-role account) so RBAC on GET /fuel/transactions/{id} and /my-transactions works correctly. This is a real security bypass and also breaks the driver's PWA experience (empty 'Mes transactions').",
+    "Fix React duplicate-key warning on the layout (likely in the sidebar tabs or KPI cards).",
+    "Optional: remove the duplicate/legacy bell icon shown next to the new notifications bell (cosmetic).",
+    "Optional: accept fmt=xlsx as alias of fmt=excel on statement exports."
+  ],
+  "critical_code_review_comments": [
+    "fuel.py get_transaction line 413 compares user.driver_id which is not populated on user model for driver accounts; combine with tenant_id check for safety. Consider a canonical helper `require_own_tx(user, tx)` used by all driver endpoints, that resolves driver_id from the drivers collection if missing on the user document."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration22_final_review.py"
+  ],
+  "success_rate": {"backend": "97% (29/30 explicit + 1 xfail documenting existing bug)", "frontend": "100% (all requested flows verified)"},
+  "seed_data_creation": "Created and cleaned 1 TEST_E2E manual transaction on vehicle Enyaq 01 Bern (150 L Sep 20 2026), 1 tank_overflow critical anomaly, its user_notifications entry and notifications_log entry. During test also briefly created a second TEST_E2E tx (130 L Sep 16 2026) for the notify_roles=[admin,manager] verification — also cleaned. notify_roles reset to ['admin']. DEC-2026-0001 preserved untouched (status=to_review, version=2).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123, lecture@logitrak.ch/lecture123, admin-b@test.ch/testb123 — all confirmed working.",
+  "context_for_next_testing_agent": "Fuel module + critical anomaly in-app notification are production-ready barring the driver_id user linkage issue. Test file at /app/backend/tests/test_iteration22_final_review.py auto-cleans its data. Vehicle 0219ef8f-... Enyaq 01 Bern has tank_capacity_l=65. Preexisting anomalies (TEST_ANOM / TEST_NOTIF) untouched. DEC-2026-0001 preserved.",
+  "rca_of_the_issue": "Driver RBAC gap RCA: seed_admin creates the driver-role user but does not populate the `driver_id` foreign key on the users document. The drivers collection has a Jean Dupont doc with a linked email but the users doc lacks the FK. Every place that does `user.get('driver_id')` therefore sees None. In /transactions/{id} the equality None != None is False → read allowed; in /my-transactions the None short-circuit returns empty. Reproduction: POST /api/livre/fuel/transactions as admin with only vehicle_id (no driver_id), then GET /transactions/{id} as chauffeur → 200 instead of 403. Fix: populate user.driver_id at seed/login time by matching drivers.email == users.email within the tenant."
+}

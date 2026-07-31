@@ -73,6 +73,8 @@ async def on_startup():
     await ensure_statement_indexes(get_raw_db())
     from app.fuel_anomalies import ensure_anomaly_indexes
     await ensure_anomaly_indexes(get_raw_db())
+    from app.notifications_service import ensure_notification_indexes
+    await ensure_notification_indexes(get_raw_db())
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
     await apply_rules_to_all(db)

@@ -17,8 +17,11 @@ Design:
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+from pymongo.errors import DuplicateKeyError
 
 from app.expo_push import send_to_tokens
 
@@ -66,6 +69,20 @@ def _r_kill_switch(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], s
     )
 
 
+def _r_fuel_anomaly(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], str | None]:
+    return (
+        "🚨 Anomalie carburant critique",
+        payload.get("explanation") or "Une anomalie critique a été détectée.",
+        {
+            "type": "fuel.anomaly_critical",
+            "anomaly_id": payload.get("anomaly_id"),
+            "transaction_id": payload.get("transaction_id"),
+            "link": f"/livre/carburant/anomalies?anomaly={payload.get('anomaly_id') or ''}",
+        },
+        None,
+    )
+
+
 # Stubs for future business events — already in the catalog so prefs UI
 # can list them and the backend can hook into the dispatcher later.
 def _generic_render(title: str, body_tpl: str):
@@ -92,6 +109,14 @@ EVENT_CATALOG: dict[str, dict[str, Any]] = {
         "default_channels": {"push": True, "email": True, "sms": False},
         "render": _r_kill_switch,
         "audience": "admin",
+    },
+    "fuel.anomaly_critical": {
+        "label": "Anomalie carburant critique",
+        "default_channels": {"push": True, "email": False, "sms": False},
+        "render": _r_fuel_anomaly,
+        "audience": "admin",
+        "inapp": True,       # toujours déposée dans le centre de notifications in-app
+        "email_real": True,  # email SMTP réel si l'utilisateur l'active (désactivé par défaut)
     },
     # Future events (stubs)
     "contract.renewal": {
@@ -225,6 +250,7 @@ async def _resolve_targets(
     user_ids: list[str] | None,
     driver_ids: list[str] | None,
     role_filter: list[str] | None,
+    keep_all: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the list of {user_id, channels, push_tokens} that should be notified."""
     query: dict[str, Any] = {"tenant_id": tenant_id} if tenant_id else {}
@@ -251,7 +277,7 @@ async def _resolve_targets(
         push_ok = prefs["channels"]["push"] and ev_channels.get("push", True)
         email_ok = prefs["channels"]["email"] and ev_channels.get("email", False)
         sms_ok = prefs["channels"]["sms"] and ev_channels.get("sms", False)
-        if not (push_ok or email_ok or sms_ok):
+        if not (push_ok or email_ok or sms_ok) and not keep_all:
             continue
         # Fetch the user's active Expo push tokens (only if push is enabled)
         tokens: list[str] = []
@@ -276,6 +302,7 @@ async def dispatch(
     user_ids: list[str] | None = None,
     driver_ids: list[str] | None = None,
     role_filter: list[str] | None = None,
+    dedup_key: str | None = None,
 ) -> dict[str, Any]:
     """Send the notification for `event` to the resolved audience.
 
@@ -304,9 +331,46 @@ async def dispatch(
     title, body, data, category = meta["render"](payload)
     data = {**(data or {}), "event": event, "payload": payload}
 
+    # Déduplication forte : une seule notification par dedup_key (retry / concurrence)
+    log_id = None
+    if dedup_key:
+        log_id = str(uuid.uuid4())
+        try:
+            await db.notifications_log.insert_one({
+                "id": log_id, "ts": datetime.now(timezone.utc).isoformat(),
+                "tenant_id": tenant_id, "event": event,
+                "dedup_key": dedup_key, "status": "processing",
+            })
+        except DuplicateKeyError:
+            logger.info("dispatch: %s déjà notifié (dedup %s) — ignoré", event, dedup_key)
+            return {"event": event, "skipped": "duplicate", "dedup_key": dedup_key,
+                    "targets": 0, "inapp_created": 0}
+
     targets = await _resolve_targets(
         db, event, tenant_id, user_ids, driver_ids, role_filter,
+        keep_all=bool(meta.get("inapp")),
     )
+
+    # Centre de notifications in-app (une entrée par destinataire, immédiate, dédupliquée)
+    inapp_created = 0
+    if meta.get("inapp") and targets:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        link = (data or {}).get("link")
+        for t in targets:
+            doc = {
+                "id": str(uuid.uuid4()), "user_id": t["user_id"],
+                "tenant_id": tenant_id,
+                "event": event, "title": title, "body": body, "link": link,
+                "data": {k: v for k, v in (data or {}).items() if k != "payload"},
+                "read": False, "created_at": now_iso,
+            }
+            if dedup_key:
+                doc["dedup_key"] = dedup_key
+            try:
+                await db.user_notifications.insert_one(doc)
+                inapp_created += 1
+            except DuplicateKeyError:
+                pass  # déjà notifié pour cet utilisateur
 
     # Aggregate all push tokens across targets (deduplicated)
     all_tokens: list[str] = []
@@ -331,30 +395,58 @@ async def dispatch(
         )
 
     if email_users:
-        logger.info("📧 [email STUB] %s → %d user(s) — %s", event, email_users, title)
+        if meta.get("email_real"):
+            from app.emailer import send_email
+            for t in targets:
+                if t["channels"]["email"] and t.get("user_email"):
+                    await send_email(
+                        t["user_email"], title, body,
+                        f"<p>{body}</p><p>Ouvrez Journal de bord → Carburant → Anomalies pour traiter l'alerte.</p>")
+        else:
+            logger.info("📧 [email STUB] %s → %d user(s) — %s", event, email_users, title)
     if sms_users:
         logger.info("✉️  [sms STUB] %s → %d user(s) — %s", event, sms_users, title)
 
-    await db.notifications_log.insert_one({
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "tenant_id": tenant_id,
-        "event": event,
+    log_fields = {
         "title": title,
         "body": body,
         "data": data,
         "targeted_users": len(targets),
+        "inapp_created": inapp_created,
         "push_sent": push_summary.get("sent"),
         "push_failed": push_summary.get("failed"),
         "email_planned": email_users,
         "sms_planned": sms_users,
-    })
+    }
+    if log_id:
+        await db.notifications_log.update_one(
+            {"id": log_id}, {"$set": {**log_fields, "status": "sent"}})
+    else:
+        await db.notifications_log.insert_one({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "tenant_id": tenant_id,
+            "event": event,
+            **log_fields,
+        })
 
     return {
         "event": event,
         "title": title,
         "body": body,
         "targets": len(targets),
+        "inapp_created": inapp_created,
         "push": push_summary,
         "email_users": email_users,
         "sms_users": sms_users,
     }
+
+
+async def ensure_notification_indexes(raw_db):
+    await raw_db.user_notifications.create_index(
+        [("user_id", 1), ("dedup_key", 1)], unique=True,
+        partialFilterExpression={"dedup_key": {"$exists": True}})
+    await raw_db.user_notifications.create_index(
+        [("user_id", 1), ("read", 1), ("created_at", -1)])
+    await raw_db.notifications_log.create_index(
+        [("tenant_id", 1), ("event", 1), ("dedup_key", 1)], unique=True,
+        partialFilterExpression={"dedup_key": {"$exists": True}})

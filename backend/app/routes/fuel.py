@@ -959,7 +959,8 @@ class FuelSettingsIn(BaseModel):
 _ANOMALY_SETTING_KEYS = {"tank_enabled": bool, "tank_tolerance_pct": (int, float),
                          "card_enabled": bool, "double_enabled": bool,
                          "double_window_min": int, "amount_enabled": bool,
-                         "amount_multiplier": (int, float), "amount_min_history": int}
+                         "amount_multiplier": (int, float), "amount_min_history": int,
+                         "notify_roles": list}
 
 
 @router.put("/settings")
@@ -990,6 +991,10 @@ async def update_fuel_settings(payload: FuelSettingsIn, user=Depends(require_rol
             raise HTTPException(400, "Multiplicateur montant : entre 1.1 et 20")
         if an.get("amount_min_history") is not None and not (2 <= an["amount_min_history"] <= 50):
             raise HTTPException(400, "Historique minimum : entre 2 et 50 transactions")
+        if "notify_roles" in an:
+            allowed = {"admin", "manager", "driver"}
+            if not all(isinstance(r, str) and r in allowed for r in an["notify_roles"]):
+                raise HTTPException(400, "Destinataires d'alertes invalides (admin, manager, driver)")
         current = (await get_fuel_settings(db)).get("anomalies", {})
         changes["anomalies"] = {**current, **an}
     before = await get_fuel_settings(db)

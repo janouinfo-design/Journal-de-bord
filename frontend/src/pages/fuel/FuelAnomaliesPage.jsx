@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, formatApiErrorDetail, fmtDateTime } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -29,6 +30,8 @@ export default function FuelAnomaliesPage() {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [detailTxId, setDetailTxId] = useState(null);
+  const [searchParams] = useSearchParams();
+  const highlightId = searchParams.get("anomaly");
 
   const load = useCallback(() => {
     api.get("/livre/fuel/anomalies", { params: { status } })
@@ -36,6 +39,12 @@ export default function FuelAnomaliesPage() {
       .catch((e) => toast.error(formatApiErrorDetail(e.response?.data?.detail)));
   }, [status]);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (highlightId && data.items.some((a) => a.id === highlightId)) {
+      document.getElementById(`anomaly-${highlightId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightId, data]);
 
   async function scan() {
     setScanning(true);
@@ -92,8 +101,8 @@ export default function FuelAnomaliesPage() {
           const sev = ANOMALY_SEVERITY[a.severity] || ANOMALY_SEVERITY.warning;
           const tx = a.transaction || {};
           return (
-            <div key={a.id} data-testid={`fuel-anomaly-${a.id}`}
-                 className="bg-white rounded-lg border border-slate-200 p-3.5 flex flex-wrap items-start gap-3">
+            <div key={a.id} id={`anomaly-${a.id}`} data-testid={`fuel-anomaly-${a.id}`}
+                 className={`bg-white rounded-lg border p-3.5 flex flex-wrap items-start gap-3 ${a.id === highlightId ? "border-[#2196F3] ring-2 ring-[#2196F3]/30" : "border-slate-200"}`}>
               <div className="flex flex-col gap-1 shrink-0 w-40">
                 <span className={`inline-flex w-fit px-2 py-0.5 rounded-full border text-[11px] font-semibold ${sev.cls}`}>
                   {sev.label}

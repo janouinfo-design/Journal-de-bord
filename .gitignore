@@ -122,3 +122,4 @@ data/
 backups/
 logs/
 frontend/node_modules/.cache/default-development/7.pack
+frontend/node_modules/.cache/default-development/19.pack

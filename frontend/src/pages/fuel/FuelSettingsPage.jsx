@@ -183,12 +183,19 @@ export default function FuelSettingsPage() {
           amount_enabled: !!s.anomalies?.amount_enabled,
           amount_multiplier: Number(s.anomalies?.amount_multiplier),
           amount_min_history: Number(s.anomalies?.amount_min_history),
+          notify_roles: s.anomalies?.notify_roles || ["admin"],
         },
       });
       setS(data);
       toast.success("Paramètres enregistrés");
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
+  }
+
+  function toggleNotifyRole(role) {
+    const cur = s.anomalies?.notify_roles || ["admin"];
+    const next = cur.includes(role) ? cur.filter((r) => r !== role) : [...cur, role];
+    setS({ ...s, anomalies: { ...s.anomalies, notify_roles: next } });
   }
 
   if (!s) return <p className="text-sm text-slate-400">Chargement…</p>;
@@ -305,6 +312,25 @@ export default function FuelSettingsPage() {
                      onChange={(e) => setS({ ...s, anomalies: { ...s.anomalies, amount_min_history: e.target.value } })} />
               <Switch data-testid="fuel-anomaly-amount-enabled" checked={!!s.anomalies?.amount_enabled}
                       onCheckedChange={(v) => setS({ ...s, anomalies: { ...s.anomalies, amount_enabled: v } })} />
+            </div>
+          </div>
+          <div className="pt-3 border-t border-slate-100 space-y-2" data-testid="fuel-anomaly-notify-settings">
+            <div>
+              <p className="text-sm text-slate-800 font-medium">Destinataires de la notification immédiate (anomalies critiques)</p>
+              <p className="text-[10px] text-slate-400">
+                Notification in-app dès qu'une anomalie critique est détectée — une seule par anomalie.
+                L'e-mail est optionnel et désactivé par défaut : chaque destinataire peut l'activer dans ses préférences de notifications.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-5">
+              {[["admin", "Administrateurs"], ["manager", "Gestionnaires"], ["driver", "Chauffeurs (jamais par défaut)"]].map(([role, label]) => (
+                <label key={role} className="flex items-center gap-2 text-xs text-slate-600">
+                  <Switch data-testid={`fuel-anomaly-notify-${role}`}
+                          checked={(s.anomalies?.notify_roles || ["admin"]).includes(role)}
+                          onCheckedChange={() => toggleNotifyRole(role)} />
+                  {label}
+                </label>
+              ))}
             </div>
           </div>
         </div>

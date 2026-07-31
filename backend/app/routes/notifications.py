@@ -1,6 +1,8 @@
 """Notification preferences + dispatcher endpoints."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user, require_roles
@@ -48,3 +50,36 @@ async def notifications_test(payload: dict, user=Depends(require_roles("admin"))
         user_ids=(payload or {}).get("user_ids"),
         driver_ids=(payload or {}).get("driver_ids"),
     )
+
+
+@router.get("/notifications/inbox")
+async def notifications_inbox(unread_only: bool = False, limit: int = 30,
+                              user=Depends(get_current_user)):
+    """Centre de notifications in-app de l'utilisateur courant (isolé par tenant)."""
+    db = get_db()
+    q: dict = {"user_id": user["id"]}
+    if unread_only:
+        q["read"] = False
+    items = await db.user_notifications.find(
+        q, {"_id": 0, "tenant_id": 0, "dedup_key": 0}) \
+        .sort("created_at", -1).to_list(max(1, min(limit, 100)))
+    unread = await db.user_notifications.count_documents({"user_id": user["id"], "read": False})
+    return {"items": items, "unread": unread}
+
+
+@router.post("/notifications/inbox/{notif_id}/read")
+async def notifications_mark_read(notif_id: str, user=Depends(get_current_user)):
+    r = await get_db().user_notifications.update_one(
+        {"id": notif_id, "user_id": user["id"]},
+        {"$set": {"read": True, "read_at": datetime.now(timezone.utc).isoformat()}})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Notification introuvable")
+    return {"ok": True}
+
+
+@router.post("/notifications/inbox/read-all")
+async def notifications_mark_all_read(user=Depends(get_current_user)):
+    r = await get_db().user_notifications.update_many(
+        {"user_id": user["id"], "read": False},
+        {"$set": {"read": True, "read_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "updated": r.modified_count}

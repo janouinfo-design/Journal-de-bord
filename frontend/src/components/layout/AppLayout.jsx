@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import ConflictInbox from "@/components/livre/ConflictInbox";
 import TenantSwitcher from "@/components/layout/TenantSwitcher";
+import NotificationsBell from "@/components/layout/NotificationsBell";
 
 const ROLE_LABEL = {
   admin: "Administrateur",
@@ -104,6 +105,7 @@ export default function AppLayout() {
           {/* Right actions: tenant switcher (superadmin) + conflict inbox + user menu */}
           <div className="flex items-center gap-3">
             {isSuperAdmin && <TenantSwitcher />}
+            <NotificationsBell />
             {(user?.role === "admin" || user?.role === "manager") && <ConflictInbox />}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

@@ -4,9 +4,14 @@
 aucune valeur métier en dur. Données manquantes → règle muette (jamais de valeur fictive).
 Dédup stricte : une seule anomalie par (transaction, type), jamais recréée après décision.
 """
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from statistics import median
+
+from pymongo.errors import DuplicateKeyError
+
+logger = logging.getLogger(__name__)
 
 ANOMALY_SEVERITY = {
     "tank_overflow": "critical",
@@ -44,8 +49,31 @@ async def _exists(db, tx_id: str, atype: str) -> bool:
         {"transaction_id": tx_id, "type": atype}, {"_id": 0, "id": 1}) is not None
 
 
+async def _notify_critical(doc: dict, tx: dict, cfg: dict):
+    """Notification immédiate in-app (dédupliquée par anomalie) — jamais bloquante."""
+    from app.notifications_service import dispatch
+    roles = [r for r in (cfg or {}).get("notify_roles", ["admin"])
+             if r in ("admin", "manager", "driver")]
+    if not roles:
+        return
+    try:
+        await dispatch(
+            "fuel.anomaly_critical",
+            {
+                "anomaly_id": doc["id"], "transaction_id": doc["transaction_id"],
+                "anomaly_type": doc["type"], "explanation": doc["explanation"],
+                "context": doc.get("context"),
+                "tx_datetime": tx.get("tx_datetime"), "station_name": tx.get("station_name"),
+            },
+            role_filter=roles,
+            dedup_key=f"fuel.anomaly:{doc['id']}",
+        )
+    except Exception:
+        logger.exception("Notification anomalie critique impossible (anomalie %s)", doc["id"])
+
+
 async def _create(db, atype: str, tx: dict, explanation: str, context: dict,
-                  related_tx_id: str | None = None) -> dict:
+                  related_tx_id: str | None = None, cfg: dict | None = None) -> dict | None:
     doc = {
         "id": str(uuid.uuid4()), "type": atype,
         "severity": ANOMALY_SEVERITY[atype], "status": "open",
@@ -55,7 +83,12 @@ async def _create(db, atype: str, tx: dict, explanation: str, context: dict,
         "detected_at": _now(),
         "decided_by": None, "decided_at": None, "decision_reason": None,
     }
-    await db.fuel_anomalies.insert_one(dict(doc))
+    try:
+        await db.fuel_anomalies.insert_one(dict(doc))
+    except DuplicateKeyError:
+        return None  # traitement concurrent / nouvel essai : jamais de doublon
+    if doc["severity"] == "critical":
+        await _notify_critical(doc, tx, cfg or {})
     return doc
 
 
@@ -77,12 +110,11 @@ async def _check_tank(db, tx, cfg, vehicles) -> bool:
         return False
     if await _exists(db, tx["id"], "tank_overflow"):
         return False
-    await _create(db, "tank_overflow", tx,
-                  f"{qty:g} {unit} relevés pour une capacité de {cap_label} de {cap:g} {unit} "
-                  f"sur {veh.get('plate') or 'le véhicule'} (tolérance {tol:g} %, limite {limit:g} {unit}).",
-                  {"quantity": qty, "unit": unit, "capacity": cap,
-                   "tolerance_pct": tol, "limit": round(limit, 2)})
-    return True
+    return (await _create(db, "tank_overflow", tx,
+                          f"{qty:g} {unit} relevés pour une capacité de {cap_label} de {cap:g} {unit} "
+                          f"sur {veh.get('plate') or 'le véhicule'} (tolérance {tol:g} %, limite {limit:g} {unit}).",
+                          {"quantity": qty, "unit": unit, "capacity": cap,
+                           "tolerance_pct": tol, "limit": round(limit, 2)}, cfg=cfg)) is not None
 
 
 async def _check_card(db, tx, cfg, cards_cache) -> bool:
@@ -103,11 +135,11 @@ async def _check_card(db, tx, cfg, cards_cache) -> bool:
         return False
     label = {"suspended": "suspendue", "expired": "expirée",
              "blocked": "bloquée", "replaced": "remplacée"}.get(status_at, status_at)
-    await _create(db, "card_inactive", tx,
-                  f"Transaction effectuée avec la carte •••• {card.get('last4') or '????'} "
-                  f"alors qu'elle était {label} au moment du plein.",
-                  {"card_status_at_tx": status_at, "card_last4": card.get("last4")})
-    return True
+    return (await _create(db, "card_inactive", tx,
+                          f"Transaction effectuée avec la carte •••• {card.get('last4') or '????'} "
+                          f"alors qu'elle était {label} au moment du plein.",
+                          {"card_status_at_tx": status_at, "card_last4": card.get("last4")},
+                          cfg=cfg)) is not None
 
 
 async def _check_double(db, tx, cfg) -> bool:
@@ -135,15 +167,14 @@ async def _check_double(db, tx, cfg) -> bool:
     link = "la même carte" if same_card else "le même véhicule"
     s1, s2 = tx.get("station_name") or "station inconnue", other.get("station_name") or "station inconnue"
     diff_station = s1 != s2
-    await _create(db, "double_fill", tx,
-                  f"Deux pleins à {delta_min} min d'intervalle avec {link} "
-                  f"({'stations différentes : ' + s1 + ' / ' + s2 if diff_station else 'même station : ' + s1}) "
-                  f"— fenêtre de détection : {window} min.",
-                  {"interval_min": delta_min, "window_min": window,
-                   "same_card": bool(same_card), "different_stations": diff_station,
-                   "stations": [s1, s2]},
-                  related_tx_id=other["id"])
-    return True
+    return (await _create(db, "double_fill", tx,
+                          f"Deux pleins à {delta_min} min d'intervalle avec {link} "
+                          f"({'stations différentes : ' + s1 + ' / ' + s2 if diff_station else 'même station : ' + s1}) "
+                          f"— fenêtre de détection : {window} min.",
+                          {"interval_min": delta_min, "window_min": window,
+                           "same_card": bool(same_card), "different_stations": diff_station,
+                           "stations": [s1, s2]},
+                          related_tx_id=other["id"], cfg=cfg)) is not None
 
 
 async def _check_amount(db, tx, cfg) -> bool:
@@ -165,13 +196,12 @@ async def _check_amount(db, tx, cfg) -> bool:
         return False
     if await _exists(db, tx["id"], "amount_unusual"):
         return False
-    await _create(db, "amount_unusual", tx,
-                  f"Montant de {amount:.2f} CHF, soit {amount / med:.1f}× la médiane historique "
-                  f"du véhicule ({med:.2f} CHF sur {len(hist)} transactions ; "
-                  f"seuil : {mult:g}× la médiane).",
-                  {"amount_chf": amount, "median_chf": round(med, 2),
-                   "history_count": len(hist), "multiplier": mult})
-    return True
+    return (await _create(db, "amount_unusual", tx,
+                          f"Montant de {amount:.2f} CHF, soit {amount / med:.1f}× la médiane historique "
+                          f"du véhicule ({med:.2f} CHF sur {len(hist)} transactions ; "
+                          f"seuil : {mult:g}× la médiane).",
+                          {"amount_chf": amount, "median_chf": round(med, 2),
+                           "history_count": len(hist), "multiplier": mult}, cfg=cfg)) is not None
 
 
 async def detect_transactions(db, settings: dict, txs: list[dict]) -> int:
