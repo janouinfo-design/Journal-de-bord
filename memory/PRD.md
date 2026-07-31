@@ -20,6 +20,27 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 31 — Module Carburant & Décomptes Phase 1 COMPLET (31/07/2026) — TESTÉ 26/26 backend + frontend 4 rôles (iteration_19.json)
+- **Backend** (`app/routes/fuel.py` ~1010 LOC, `app/fuel_engine.py`, `app/fuel_import.py`) :
+  - Cartes : CRUD admin, numéro JAMAIS stocké (HMAC `FUEL_CARD_HMAC_SECRET` + last4), doublon 409, statuts avec motif, affectations historisées véhicule/chauffeur/pool, documents.
+  - Transactions : liste filtrée (dates/carte/véhicule/chauffeur/statut/source/station), saisie manuelle avec motif obligatoire + anti-doublon 409/force, détail avec breakdown.
+  - `GET /my-transactions` (driver only, filtre serveur `driver_id`), `GET /transactions/{id}` 403 si tx d'autrui.
+  - **`POST /transactions/{id}/report-issue`** (nouveau) : chauffeur (ses tx), admin, manager — push `issues[]` + audit `fuel.tx_issue_report`.
+  - Justificatifs : upload/download tx (driver = ses tx only) + cartes, whitelist mime, 20 MB.
+  - Import CSV/XLSX : upload → mapping (auto-guess + mémorisation par fournisseur) → aperçu compteurs (ok/duplicate/unknown_card/invalid/amount_mismatch) → confirm ; doublons en file de révision, force ligne avec motif.
+  - Rapprochement : score explicable /100 (règles carte affectée +50, véhicule fourni +40, geo, chauffeur, carburant compatible, pénalités), `POST /match/run` (admin/manager), attribution manuelle PATCH avec motif.
+  - `GET /refs` restreint à admin/manager/lecture_seule (le chauffeur ne voit JAMAIS les listes véhicules/chauffeurs/cartes).
+  - Paramètres tenant : seuils score_auto/score_review, fenêtre temporelle, rayon station, mode répartition A/B, fournisseurs.
+- **Frontend** (`pages/fuel/` 8 fichiers + `components/fuel/TxDetailDialog.jsx` + `ManualTxDialog.jsx`) :
+  - Nav : onglet « Carburant » (admin/manager/lecture_seule) et « Mes transactions » (driver) → `/livre/carburant/*`.
+  - Sous-onglets horizontaux par rôle : admin = Vue d'ensemble/Transactions/Cartes/Rapprochements/Importations/Paramètres ; manager = idem sans Importations/Paramètres ; lecture_seule = Vue d'ensemble/Transactions/Cartes ; driver = « Mes transactions » uniquement.
+  - Pages : FuelOverviewPage (KPIs), FuelTransactionsPage (filtres+pagination+détail+saisie manuelle), FuelMatchingPage (4 files + run + breakdown), FuelImportsPage (wizard 3 étapes + historique + force avec motif), FuelSettingsPage, FuelMyTransactionsPage (driver), FuelCardsPage.
+  - TxDetailDialog partagé : détail complet, score explicable point par point, attribution manuelle (admin/manager, motif obligatoire), justificatifs (upload/download), signalement d'erreur.
+  - Guards routes React : driver redirigé vers /livre/dashboard sur /carburant/cartes|rapprochements|importations|parametres.
+- **Tests** : `/app/backend/tests/test_fuel_phase1.py` 26/26 PASS (isolation driver 7, workflow driver 5, lecture_seule 7, manager 4, multi-tenant 2, dedup+force 1) + Playwright 4 rôles 100 % (iteration_19.json). Curl préalables : report-issue 200, driver→tx d'autrui 403, driver refs 403.
+- Backlog mineur (console, non bloquant, PRÉ-EXISTANT hors fuel) : warning React « two children with same key » (probablement notifications/menus) + WS /api/livre/realtime échoue parfois à l'établissement en preview.
+- Phases suivantes NON commencées : décomptes/clôtures, taux de change BCE (Phase 2), connecteurs fournisseurs + sync programmée (Phase 3), anomalies avancées (Phase 4).
+
 ### Iteration 30 — Test SMTP Intégré (22/07/2026) — TESTÉ curl + envoi réel (aiosmtpd local) + UI
 - `GET /api/livre/settings/smtp-status` (admin) : {configured, host, port, from_addr, user_set} — jamais le mot de passe.
 - `POST /api/livre/settings/smtp-test {to?}` (admin, défaut = email de l'admin) : 400 si non configuré (variables manquantes citées), envoi synchrone réel sinon, 502 avec l'erreur SMTP précise en cas d'échec. Audit `settings.smtp_test`.
