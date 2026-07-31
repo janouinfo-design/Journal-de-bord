@@ -20,6 +20,23 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 33 — Alertes anomalies (31/07/2026) — TESTÉ backend curl complet + testing agent iteration_21 (100 % backend 9/9 + 100 % frontend, 0 défaut)
+- **Moteur** `app/fuel_anomalies.py` — 4 règles serveur, TOUS les seuils configurables par tenant (settings.anomalies, aucune valeur en dur), données manquantes → règle muette :
+  - R1 volume > capacité (L/kWh, tolérance % configurable, MUETTE si capacité véhicule inconnue) — critique
+  - R2 carte non active AU MOMENT de la tx (reconstitution via l'historique daté des statuts) — critique
+  - R3 double plein rapproché (même carte OU véhicule, fenêtre min configurable, stations différentes signalées, tx liée référencée) — avertissement
+  - R4 montant inhabituel (> multiplicateur × médiane historique du même véhicule, min. d'historique configurable, jamais de valeur fictive) — avertissement
+  - Explications précises FR avec valeurs + context chiffré ; dédup stricte (index unique tenant+tx+type, jamais recréée après décision — validé created=0 au re-scan)
+- **Détection auto** après import confirm / force row / saisie manuelle / attribution manuelle / match run + bouton « Analyser maintenant » (admin+manager, audit fuel.anomaly.scan)
+- **Décisions** Justifier/Corriger/Rejeter (admin+manager), motif obligatoire (400), une seule décision (409), audit fuel.anomaly.justify/correct/reject
+- **Capacités véhicules** : GET /vehicles-capacities + PATCH /vehicles/{id}/capacity (admin, audit fuel.vehicle.capacity_update) — saisie dans Paramètres carburant
+- **Blocage clôture** : anomalie critique ouverte = bloquant de décompte (« Anomalie critique non résolue » dans line_issues + blockers.anomalies.count + lien dans le bloc de contrôle) — validé count=2 sur décompte août test
+- **UI** : onglet Anomalies (admin/manager/lecture_seule ; chauffeur 403+redirect), files par statut avec compteurs, badges gravité, liens tx→TxDetailDialog, dialog décision ; Paramètres : section 4 règles (switches+seuils validés serveur 400) + capacités ; Vue d'ensemble : KPI « Anomalies ouvertes » cliquable rouge
+- Seuils par défaut : tolérance 100 %, fenêtre 60 min (démo actuellement 120), multiplicateur 3.0, min. historique 5
+- Régression : /app/backend/tests/test_fuel_anomalies_regression.py (9 tests, ~3 s)
+- État démo : 3 ouvertes / 2 justifiées (tenant default, tx août 2026) ; carte •••• 9010 suspendue (voulu) ; Enyaq réservoir 65 L ; DEC-2026-0001 V2 « À contrôler » intact
+
+
 ### Iteration 32 — Taux de change BCE + Décomptes & Clôtures (31/07/2026) — TESTÉ curl complet + testing agent iteration_20 (bug PDF corrigé après)
 - **Taux de change BCE** (`app/fuel_fx.py`, sans correction manuelle — reportée sur demande utilisateur) :
   - Flux public eurofxref-hist-90d (sans clé), sync APScheduler quotidienne 16h20 Europe/Zurich (lun-ven) + seed au démarrage + `POST /fx/sync` admin (audit `fuel.fx_sync`).
