@@ -20,6 +20,14 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 34 — Widget Carburant tableau de bord (31/07/2026) — SELF-TESTÉ (cohérence totaux vérifiée par calcul indépendant + RBAC + multi-tenant + navigation filtrée via screenshot)
+- Backend `GET /livre/fuel/widget` (admin/manager/lecture_seule 200 ; chauffeur 403) : mois courant fuseau Europe/Zurich, date comptable sinon transaction (même logique que les décomptes) — coût CHF, tx_count, litres/kWh séparés, comparaison mois précédent (delta % ; null si aucune donnée — jamais de division par zéro), unmatched_count + fx_pending_count globaux tenant, anomalies open/critical, état du décompte mensuel (mois précédent sinon courant, sinon « À créer »)
+- Frontend `components/fuel/FuelWidget.jsx` inséré dans DashboardPage (avant FinesWidget) — 7 indicateurs TOUS cliquables vers les listes pré-filtrées : coût/litres/kWh → transactions?date_from&date_to, non rapprochées → ?match_status=unmatched, conversions → ?fx_status=pending, anomalies → /anomalies, décompte → /decomptes/{id} ; masqué automatiquement pour le chauffeur (catch 403)
+- FuelTransactionsPage : init date_from/date_to depuis les query params
+- Vérifs : widget 666.33 CHF / 11 tx / 277.7 L == calcul MongoDB indépendant ; tenant B = zéros ; clic « Non rapprochées » → 10 transactions filtrées (vérifié navigateur)
+- Prochaines priorités validées : 1) Notification anomalie critique (in-app immédiate + email optionnel configurable, dédup 1 notif/anomalie, destinataires configurables, pas au chauffeur sauf règle explicite, journalisée) 2) Rappel de clôture (le 5 du mois fuseau client, uniquement si décompte précédent non clôturé, 1 rappel/période, lien direct, journalisé). Backlog : taux fournisseur manuel, connecteurs fournisseurs Phase 3.
+
+
 ### Iteration 33 — Alertes anomalies (31/07/2026) — TESTÉ backend curl complet + testing agent iteration_21 (100 % backend 9/9 + 100 % frontend, 0 défaut)
 - **Moteur** `app/fuel_anomalies.py` — 4 règles serveur, TOUS les seuils configurables par tenant (settings.anomalies, aucune valeur en dur), données manquantes → règle muette :
   - R1 volume > capacité (L/kWh, tolérance % configurable, MUETTE si capacité véhicule inconnue) — critique

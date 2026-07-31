@@ -23,6 +23,8 @@ export default function FuelTransactionsPage() {
     ...EMPTY_FILTERS,
     match_status: searchParams.get("match_status") || "",
     fx_status: searchParams.get("fx_status") || "",
+    date_from: searchParams.get("date_from") || "",
+    date_to: searchParams.get("date_to") || "",
   });
   const [data, setData] = useState({ items: [], total: 0, page: 1, page_size: 50 });
   const [refs, setRefs] = useState({ vehicles: [], drivers: [], cards: [], product_types: [] });

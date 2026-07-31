@@ -1048,6 +1048,71 @@ async def fuel_overview(date_from: Optional[str] = None, date_to: Optional[str] 
 
 
 # ============================================================
+# WIDGET CARBURANT (tableau de bord principal)
+# ============================================================
+@router.get("/widget")
+async def fuel_widget(user=Depends(require_roles(*READ_ROLES))):
+    """Chiffres du mois courant (fuseau du tenant, date comptable sinon transaction),
+    comparaison mois précédent, files à traiter et état du décompte mensuel."""
+    _tenant_or_400()
+    db = get_db()
+    from datetime import timedelta as _td
+    from app.fuel_statements import TENANT_TZ, basis_date_of
+    today = datetime.now(timezone.utc).astimezone(TENANT_TZ).date()
+    cur_from = today.replace(day=1)
+    prev_last = cur_from - _td(days=1)
+    cur_month, prev_month = cur_from.strftime("%Y-%m"), prev_last.strftime("%Y-%m")
+    cur = {"amount_chf": 0.0, "tx_count": 0, "liters": 0.0, "kwh": 0.0}
+    prev_amount, prev_count = 0.0, 0
+    txs = await db.fuel_transactions.find(
+        {}, {"_id": 0, "accounting_date": 1, "tx_datetime": 1, "amount_chf": 1,
+             "quantity": 1, "unit": 1}).to_list(50000)
+    for t in txs:
+        if not t.get("tx_datetime") and not t.get("accounting_date"):
+            continue
+        month = basis_date_of(t)[0][:7]
+        if month == cur_month:
+            cur["tx_count"] += 1
+            if t.get("amount_chf") is not None:
+                cur["amount_chf"] += t["amount_chf"]
+            if t.get("quantity"):
+                if t.get("unit") == "kWh":
+                    cur["kwh"] += t["quantity"]
+                elif t.get("unit") == "L":
+                    cur["liters"] += t["quantity"]
+        elif month == prev_month:
+            prev_count += 1
+            if t.get("amount_chf") is not None:
+                prev_amount += t["amount_chf"]
+    for k in ("amount_chf", "liters", "kwh"):
+        cur[k] = round(cur[k], 2)
+    prev_amount = round(prev_amount, 2)
+    delta_pct = round((cur["amount_chf"] - prev_amount) / prev_amount * 100, 1) \
+        if prev_amount > 0 else None
+    unmatched = await db.fuel_transactions.count_documents({"match_status": "unmatched"})
+    fx_pending = await db.fuel_transactions.count_documents({"fx_status": "pending"})
+    anomalies_open = await db.fuel_anomalies.count_documents({"status": "open"})
+    anomalies_critical = await db.fuel_anomalies.count_documents(
+        {"status": "open", "severity": "critical"})
+    stmt = await db.fuel_statements.find_one(
+        {"period_month": prev_month}, {"_id": 0, "id": 1, "number": 1, "status": 1, "period_month": 1}) \
+        or await db.fuel_statements.find_one(
+            {"period_month": cur_month}, {"_id": 0, "id": 1, "number": 1, "status": 1, "period_month": 1})
+    return {
+        "month": cur_month,
+        "date_from": cur_from.isoformat(), "date_to": today.isoformat(),
+        "current": cur,
+        "previous": {"month": prev_month, "amount_chf": prev_amount, "tx_count": prev_count},
+        "delta_pct": delta_pct,
+        "unmatched_count": unmatched,
+        "fx_pending_count": fx_pending,
+        "anomalies": {"open": anomalies_open, "critical": anomalies_critical},
+        "statement": ({"exists": True, **stmt} if stmt
+                      else {"exists": False, "period_month": prev_month}),
+    }
+
+
+# ============================================================
 # ALERTES ANOMALIES
 # ============================================================
 @router.get("/anomalies")
