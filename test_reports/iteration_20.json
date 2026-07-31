@@ -1,0 +1,37 @@
+{
+  "summary": "Phase 2 Carburant (Décomptes + FX) — backend RBAC/FX curl regression (7/7 pass) + full frontend flow tested via Playwright per role. Detail page, KPIs, blockers, links to filtered transactions, by-vehicle/driver tables, versions, refresh/check/close-force dialog, Excel/CSV exports, create-then-delete draft, FX card in Settings, tx conversion display (Mulhouse EUR→46.62 CHF, XXX pending amber, TxDetailDialog fx-block + fx-pending), overview KPI + subline, manager/lecture RBAC (no create/close/check/delete buttons, PDF visible), driver URL guard (redirect to /livre/dashboard). ONE CRITICAL BUG FOUND: PDF export returns 500 for all statements without close exception (crash in build_pdf).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/livre/fuel/statements/{id}/export?fmt=pdf", "issue": "500 Internal Server Error — AttributeError in /app/backend/app/fuel_statements_exporter.py:76 : `stmt.get('close_exception', {}).get('applied')` crashes because close_exception is stored as None (not absent) on statements without an applied exception. `.get('close_exception', {})` returns None, then `.get('applied')` raises AttributeError. Fix: `(stmt.get('close_exception') or {}).get('applied')`. This blocks PDF export for every non-force-closed decompte — Excel and CSV work correctly.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "FuelStatementDetailPage — PDF export button", "issue": "Clicking Télécharger PDF never triggers a download (backend 500). No visible error toast surfaced to the user — only a stuck no-op click. Same underlying cause as backend PDF bug.", "selector": "[data-testid='fuel-stmt-export-pdf']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Fuel Vue d'ensemble KPI", "issues": ["KPI 'Montant total (CHF)' displays 666.33 CHF for admin, but the review request expected ~758 CHF (i.e. including the ~93 CHF conversion of the 100 USD transaction). Overview does include EUR conversion mention and '1 conversion(s) en attente', but the CHF total appears to sum decompte total (which excludes the pending XXX) rather than the tenant-wide converted total. Please confirm expected behaviour: if overview KPI must include converted USD amount, the calc misses ~92 CHF."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fuel_phase1.py"
+  ],
+  "action_items": [
+    "Fix build_pdf None-safety on close_exception (fuel_statements_exporter.py:76) — one-liner: `(stmt.get('close_exception') or {}).get('applied')`. Consider auditing other .get(k,{}).get(...) chains in the same file.",
+    "Surface an error toast in the UI when PDF export fails so users are not left without feedback.",
+    "Verify overview 'Montant total (CHF)' calculation: request expected ~758 CHF; observed 666.33 CHF (missing USD conversion?)."
+  ],
+  "critical_code_review_comments": [
+    "fuel_statements_exporter.py: replace `stmt.get('close_exception', {}).get(...)` with `(stmt.get('close_exception') or {}).get(...)` — same anti-pattern will fail for any nullable dict field."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "86% (6/7 verified endpoints OK, PDF export broken)", "frontend": "92% (PDF button non-functional; every other tested UI element/behavior verified)"},
+  "seed_data_creation": "Created + deleted one draft DEC-2026-0002 (juin 2026) as part of create/delete flow. Final state: only DEC-2026-0001 (V2, À contrôler) remains — untouched. No other seed changes.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, lecture@logitrak.ch/lecture123, paul.test@client.ch/paul1234, admin-b@test.ch/testb123 — all working.",
+  "context_for_next_testing_agent": "DEC-2026-0001 V2 'À contrôler' preserved (11 tx, 666.33 CHF, 10 blockers = 9 unmatched + 1 pending XXX). PDF export broken due to close_exception NoneType — see backend logs (`grep build_pdf /var/log/supervisor/backend.err.log`). Excel/CSV exports OK. FX weekend fallback confirmed (2026-07-26 → 2026-07-24). FX sync admin OK (upserted 1856, latest 2026-07-30). RBAC on POST/GET /statements + /fx/status confirmed for all 4 roles. Tenant B admin sees 0 statements (isolation OK). Frontend flows validated end-to-end for admin (create+delete draft + refresh + check + close-force-dialog with disabled confirm + exports), and RBAC UI hiding confirmed for manager/lecture (no create/close/check/delete buttons visible) and driver (URL redirect).",
+  "rca_of_the_issue": "PDF failure root cause: in build_pdf, `stmt.get('close_exception', {})` returns None (not the default {}) because the DB stores the key explicitly as null on statements that were never force-closed. The subsequent `.get('applied')` call raises AttributeError → 500. Fix: coalesce with `or {}`. Reproduction: `GET /api/livre/fuel/statements/{DEC-2026-0001-id}/export?fmt=pdf` with any valid admin token → 500. Excel + CSV don't touch close_exception so they succeed."
+}

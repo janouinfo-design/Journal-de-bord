@@ -332,8 +332,10 @@ class ManualTxIn(BaseModel):
     force: bool = False                        # forcer malgré un doublon probable
 
 
-def _tx_query(date_from, date_to, card_id, vehicle_id, driver_id, match_status, source, q):
+def _tx_query(date_from, date_to, card_id, vehicle_id, driver_id, match_status, source, q, fx_status=None):
     query = {}
+    if fx_status:
+        query["fx_status"] = fx_status
     if date_from:
         query.setdefault("tx_datetime", {})["$gte"] = date_from
     if date_to:
@@ -367,12 +369,13 @@ async def list_transactions(date_from: Optional[str] = None, date_to: Optional[s
                             card_id: Optional[str] = None, vehicle_id: Optional[str] = None,
                             driver_id: Optional[str] = None, match_status: Optional[str] = None,
                             source: Optional[str] = None, q: Optional[str] = None,
+                            fx_status: Optional[str] = None,
                             page: int = 1, page_size: int = 50,
                             user=Depends(require_roles(*READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     page_size = min(max(page_size, 1), 200)
-    query = _tx_query(date_from, date_to, card_id, vehicle_id, driver_id, match_status, source, q)
+    query = _tx_query(date_from, date_to, card_id, vehicle_id, driver_id, match_status, source, q, fx_status)
     total = await db.fuel_transactions.count_documents(query)
     items = await db.fuel_transactions.find(query, {"_id": 0}) \
         .sort("tx_datetime", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
@@ -494,6 +497,9 @@ async def manual_match(tx_id: str, payload: MatchPatchIn, user=Depends(require_r
     tx = await db.fuel_transactions.find_one({"id": tx_id}, {"_id": 0})
     if not tx:
         raise HTTPException(404, "Transaction introuvable")
+    if tx.get("locked"):
+        raise HTTPException(409, "Transaction verrouillée par un décompte clôturé — "
+                                 "rouvrez le décompte pour modifier le rapprochement")
     if payload.vehicle_id and not await db.vehicles.find_one({"id": payload.vehicle_id}, {"_id": 0, "id": 1}):
         raise HTTPException(404, "Véhicule introuvable")
     classification = "unclassified"
@@ -537,6 +543,7 @@ async def run_matching(payload: MatchRunIn, user=Depends(require_roles(*MATCH_RO
     db = get_db()
     q = {"match_status": {"$in": ["unmatched", "matched_review"]}} if payload.only_unmatched \
         else {"match_status": {"$ne": "manual"}}
+    q["locked"] = {"$ne": True}
     if payload.date_from:
         q["tx_datetime"] = {"$gte": payload.date_from}
     txs = await db.fuel_transactions.find(q, {"_id": 0}).sort("tx_datetime", -1).to_list(2000)

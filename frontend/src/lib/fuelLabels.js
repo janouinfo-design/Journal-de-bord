@@ -33,6 +33,13 @@ export const FX_STATUS = {
   not_needed: { label: "CHF",                   cls: "bg-slate-100 text-slate-500 border-slate-200" },
 };
 
+export const STATEMENT_STATUS = {
+  draft:     { label: "Brouillon",   cls: "bg-slate-100 text-slate-600 border-slate-200" },
+  to_review: { label: "À contrôler", cls: "bg-amber-100 text-amber-700 border-amber-200" },
+  validated: { label: "Validé",      cls: "bg-sky-100 text-sky-700 border-sky-200" },
+  closed:    { label: "Clôturé",     cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+};
+
 export const ROW_STATUS = {
   ok:              { label: "Valide",             cls: "bg-emerald-100 text-emerald-700" },
   duplicate:       { label: "Doublon probable",   cls: "bg-amber-100 text-amber-700" },

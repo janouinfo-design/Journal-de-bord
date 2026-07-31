@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, formatApiErrorDetail, fmtDateTime } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -12,12 +13,17 @@ import TxDetailDialog from "@/components/fuel/TxDetailDialog";
 import ManualTxDialog from "@/components/fuel/ManualTxDialog";
 import { Plus, ChevronLeft, ChevronRight, Search } from "lucide-react";
 
-const EMPTY_FILTERS = { date_from: "", date_to: "", match_status: "", card_id: "", vehicle_id: "", q: "" };
+const EMPTY_FILTERS = { date_from: "", date_to: "", match_status: "", card_id: "", vehicle_id: "", q: "", fx_status: "" };
 
 export default function FuelTransactionsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "superadmin";
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [searchParams] = useSearchParams();
+  const [filters, setFilters] = useState({
+    ...EMPTY_FILTERS,
+    match_status: searchParams.get("match_status") || "",
+    fx_status: searchParams.get("fx_status") || "",
+  });
   const [data, setData] = useState({ items: [], total: 0, page: 1, page_size: 50 });
   const [refs, setRefs] = useState({ vehicles: [], drivers: [], cards: [], product_types: [] });
   const [page, setPage] = useState(1);
@@ -78,6 +84,13 @@ export default function FuelTransactionsPage() {
                  value={filters.q} onChange={(e) => setF("q")(e.target.value)} />
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {filters.fx_status === "pending" && (
+            <button data-testid="fuel-tx-fx-filter-badge" type="button"
+                    onClick={() => setF("fx_status")("")}
+                    className="px-2 py-1 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700 border border-amber-200">
+              Filtre : Conversion en attente ✕
+            </button>
+          )}
           <span className="text-xs text-slate-400" data-testid="fuel-tx-total">{data.total} transaction(s)</span>
           {isAdmin && (
             <Button data-testid="fuel-tx-create-btn" className="bg-[#2196F3] hover:bg-[#1976D2] text-white h-9"
