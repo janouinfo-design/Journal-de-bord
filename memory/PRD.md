@@ -664,4 +664,13 @@ affectation manuelle, droits par rôle.
   1. SMTP reel de l'e-mail d'anomalie non declenche dans la revue finale (e-mail volontairement desactive par defaut ; canal = infra SMTP invitations deja testee)
   2. Cycle cloture/reouverture des decomptes non rejoue dans iteration_22 (preservation de DEC-2026-0001) — couvert par les preuves anterieures iteration_20 (bug PDF corrige et reteste ensuite)
 - ETAT FINAL ACCEPTE PAR L'UTILISATEUR : CONFORME AVEC DEUX RESERVES DE VALIDATION DOCUMENTEES. Perimetre Carburant & Decomptes FIGE ET ACCEPTE — archive, aucun developpement/proposition sans demande explicite.
+
+## Seed demo Carburant pour production (31 juil. 2026) — demande utilisateur post-archivage
+- Script /app/backend/seed_fuel_demo.py (copie dans l'image backend -> /app/seed_fuel_demo.py dans le conteneur)
+- Seed : 3 cartes DEMO (Shell/UTA/Migrol suspendue), 15 tx CHF+EUR (mois precedent + courant), sync BCE, rapprochements, 4 anomalies (2 critiques -> notifications in-app reelles), decompte brouillon du mois precedent — tenant default, stations prefixees "DEMO", motif "Donnee de demonstration (seed)"
+- Utilise les vehicules EXISTANTS (rien de supprime) ; pose tank_capacity_l=60 sur le 1er vehicule si absent (retire au clean)
+- Reversible : python seed_fuel_demo.py --clean (etat fuel_demo_state dans Mongo, restauration exacte verifiee en preview : baseline 19tx/1carte/8anomalies/2decomptes/5notifs retrouvee a l'identique)
+- Idempotent : refuse un second seed tant que --clean n'a pas ete lance
+- VPS : docker compose -p journal_logitrak exec journal_backend python seed_fuel_demo.py [--clean]
+- AVERTISSEMENT donnees completes : POST /api/livre/bootstrap sans force ne fait rien si des trajets existent ; avec force=true il EFFACE drivers/vehicles/trips/geofences (interdit en prod avec donnees Navixy reelles)
 - Backlog conserve par decision utilisateur (NE PAS developper sans demande explicite) : rappel de cloture, tendance carburant 6 mois, taux fournisseur/correction manuelle FX, connecteurs fournisseurs Phase 3, e-mail anomalies reste optionnel/off
