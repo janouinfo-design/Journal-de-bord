@@ -384,17 +384,30 @@ async def list_transactions(date_from: Optional[str] = None, date_to: Optional[s
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+async def _driver_id_of(db, user) -> Optional[str]:
+    """driver_id de l'utilisateur, résolu côté serveur (jamais fourni par le client)."""
+    did = user.get("driver_id")
+    if did:
+        return did
+    email = (user.get("email") or "").lower()
+    if not email:
+        return None
+    d = await db.drivers.find_one({"email": email}, {"_id": 0, "id": 1})
+    return d["id"] if d else None
+
+
 @router.get("/my-transactions")
 async def my_transactions(page: int = 1, page_size: int = 50, user=Depends(get_current_user)):
     """Chauffeur : uniquement ses propres transactions."""
     _tenant_or_400()
     if user.get("role") != "driver":
         raise HTTPException(403, "Réservé aux chauffeurs")
-    if not user.get("driver_id"):
-        return {"items": [], "total": 0, "page": 1, "page_size": page_size}
     db = get_db()
+    driver_id = await _driver_id_of(db, user)
+    if not driver_id:
+        return {"items": [], "total": 0, "page": 1, "page_size": page_size}
     page_size = min(max(page_size, 1), 200)
-    q = {"driver_id": user["driver_id"]}
+    q = {"driver_id": driver_id}
     total = await db.fuel_transactions.count_documents(q)
     items = await db.fuel_transactions.find(q, {"_id": 0}) \
         .sort("tx_datetime", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
@@ -410,8 +423,10 @@ async def get_transaction(tx_id: str, user=Depends(get_current_user)):
     if not tx:
         raise HTTPException(404, "Transaction introuvable")
     role = user.get("role")
-    if role == "driver" and tx.get("driver_id") != user.get("driver_id"):
-        raise HTTPException(403, "Accès refusé")
+    if role == "driver":
+        did = await _driver_id_of(db, user)
+        if not did or tx.get("driver_id") != did:
+            raise HTTPException(403, "Accès refusé")
     if role not in ("admin", "manager", "lecture_seule", "superadmin", "driver"):
         raise HTTPException(403, "Accès refusé")
     tx["match_detail"] = await db.fuel_transaction_matches.find_one(
@@ -585,8 +600,10 @@ async def download_tx_document(tx_id: str, doc_id: str, user=Depends(get_current
     tx = await db.fuel_transactions.find_one({"id": tx_id}, {"_id": 0, "documents": 1, "driver_id": 1})
     if not tx:
         raise HTTPException(404, "Transaction introuvable")
-    if user.get("role") == "driver" and tx.get("driver_id") != user.get("driver_id"):
-        raise HTTPException(403, "Accès refusé")
+    if user.get("role") == "driver":
+        did = await _driver_id_of(db, user)
+        if not did or tx.get("driver_id") != did:
+            raise HTTPException(403, "Accès refusé")
     return _serve_document("transactions", tx_id, tx.get("documents") or [], doc_id)
 
 
@@ -606,7 +623,8 @@ async def report_tx_issue(tx_id: str, payload: IssueIn, user=Depends(get_current
         raise HTTPException(404, "Transaction introuvable")
     role = user.get("role")
     if role == "driver":
-        if tx.get("driver_id") != user.get("driver_id"):
+        did = await _driver_id_of(db, user)
+        if not did or tx.get("driver_id") != did:
             raise HTTPException(403, "Vous ne pouvez signaler une erreur que sur vos propres transactions")
     elif role not in ("admin", "manager", "superadmin"):
         raise HTTPException(403, "Accès refusé")

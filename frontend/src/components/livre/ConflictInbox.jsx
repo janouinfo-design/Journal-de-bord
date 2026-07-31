@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Bell, Users, Truck, Clock, ShieldCheck } from "lucide-react";
+import { Users, Truck, Clock, ShieldCheck } from "lucide-react";
 import { useRealtime } from "@/hooks/useRealtime";
 
 function fmtTime(iso) {
@@ -91,7 +91,7 @@ export default function ConflictInbox() {
           <button
             data-testid="header-conflict-inbox"
             className="w-9 h-9 rounded-md hover:bg-slate-100 flex items-center justify-center text-slate-500 relative">
-            <Bell className="w-[18px] h-[18px]" />
+            <Users className="w-[18px] h-[18px]" />
             {count > 0 && (
               <span
                 data-testid="header-conflict-badge"

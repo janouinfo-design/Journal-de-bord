@@ -240,8 +240,8 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {data.table.map((r) => (
-                <tr key={r.driver_id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+              {data.table.map((r, i) => (
+                <tr key={r.driver_id || `row-${i}`} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                   <td className="py-3 px-5 font-medium text-slate-800">{r.driver_name}</td>
                   <td className="py-3 px-4 text-slate-600 font-mono text-xs">{r.vehicle_plate}</td>
                   <td className="py-3 px-4 text-right text-[#1976D2] font-medium">{fmtKm(r.pro_km)}</td>

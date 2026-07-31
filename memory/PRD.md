@@ -641,3 +641,23 @@ affectation manuelle, droits par rôle.
 - Frontend: onglet Administration (admin) -> sous-onglets Utilisateurs/Chauffeurs (AdministrationLayout, TeamUsersPage, TeamDriversPage)
 - Securite: /auth/register refuse role superadmin; anti auto-suppression/retrogradation
 - BACKLOG (spec user non implemente): role lecture_seule, perimetres gestionnaire (groupes/vehicules), file "Trajets a attribuer" avec attribution en masse, proposition de lien chauffeur/utilisateur par email
+
+## Notification critique anomalies carburant + revue E2E finale (31 juil. 2026) — PERIMETRE FUEL FIGE
+- Notification in-app immediate des anomalies critiques (tank_overflow, card_inactive) :
+  - Declenchement dans fuel_anomalies._create -> dispatch('fuel.anomaly_critical') si severity=critical, jamais bloquant
+  - Dedup forte : claim unique notifications_log (tenant_id,event,dedup_key) + user_notifications unique (user_id,dedup_key) — teste retry ET concurrence (asyncio.gather)
+  - Destinataires configurables : settings.anomalies.notify_roles (defaut ['admin'], driver jamais par defaut, validation 400 si role hors admin/manager/driver) — UI switches dans FuelSettingsPage
+  - E-mail OPTIONNEL et DESACTIVE PAR DEFAUT (catalog email:False) ; SMTP reel seulement si l'utilisateur l'active dans ses preferences
+  - Lien direct : /livre/carburant/anomalies?anomaly=<id> avec surlignage ring (FuelAnomaliesPage deep-link)
+  - API inbox : GET /api/livre/notifications/inbox, POST .../inbox/{id}/read (404 cross-tenant/cross-user), POST .../inbox/read-all
+  - UI : NotificationsBell.jsx (cloche + badge non-lus, panneau, navigation, tout marquer lu) dans AppLayout pour tous les roles
+  - ConflictInbox : icone Bell -> Users pour eviter la double cloche
+- Correctifs revue E2E iteration_22 (tous retestes) :
+  - SECURITE : bypass RBAC chauffeur (users.driver_id manquant -> None==None) corrige via _driver_id_of() (resolution serveur par email drivers) dans get_transaction/my-transactions/upload_doc/download_doc/report-issue + reparation data users.driver_id chauffeur@logitrak.ch -> Jean Dupont
+  - fmt=xlsx accepte comme alias de excel sur export decompte
+  - Warning React duplicate key null (DashboardPage table key fallback)
+- Import XLSX prouve E2E : upload -> mapping auto correct -> confirm (1 importee, 1 doublon en revision sans DuplicateKeyError, 1 invalide) — artefacts nettoyes
+- Donnees de demo conservees, clairement identifiees : TEST_ANOM/TEST_NOTIF (aout 2026), DEC-2026-0001 V2 a controler (juillet 2026, intact)
+- Rapports : /app/test_reports/iteration_22.json (backend 29 pass + 1 xfail corrige ensuite ; frontend 100%) + tests ciblés main agent
+- ETAT FINAL RAPPORTE A L'UTILISATEUR : CONFORME (voir rapport final chat du 31 juil. 2026). Aucune nouvelle fonctionnalite a proposer — perimetre fige par l'utilisateur.
+- Backlog conserve par decision utilisateur (NE PAS developper sans demande explicite) : rappel de cloture, tendance carburant 6 mois, taux fournisseur/correction manuelle FX, connecteurs fournisseurs Phase 3, e-mail anomalies reste optionnel/off

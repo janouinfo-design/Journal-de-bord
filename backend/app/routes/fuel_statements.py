@@ -287,6 +287,8 @@ async def export_statement(statement_id: str, fmt: str = "pdf",
                            user=Depends(require_roles(*READ_ROLES))):
     _tenant_or_400()
     db = get_db()
+    if fmt == "xlsx":
+        fmt = "excel"
     if fmt not in ("pdf", "excel", "csv"):
         raise HTTPException(400, "Format invalide (pdf, excel ou csv)")
     stmt = await db.fuel_statements.find_one({"id": statement_id}, {"_id": 0, "tenant_id": 0})
