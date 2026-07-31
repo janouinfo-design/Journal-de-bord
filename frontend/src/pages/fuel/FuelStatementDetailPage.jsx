@@ -279,6 +279,15 @@ export default function FuelStatementDetailPage() {
                 </Link>
               </li>
             )}
+            {b.anomalies?.count > 0 && (
+              <li>
+                {b.anomalies.count} anomalie(s) critique(s) non résolue(s){" "}
+                <Link data-testid="fuel-stmt-link-anomalies" className="underline font-medium"
+                      to="/livre/carburant/anomalies">
+                  Voir les anomalies
+                </Link>
+              </li>
+            )}
           </ul>
           {b.review?.count > 0 && (
             <p className="text-[11px] text-amber-700 ml-6">

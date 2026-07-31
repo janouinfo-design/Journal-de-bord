@@ -40,6 +40,25 @@ export const STATEMENT_STATUS = {
   closed:    { label: "Clôturé",     cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
 };
 
+export const ANOMALY_TYPE_LABEL = {
+  tank_overflow: "Volume > capacité",
+  card_inactive: "Carte inactive",
+  double_fill: "Double plein rapproché",
+  amount_unusual: "Montant inhabituel",
+};
+
+export const ANOMALY_SEVERITY = {
+  critical: { label: "Critique",      cls: "bg-rose-100 text-rose-700 border-rose-200" },
+  warning:  { label: "Avertissement", cls: "bg-amber-100 text-amber-700 border-amber-200" },
+};
+
+export const ANOMALY_STATUS = {
+  open:      { label: "Ouverte",   cls: "bg-rose-100 text-rose-700 border-rose-200" },
+  justified: { label: "Justifiée", cls: "bg-sky-100 text-sky-700 border-sky-200" },
+  corrected: { label: "Corrigée",  cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+  rejected:  { label: "Rejetée",   cls: "bg-slate-100 text-slate-500 border-slate-200" },
+};
+
 export const ROW_STATUS = {
   ok:              { label: "Valide",             cls: "bg-emerald-100 text-emerald-700" },
   duplicate:       { label: "Doublon probable",   cls: "bg-amber-100 text-amber-700" },

@@ -19,6 +19,16 @@ DEFAULT_FUEL_SETTINGS = {
     "time_window_min": 120,
     "allocation_mode": "A",  # A = coût rattaché à l'événement, B = répartition (Phase 2)
     "providers": ["Shell", "UTA", "DKV", "Migrol", "AVIA", "Agrola", "Routex", "BP", "Eni", "Socar", "Autre"],
+    "anomalies": {
+        "tank_enabled": True,
+        "tank_tolerance_pct": 100,
+        "card_enabled": True,
+        "double_enabled": True,
+        "double_window_min": 60,
+        "amount_enabled": True,
+        "amount_multiplier": 3.0,
+        "amount_min_history": 5,
+    },
     "weights": {
         "card_assigned_vehicle": 50,
         "vehicle_hint": 40,
@@ -64,6 +74,7 @@ async def get_fuel_settings(db) -> dict:
     doc = await db.settings.find_one({"id": "fuel"}, {"_id": 0}) or {}
     merged = {**DEFAULT_FUEL_SETTINGS, **doc}
     merged["weights"] = {**DEFAULT_FUEL_SETTINGS["weights"], **(doc.get("weights") or {})}
+    merged["anomalies"] = {**DEFAULT_FUEL_SETTINGS["anomalies"], **(doc.get("anomalies") or {})}
     return merged
 
 

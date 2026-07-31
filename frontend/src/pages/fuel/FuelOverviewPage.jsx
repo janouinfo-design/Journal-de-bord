@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, formatApiErrorDetail, fmtDateTime } from "@/lib/api";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { MATCH_STATUS, CARD_STATUS, fmtAmount, fmtQty, CLASSIFICATION_LABEL } from "@/lib/fuelLabels";
-import { ReceiptText, Droplets, Zap, CreditCard } from "lucide-react";
+import { ReceiptText, Droplets, Zap, CreditCard, AlertTriangle } from "lucide-react";
 
 function Stat({ icon: Icon, label, value, sub, testId }) {
   return (
@@ -37,7 +38,7 @@ export default function FuelOverviewPage() {
 
   return (
     <div data-testid="fuel-overview-page" className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <Stat icon={ReceiptText} label="Transactions" value={data.transactions_count}
               testId="fuel-stat-count" />
         <Stat icon={ReceiptText} label="Montant total (CHF)" value={fmtAmount(chf)}
@@ -45,6 +46,16 @@ export default function FuelOverviewPage() {
               testId="fuel-stat-amount" />
         <Stat icon={Droplets} label="Litres" value={fmtQty(data.quantities?.L, "L")} testId="fuel-stat-liters" />
         <Stat icon={Zap} label="Recharge" value={fmtQty(data.quantities?.kWh, "kWh")} testId="fuel-stat-kwh" />
+        <Link to="/livre/carburant/anomalies" data-testid="fuel-stat-anomalies"
+              className={`bg-white rounded-lg border p-4 transition-colors hover:bg-slate-50 ${data.anomalies_open ? "border-rose-300" : "border-slate-200"}`}>
+          <div className="flex items-center gap-2 text-slate-400 text-[11px] uppercase tracking-wider font-semibold">
+            <AlertTriangle className={`w-3.5 h-3.5 ${data.anomalies_open ? "text-rose-500" : ""}`} /> Anomalies ouvertes
+          </div>
+          <div className={`text-2xl font-semibold mt-1 ${data.anomalies_open ? "text-rose-600" : "text-slate-900"}`}>
+            {data.anomalies_open ?? 0}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">{data.anomalies_open ? "Cliquez pour traiter" : "Aucune alerte en attente"}</div>
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">

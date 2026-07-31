@@ -1,7 +1,7 @@
 import { Outlet } from "react-router-dom";
 import SubTabs from "@/components/layout/SubTabs";
 import { useAuth } from "@/contexts/AuthContext";
-import { Gauge, ReceiptText, CreditCard, GitMerge, Upload, Settings2, ListChecks, FileCheck2 } from "lucide-react";
+import { Gauge, ReceiptText, CreditCard, GitMerge, Upload, Settings2, ListChecks, FileCheck2, AlertTriangle } from "lucide-react";
 
 export default function FuelLayout() {
   const { user } = useAuth();
@@ -20,6 +20,7 @@ export default function FuelLayout() {
       { to: "/livre/carburant/cartes", label: "Cartes carburant", icon: CreditCard, testId: "subtab-fuel-cards" },
       ...(role === "manager" || isAdmin
         ? [{ to: "/livre/carburant/rapprochements", label: "Rapprochements", icon: GitMerge, testId: "subtab-fuel-matching" }] : []),
+      { to: "/livre/carburant/anomalies", label: "Anomalies", icon: AlertTriangle, testId: "subtab-fuel-anomalies" },
       { to: "/livre/carburant/decomptes", label: "Décomptes", icon: FileCheck2, testId: "subtab-fuel-statements" },
       ...(isAdmin ? [{ to: "/livre/carburant/importations", label: "Importations", icon: Upload, testId: "subtab-fuel-imports" }] : []),
       ...(isAdmin ? [{ to: "/livre/carburant/parametres", label: "Paramètres", icon: Settings2, testId: "subtab-fuel-settings" }] : []),

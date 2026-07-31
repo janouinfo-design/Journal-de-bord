@@ -23,6 +23,7 @@ from app.fuel_engine import (
     get_fuel_settings, match_transaction,
 )
 from app.fuel_fx import FX_STATE_ID, compute_fx, convert_pending, sync_ecb_rates
+from app.fuel_anomalies import ANOMALY_STATUSES, detect_for_tx_ids, run_full_scan
 from app.fuel_import import INTERNAL_FIELDS, guess_mapping, normalize_row, parse_file
 from app.tenant_context import get_effective_tenant_id
 
@@ -473,6 +474,7 @@ async def create_manual_transaction(payload: ManualTxIn, user=Depends(require_ro
     await db.fuel_transactions.insert_one(dict(tx))
     if not payload.vehicle_id:
         await apply_match(db, tx)
+    await detect_for_tx_ids(db, await get_fuel_settings(db), [tx["id"]])
     await log_audit("fuel.tx_manual_create", user,
                     {"transaction_id": tx["id"], "amount": payload.amount_total,
                      "currency": tx["currency"], "reason": payload.reason,
@@ -529,6 +531,7 @@ async def manual_match(tx_id: str, payload: MatchPatchIn, user=Depends(require_r
                      "after": {"vehicle_id": payload.vehicle_id, "driver_id": payload.driver_id,
                                "trip_id": payload.trip_id},
                      "reason": payload.reason})
+    await detect_for_tx_ids(db, await get_fuel_settings(db), [tx_id])
     return {"updated": True, "match_status": "manual"}
 
 
@@ -553,6 +556,7 @@ async def run_matching(payload: MatchRunIn, user=Depends(require_roles(*MATCH_RO
         result = await apply_match(db, tx, settings)
         counts["processed"] += 1
         counts[result["match_status"]] = counts.get(result["match_status"], 0) + 1
+    await detect_for_tx_ids(db, settings, [t["id"] for t in txs])
     await log_audit("fuel.match_run", user, counts)
     return counts
 
@@ -874,19 +878,24 @@ async def confirm_import(job_id: str, user=Depends(require_roles("admin"))):
         {"_id": 0}).sort("row_index", 1).to_list(20000)
     settings = await get_fuel_settings(db)
     imported = 0
+    imported_ids = []
     match_counts = {"auto_matched": 0, "matched_review": 0, "unmatched": 0}
     for row in rows:
         tx = await _row_to_transaction(db, job, row, user)
         result = await apply_match(db, tx, settings)
         match_counts[result["match_status"]] = match_counts.get(result["match_status"], 0) + 1
         imported += 1
+        imported_ids.append(tx["id"])
+    anomalies_created = await detect_for_tx_ids(db, settings, imported_ids)
     await db.fuel_import_jobs.update_one(
         {"id": job_id}, {"$set": {"status": "confirmed", "confirmed_at": _now(),
                                   "imported_count": imported}})
     await log_audit("fuel.import_confirm", user,
                     {"job_id": job_id, "imported": imported, "match": match_counts,
+                     "anomalies_created": anomalies_created,
                      "duplicates_kept_aside": job["counts"].get("duplicate", 0)})
     return {"imported": imported, "match": match_counts,
+            "anomalies_created": anomalies_created,
             "duplicates_in_review": job["counts"].get("duplicate", 0),
             "invalid_skipped": job["counts"].get("invalid", 0)}
 
@@ -913,6 +922,7 @@ async def force_import_row(job_id: str, row_id: str, payload: ForceRowIn,
         raise HTTPException(400, "Seules les lignes de la file de vérification peuvent être forcées")
     tx = await _row_to_transaction(db, job, row, user, forced_reason=payload.reason.strip())
     await apply_match(db, tx)
+    await detect_for_tx_ids(db, await get_fuel_settings(db), [tx["id"]])
     await log_audit("fuel.import_force_row", user,
                     {"job_id": job_id, "row_id": row_id, "transaction_id": tx["id"],
                      "row_status": row["status"], "reason": payload.reason})
@@ -943,6 +953,13 @@ class FuelSettingsIn(BaseModel):
     time_window_min: Optional[int] = None
     allocation_mode: Optional[str] = None
     providers: Optional[list[str]] = None
+    anomalies: Optional[dict] = None
+
+
+_ANOMALY_SETTING_KEYS = {"tank_enabled": bool, "tank_tolerance_pct": (int, float),
+                         "card_enabled": bool, "double_enabled": bool,
+                         "double_window_min": int, "amount_enabled": bool,
+                         "amount_multiplier": (int, float), "amount_min_history": int}
 
 
 @router.put("/settings")
@@ -957,6 +974,24 @@ async def update_fuel_settings(payload: FuelSettingsIn, user=Depends(require_rol
     if changes.get("score_auto") and changes.get("score_review") \
             and changes["score_review"] >= changes["score_auto"]:
         raise HTTPException(400, "Le seuil de contrôle doit être inférieur au seuil automatique")
+    if "anomalies" in changes:
+        an = changes["anomalies"]
+        bad = [k for k in an if k not in _ANOMALY_SETTING_KEYS]
+        if bad:
+            raise HTTPException(400, f"Paramètres d'anomalies inconnus : {', '.join(bad)}")
+        for k, v in an.items():
+            if not isinstance(v, _ANOMALY_SETTING_KEYS[k]) or isinstance(v, bool) and _ANOMALY_SETTING_KEYS[k] is not bool:
+                raise HTTPException(400, f"Valeur invalide pour {k}")
+        if an.get("tank_tolerance_pct") is not None and not (50 <= an["tank_tolerance_pct"] <= 300):
+            raise HTTPException(400, "Tolérance réservoir : entre 50 et 300 %")
+        if an.get("double_window_min") is not None and not (1 <= an["double_window_min"] <= 1440):
+            raise HTTPException(400, "Fenêtre double plein : entre 1 et 1440 minutes")
+        if an.get("amount_multiplier") is not None and not (1.1 <= an["amount_multiplier"] <= 20):
+            raise HTTPException(400, "Multiplicateur montant : entre 1.1 et 20")
+        if an.get("amount_min_history") is not None and not (2 <= an["amount_min_history"] <= 50):
+            raise HTTPException(400, "Historique minimum : entre 2 et 50 transactions")
+        current = (await get_fuel_settings(db)).get("anomalies", {})
+        changes["anomalies"] = {**current, **an}
     before = await get_fuel_settings(db)
     await db.settings.update_one({"id": "fuel"}, {"$set": changes,
                                                   "$setOnInsert": {"id": "fuel"}}, upsert=True)
@@ -997,17 +1032,144 @@ async def fuel_overview(date_from: Optional[str] = None, date_to: Optional[str] 
         card_statuses[c["status"]] = card_statuses.get(c["status"], 0) + 1
     recent = await db.fuel_transactions.find(q, {"_id": 0}).sort("tx_datetime", -1).to_list(10)
     await _enrich_tx(db, recent)
+    anomalies_open = await db.fuel_anomalies.count_documents({"status": "open"})
     return {
         "transactions_count": len(txs),
         "amount_by_currency": by_currency,
         "amount_chf_total": round(chf_total, 2),
         "fx_pending": fx_pending,
+        "anomalies_open": anomalies_open,
         "match_statuses": by_status,
         "quantities": qty,
         "amount_by_classification": {k: round(v, 2) for k, v in by_class.items()},
         "cards_by_status": card_statuses,
         "recent": recent,
     }
+
+
+# ============================================================
+# ALERTES ANOMALIES
+# ============================================================
+@router.get("/anomalies")
+async def list_anomalies(status: Optional[str] = None, severity: Optional[str] = None,
+                         type: Optional[str] = None,
+                         user=Depends(require_roles(*READ_ROLES))):
+    _tenant_or_400()
+    db = get_db()
+    q = {}
+    if status:
+        if status not in ANOMALY_STATUSES:
+            raise HTTPException(400, "Statut invalide")
+        q["status"] = status
+    if severity:
+        q["severity"] = severity
+    if type:
+        q["type"] = type
+    rows = await db.fuel_anomalies.find(q, {"_id": 0, "tenant_id": 0}) \
+        .sort("detected_at", -1).to_list(1000)
+    tx_ids = {r["transaction_id"] for r in rows} | \
+             {r["related_transaction_id"] for r in rows if r.get("related_transaction_id")}
+    txs = {t["id"]: t for t in await db.fuel_transactions.find(
+        {"id": {"$in": list(tx_ids)}},
+        {"_id": 0, "id": 1, "tx_datetime": 1, "station_name": 1, "amount_total": 1,
+         "currency": 1, "amount_chf": 1, "card_last4": 1, "vehicle_id": 1,
+         "quantity": 1, "unit": 1}).to_list(2000)} if tx_ids else {}
+    vehicles = {v["id"]: v.get("plate") for v in await db.vehicles.find(
+        {}, {"_id": 0, "id": 1, "plate": 1}).to_list(2000)}
+    for r in rows:
+        tx = txs.get(r["transaction_id"]) or {}
+        r["transaction"] = {**tx, "vehicle_plate": vehicles.get(tx.get("vehicle_id"))}
+    counts = {}
+    async for doc in db.fuel_anomalies.aggregate(
+            [{"$group": {"_id": "$status", "n": {"$sum": 1}}}]):
+        counts[doc["_id"]] = doc["n"]
+    return {"items": rows, "counts_by_status": counts}
+
+
+@router.post("/anomalies/scan")
+async def scan_anomalies(user=Depends(require_roles(*MATCH_ROLES))):
+    """Analyse toutes les transactions du client avec les seuils configurés."""
+    _tenant_or_400()
+    db = get_db()
+    settings = await get_fuel_settings(db)
+    created = await run_full_scan(db, settings)
+    open_count = await db.fuel_anomalies.count_documents({"status": "open"})
+    await log_audit("fuel.anomaly.scan", user,
+                    {"created": created, "open_total": open_count})
+    return {"created": created, "open_total": open_count}
+
+
+class AnomalyDecisionIn(BaseModel):
+    action: str      # justify | correct | reject
+    reason: str
+
+
+@router.post("/anomalies/{anomaly_id}/decide")
+async def decide_anomaly(anomaly_id: str, payload: AnomalyDecisionIn,
+                         user=Depends(require_roles(*MATCH_ROLES))):
+    _tenant_or_400()
+    db = get_db()
+    actions = {"justify": "justified", "correct": "corrected", "reject": "rejected"}
+    if payload.action not in actions:
+        raise HTTPException(400, "Action invalide (justify, correct ou reject)")
+    if not payload.reason.strip():
+        raise HTTPException(400, "Motif obligatoire")
+    anomaly = await db.fuel_anomalies.find_one({"id": anomaly_id}, {"_id": 0})
+    if not anomaly:
+        raise HTTPException(404, "Anomalie introuvable")
+    if anomaly["status"] != "open":
+        raise HTTPException(409, "Cette anomalie a déjà été traitée")
+    now = _now()
+    await db.fuel_anomalies.update_one(
+        {"id": anomaly_id},
+        {"$set": {"status": actions[payload.action], "decided_by": user["email"],
+                  "decided_at": now, "decision_reason": payload.reason.strip()}})
+    await log_audit(f"fuel.anomaly.{payload.action}", user,
+                    {"anomaly_id": anomaly_id, "type": anomaly["type"],
+                     "severity": anomaly["severity"],
+                     "transaction_id": anomaly["transaction_id"],
+                     "reason": payload.reason.strip()})
+    return {"updated": True, "status": actions[payload.action]}
+
+
+# ============================================================
+# CAPACITÉS DES VÉHICULES (prérequis règle « volume > réservoir »)
+# ============================================================
+@router.get("/vehicles-capacities")
+async def vehicles_capacities(user=Depends(require_roles("admin"))):
+    _tenant_or_400()
+    db = get_db()
+    return await db.vehicles.find(
+        {}, {"_id": 0, "id": 1, "plate": 1, "label": 1, "fuel_type": 1,
+             "tank_capacity_l": 1, "battery_capacity_kwh": 1}).sort("plate", 1).to_list(2000)
+
+
+class VehicleCapacityIn(BaseModel):
+    tank_capacity_l: Optional[float] = None
+    battery_capacity_kwh: Optional[float] = None
+
+
+@router.patch("/vehicles/{vehicle_id}/capacity")
+async def set_vehicle_capacity(vehicle_id: str, payload: VehicleCapacityIn,
+                               user=Depends(require_roles("admin"))):
+    _tenant_or_400()
+    db = get_db()
+    veh = await db.vehicles.find_one({"id": vehicle_id},
+                                     {"_id": 0, "id": 1, "plate": 1,
+                                      "tank_capacity_l": 1, "battery_capacity_kwh": 1})
+    if not veh:
+        raise HTTPException(404, "Véhicule introuvable")
+    for field in ("tank_capacity_l", "battery_capacity_kwh"):
+        v = getattr(payload, field)
+        if v is not None and not (0 < v <= 5000):
+            raise HTTPException(400, "Capacité invalide (entre 0 et 5000)")
+    update = {"tank_capacity_l": payload.tank_capacity_l,
+              "battery_capacity_kwh": payload.battery_capacity_kwh}
+    await db.vehicles.update_one({"id": vehicle_id}, {"$set": update})
+    await log_audit("fuel.vehicle.capacity_update", user,
+                    {"vehicle_id": vehicle_id, "plate": veh.get("plate"),
+                     "before": {k: veh.get(k) for k in update}, "after": update})
+    return {"updated": True, **update}
 
 
 # ============================================================

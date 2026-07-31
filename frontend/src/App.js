@@ -32,6 +32,7 @@ import FuelSettingsPage from "@/pages/fuel/FuelSettingsPage";
 import FuelMyTransactionsPage from "@/pages/fuel/FuelMyTransactionsPage";
 import FuelStatementsPage from "@/pages/fuel/FuelStatementsPage";
 import FuelStatementDetailPage from "@/pages/fuel/FuelStatementDetailPage";
+import FuelAnomaliesPage from "@/pages/fuel/FuelAnomaliesPage";
 import { Toaster } from "@/components/ui/sonner";
 
 function FuelIndexRedirect() {
@@ -89,6 +90,8 @@ function App() {
                 <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}><FuelCardsPage /></ProtectedRoute>} />
               <Route path="rapprochements" element={
                 <ProtectedRoute roles={["admin", "manager"]}><FuelMatchingPage /></ProtectedRoute>} />
+              <Route path="anomalies" element={
+                <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}><FuelAnomaliesPage /></ProtectedRoute>} />
               <Route path="decomptes" element={
                 <ProtectedRoute roles={["admin", "manager", "lecture_seule"]}><FuelStatementsPage /></ProtectedRoute>} />
               <Route path="decomptes/:id" element={

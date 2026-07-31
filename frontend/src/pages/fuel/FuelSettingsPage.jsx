@@ -7,7 +7,78 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Save, RefreshCw, Landmark } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Save, RefreshCw, Landmark, AlertTriangle, Car } from "lucide-react";
+
+function VehicleCapacitiesCard() {
+  const [rows, setRows] = useState(null);
+  const [savingId, setSavingId] = useState(null);
+
+  useEffect(() => {
+    api.get("/livre/fuel/vehicles-capacities").then(({ data }) => setRows(data)).catch(() => setRows([]));
+  }, []);
+
+  const setField = (id, field, value) =>
+    setRows((r) => r.map((v) => (v.id === id ? { ...v, [field]: value } : v)));
+
+  async function saveRow(v) {
+    setSavingId(v.id);
+    try {
+      await api.patch(`/livre/fuel/vehicles/${v.id}/capacity`, {
+        tank_capacity_l: v.tank_capacity_l === "" || v.tank_capacity_l == null ? null : Number(v.tank_capacity_l),
+        battery_capacity_kwh: v.battery_capacity_kwh === "" || v.battery_capacity_kwh == null ? null : Number(v.battery_capacity_kwh),
+      });
+      toast.success(`Capacités de ${v.plate || "véhicule"} enregistrées`);
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSavingId(null); }
+  }
+
+  return (
+    <div data-testid="fuel-vehicle-capacities-card" className="bg-white rounded-lg border border-slate-200 p-5 space-y-3">
+      <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold flex items-center gap-1.5">
+        <Car className="w-3.5 h-3.5" /> Capacités des véhicules
+      </p>
+      <p className="text-[10px] text-slate-400">
+        Nécessaire à l'alerte « volume supérieur au réservoir ». Sans capacité renseignée,
+        aucune alerte de volume n'est émise pour le véhicule.
+      </p>
+      {!rows ? <p className="text-xs text-slate-400">Chargement…</p> : (
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-[10px] uppercase text-slate-400 border-b border-slate-200">
+              <th className="py-1.5">Véhicule</th><th className="py-1.5">Réservoir (L)</th>
+              <th className="py-1.5">Batterie (kWh)</th><th className="py-1.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((v) => (
+              <tr key={v.id} className="border-b border-slate-100">
+                <td className="py-1.5 font-medium">{v.plate || v.label || v.id}</td>
+                <td className="py-1.5 pr-2">
+                  <Input data-testid={`fuel-capacity-tank-${v.id}`} type="number" className="h-7 w-24 text-xs"
+                         value={v.tank_capacity_l ?? ""} placeholder="—"
+                         onChange={(e) => setField(v.id, "tank_capacity_l", e.target.value)} />
+                </td>
+                <td className="py-1.5 pr-2">
+                  <Input data-testid={`fuel-capacity-battery-${v.id}`} type="number" className="h-7 w-24 text-xs"
+                         value={v.battery_capacity_kwh ?? ""} placeholder="—"
+                         onChange={(e) => setField(v.id, "battery_capacity_kwh", e.target.value)} />
+                </td>
+                <td className="py-1.5 text-right">
+                  <Button data-testid={`fuel-capacity-save-${v.id}`} variant="outline" size="sm"
+                          className="h-7 text-xs" disabled={savingId === v.id}
+                          onClick={() => saveRow(v)}>
+                    {savingId === v.id ? "…" : "Enregistrer"}
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
 
 function FxCard() {
   const [st, setSt] = useState(null);
@@ -103,6 +174,16 @@ export default function FuelSettingsPage() {
         time_window_min: Number(s.time_window_min),
         allocation_mode: s.allocation_mode,
         providers: providersText.split(",").map((p) => p.trim()).filter(Boolean),
+        anomalies: {
+          tank_enabled: !!s.anomalies?.tank_enabled,
+          tank_tolerance_pct: Number(s.anomalies?.tank_tolerance_pct),
+          card_enabled: !!s.anomalies?.card_enabled,
+          double_enabled: !!s.anomalies?.double_enabled,
+          double_window_min: Number(s.anomalies?.double_window_min),
+          amount_enabled: !!s.anomalies?.amount_enabled,
+          amount_multiplier: Number(s.anomalies?.amount_multiplier),
+          amount_min_history: Number(s.anomalies?.amount_min_history),
+        },
       });
       setS(data);
       toast.success("Paramètres enregistrés");
@@ -166,6 +247,70 @@ export default function FuelSettingsPage() {
           </p>
         </div>
       </div>
+
+      <div className="bg-white rounded-lg border border-slate-200 p-5 space-y-4">
+        <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold flex items-center gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5" /> Alertes anomalies
+        </p>
+        <div className="space-y-3" data-testid="fuel-anomaly-settings">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-slate-800 font-medium">Volume supérieur au réservoir</p>
+              <p className="text-[10px] text-slate-400">Muette si la capacité du véhicule est inconnue</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">Tolérance %</span>
+              <Input data-testid="fuel-anomaly-tank-tolerance" type="number" className="h-8 w-20"
+                     value={s.anomalies?.tank_tolerance_pct ?? ""}
+                     onChange={(e) => setS({ ...s, anomalies: { ...s.anomalies, tank_tolerance_pct: e.target.value } })} />
+              <Switch data-testid="fuel-anomaly-tank-enabled" checked={!!s.anomalies?.tank_enabled}
+                      onCheckedChange={(v) => setS({ ...s, anomalies: { ...s.anomalies, tank_enabled: v } })} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-slate-800 font-medium">Carte inactive, suspendue ou expirée</p>
+              <p className="text-[10px] text-slate-400">Statut de la carte évalué au moment de la transaction</p>
+            </div>
+            <Switch data-testid="fuel-anomaly-card-enabled" checked={!!s.anomalies?.card_enabled}
+                    onCheckedChange={(v) => setS({ ...s, anomalies: { ...s.anomalies, card_enabled: v } })} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-slate-800 font-medium">Deux pleins anormalement rapprochés</p>
+              <p className="text-[10px] text-slate-400">Même carte ou même véhicule ; stations différentes signalées</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">Fenêtre (min)</span>
+              <Input data-testid="fuel-anomaly-double-window" type="number" className="h-8 w-20"
+                     value={s.anomalies?.double_window_min ?? ""}
+                     onChange={(e) => setS({ ...s, anomalies: { ...s.anomalies, double_window_min: e.target.value } })} />
+              <Switch data-testid="fuel-anomaly-double-enabled" checked={!!s.anomalies?.double_enabled}
+                      onCheckedChange={(v) => setS({ ...s, anomalies: { ...s.anomalies, double_enabled: v } })} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-slate-800 font-medium">Montant inhabituel</p>
+              <p className="text-[10px] text-slate-400">Comparé à la médiane historique du même véhicule — jamais de valeur fictive</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">× médiane</span>
+              <Input data-testid="fuel-anomaly-amount-multiplier" type="number" step="0.1" className="h-8 w-20"
+                     value={s.anomalies?.amount_multiplier ?? ""}
+                     onChange={(e) => setS({ ...s, anomalies: { ...s.anomalies, amount_multiplier: e.target.value } })} />
+              <span className="text-xs text-slate-500">min. hist.</span>
+              <Input data-testid="fuel-anomaly-amount-minhistory" type="number" className="h-8 w-16"
+                     value={s.anomalies?.amount_min_history ?? ""}
+                     onChange={(e) => setS({ ...s, anomalies: { ...s.anomalies, amount_min_history: e.target.value } })} />
+              <Switch data-testid="fuel-anomaly-amount-enabled" checked={!!s.anomalies?.amount_enabled}
+                      onCheckedChange={(v) => setS({ ...s, anomalies: { ...s.anomalies, amount_enabled: v } })} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <VehicleCapacitiesCard />
 
       <Button data-testid="fuel-settings-save" onClick={save} disabled={saving}
               className="bg-[#2196F3] hover:bg-[#1976D2] text-white">

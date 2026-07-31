@@ -29,13 +29,15 @@ def basis_date_of(tx: dict) -> tuple[str, str]:
     return d.astimezone(TENANT_TZ).date().isoformat(), basis
 
 
-def line_issues(tx: dict) -> tuple[list[str], list[str]]:
+def line_issues(tx: dict, critical_anomaly_tx_ids: set | None = None) -> tuple[list[str], list[str]]:
     """(bloquants, avertissements) pour une transaction."""
     blockers, warnings = [], []
     if tx.get("match_status") == "unmatched":
         blockers.append("Non rapprochée")
     if tx.get("fx_status") == "pending":
         blockers.append("Conversion en attente")
+    if critical_anomaly_tx_ids and tx["id"] in critical_anomaly_tx_ids:
+        blockers.append("Anomalie critique non résolue")
     if tx.get("match_status") == "matched_review":
         warnings.append("Contrôle recommandé")
     return blockers, warnings
@@ -71,6 +73,9 @@ async def build_lines(db, date_from: str, date_to: str, include_carried_over: bo
     txs = await db.fuel_transactions.find(
         {"$or": [{"statement_id": None}, {"statement_id": {"$exists": False}}]},
         {"_id": 0}).to_list(50000)
+    critical_anomaly_tx_ids = {a["transaction_id"] for a in await db.fuel_anomalies.find(
+        {"status": "open", "severity": "critical"},
+        {"_id": 0, "transaction_id": 1}).to_list(10000)}
     lines = []
     for tx in txs:
         bd, basis = basis_date_of(tx)
@@ -82,7 +87,7 @@ async def build_lines(db, date_from: str, date_to: str, include_carried_over: bo
             section = "carried_over"
         else:
             continue
-        blockers, warnings = line_issues(tx)
+        blockers, warnings = line_issues(tx, critical_anomaly_tx_ids)
         lines.append({
             "id": str(uuid.uuid4()),
             "transaction_id": tx["id"],
@@ -122,6 +127,7 @@ def compute_totals(lines: list[dict]) -> dict:
     by_vehicle, by_driver = {}, {}
     blockers = {"unmatched": {"count": 0, "amount_chf": 0.0},
                 "fx_pending": {"count": 0, "amounts_by_currency": {}},
+                "anomalies": {"count": 0},
                 "review": {"count": 0}}
     for l in lines:
         chf = l.get("amount_chf")
@@ -146,6 +152,8 @@ def compute_totals(lines: list[dict]) -> dict:
             blockers["fx_pending"]["count"] += 1
             blockers["fx_pending"]["amounts_by_currency"][cur] = round(
                 blockers["fx_pending"]["amounts_by_currency"].get(cur, 0) + (l.get("amount_total") or 0), 2)
+        if "Anomalie critique non résolue" in l["blockers"]:
+            blockers["anomalies"]["count"] += 1
         if l["warnings"]:
             blockers["review"]["count"] += 1
         for key_id, name, agg in ((l.get("vehicle_id"), l.get("vehicle_plate"), by_vehicle),
@@ -173,7 +181,8 @@ def compute_totals(lines: list[dict]) -> dict:
     for k in ("amount_chf_total", "liters", "kwh", "pro_chf", "perso_chf", "unclassified_chf"):
         t[k] = round(t[k], 2)
     blockers["unmatched"]["amount_chf"] = round(blockers["unmatched"]["amount_chf"], 2)
-    blockers["total_count"] = blockers["unmatched"]["count"] + blockers["fx_pending"]["count"]
+    blockers["total_count"] = (blockers["unmatched"]["count"] + blockers["fx_pending"]["count"]
+                               + blockers["anomalies"]["count"])
     t["by_vehicle"] = sorted(by_vehicle.values(), key=lambda x: -x["amount_chf"])
     t["by_driver"] = sorted(by_driver.values(), key=lambda x: -x["amount_chf"])
     t["blockers"] = blockers
