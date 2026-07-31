@@ -658,6 +658,10 @@ affectation manuelle, droits par rôle.
   - Warning React duplicate key null (DashboardPage table key fallback)
 - Import XLSX prouve E2E : upload -> mapping auto correct -> confirm (1 importee, 1 doublon en revision sans DuplicateKeyError, 1 invalide) — artefacts nettoyes
 - Donnees de demo conservees, clairement identifiees : TEST_ANOM/TEST_NOTIF (aout 2026), DEC-2026-0001 V2 a controler (juillet 2026, intact)
-- Rapports : /app/test_reports/iteration_22.json (backend 29 pass + 1 xfail corrige ensuite ; frontend 100%) + tests ciblés main agent
-- ETAT FINAL RAPPORTE A L'UTILISATEUR : CONFORME (voir rapport final chat du 31 juil. 2026). Aucune nouvelle fonctionnalite a proposer — perimetre fige par l'utilisateur.
+- Rapports : /app/test_reports/iteration_22.json + /app/test_reports/pytest/iteration22.xml (tests=30, failures=0, skipped=1)
+- PRECISION 30e CONTROLE BACKEND (29/30) : test_driver_cannot_read_other_tx (backend/tests/test_iteration22_final_review.py:274) — statut xfail (echec attendu, enregistre "skipped" dans le XML), PAS un test reussi et PAS le cycle cloture/reouverture. Raison : defaut RBAC chauffeur reel constate pendant iteration_22 (users.driver_id manquant -> GET /fuel/transactions/{tx sans chauffeur} renvoyait 200 au lieu de 403). Correctif applique apres le rapport (_driver_id_of + reparation data) puis revalide par curl : 403 sur tx d'autrui/sans chauffeur, 200 uniquement sur ses propres tx (Paul Test). Impact residuel sur l'etat final : aucun.
+- RESERVES DE VALIDATION DOCUMENTEES (2) :
+  1. SMTP reel de l'e-mail d'anomalie non declenche dans la revue finale (e-mail volontairement desactive par defaut ; canal = infra SMTP invitations deja testee)
+  2. Cycle cloture/reouverture des decomptes non rejoue dans iteration_22 (preservation de DEC-2026-0001) — couvert par les preuves anterieures iteration_20 (bug PDF corrige et reteste ensuite)
+- ETAT FINAL ACCEPTE PAR L'UTILISATEUR : CONFORME AVEC DEUX RESERVES DE VALIDATION DOCUMENTEES. Perimetre Carburant & Decomptes FIGE ET ACCEPTE — archive, aucun developpement/proposition sans demande explicite.
 - Backlog conserve par decision utilisateur (NE PAS developper sans demande explicite) : rappel de cloture, tendance carburant 6 mois, taux fournisseur/correction manuelle FX, connecteurs fournisseurs Phase 3, e-mail anomalies reste optionnel/off
