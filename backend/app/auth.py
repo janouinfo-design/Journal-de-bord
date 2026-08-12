@@ -176,10 +176,33 @@ class NavixySsoIn(BaseModel):
     session_key: str
 
 
+SSO_FAIL_CATEGORIES = ("invalid_format", "navixy_rejected", "navixy_timeout",
+                       "tenant_unmapped", "tenant_suspended", "internal_error")
+_sso_fail_log_buckets: dict = {}
+
+
+async def _audit_sso_failure(request: Request, category: str, tenant_id: str | None = None):
+    """Audit catégorisé des échecs SSO — jamais la clé, catégorie contrôlée,
+    tenant seulement s'il a été identifié serveur, max 5 entrées / IP / 10 min."""
+    if category not in SSO_FAIL_CATEGORIES:
+        category = "internal_error"
+    # IP réelle posée par le proxy de confiance (nginx/ingress), sinon IP de connexion
+    fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() if request else ""
+    ip = (fwd or (request.client.host if request and request.client else "unknown"))[:64]
+    now_ts = datetime.now(timezone.utc).timestamp()
+    bucket = _sso_fail_log_buckets.setdefault(ip, [])
+    bucket[:] = [t for t in bucket if now_ts - t < 600]
+    if len(bucket) >= 5:
+        return
+    bucket.append(now_ts)
+    from app.audit import log_audit
+    await log_audit("auth.sso_failed", None, {"category": category}, tenant_id=tenant_id)
+
+
 @router.post("/navixy-sso")
-async def navixy_sso(payload: NavixySsoIn, response: Response):
+async def navixy_sso(payload: NavixySsoIn, request: Request, response: Response):
     """SSO iframe Navixy: valide la session_key auprès de l'API Navixy,
-    trouve ou crée l'utilisateur local (rôle limité), puis pose les cookies JWT."""
+    trouve ou crée l'utilisateur local (moindre privilège), puis pose les cookies JWT."""
     import os
     import uuid
     import httpx
@@ -187,54 +210,70 @@ async def navixy_sso(payload: NavixySsoIn, response: Response):
 
     session_key = payload.session_key.strip()
     if not session_key or len(session_key) < 16:
+        await _audit_sso_failure(request, "invalid_format")
         raise HTTPException(status_code=400, detail="Clé de session Navixy manquante ou invalide")
 
     base_url = os.environ.get("NAVIXY_API_URL", "https://api.navixy.com/v2").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(f"{base_url}/user/get_info", json={"hash": session_key})
+    except httpx.TimeoutException:
+        await _audit_sso_failure(request, "navixy_timeout")
+        raise HTTPException(status_code=502, detail="API Navixy injoignable (délai dépassé)")
     except Exception:
+        await _audit_sso_failure(request, "internal_error")
         raise HTTPException(status_code=502, detail="Impossible de contacter l'API Navixy")
     if r.status_code >= 500:
+        await _audit_sso_failure(request, "navixy_rejected")
         raise HTTPException(status_code=502, detail="API Navixy indisponible")
     try:
         data = r.json()
     except Exception:
+        await _audit_sso_failure(request, "navixy_rejected")
         raise HTTPException(status_code=401, detail="Session Navixy invalide ou expirée")
 
     if not data.get("success"):
+        await _audit_sso_failure(request, "navixy_rejected")
         raise HTTPException(status_code=401, detail="Session Navixy invalide ou expirée")
 
     info = data.get("user_info", {}) or {}
     email = (info.get("login") or "").strip().lower()
     if not email:
+        await _audit_sso_failure(request, "navixy_rejected")
         raise HTTPException(status_code=422, detail="L'utilisateur Navixy n'a pas d'email exploitable")
     name = (info.get("title")
             or " ".join(filter(None, [info.get("first_name"), info.get("last_name")]))
             or email.split("@")[0])
 
-    # Rattachement au client (tenant) via le compte maître Navixy
+    # Rattachement au client (tenant) via le compte maître Navixy — jamais depuis le navigateur
     master = data.get("master") or {}
     navixy_owner_id = master.get("id") or info.get("id")
 
     db = get_db()
     tenant = await db.tenants.find_one(
-        {"navixy_master_user_id": navixy_owner_id, "status": "active"}, {"_id": 0})
+        {"navixy_master_user_id": navixy_owner_id}, {"_id": 0})
 
     user = await db.users.find_one({"email": email})
     if user:
         ut = await db.tenants.find_one({"id": user.get("tenant_id")}, {"_id": 0, "status": 1})
         if ut and ut.get("status") != "active":
+            await _audit_sso_failure(request, "tenant_suspended", tenant_id=user.get("tenant_id"))
             raise HTTPException(status_code=403,
                                 detail="Votre entreprise est suspendue. Contactez Logitrak.")
     else:
+        if tenant and tenant.get("status") != "active":
+            await _audit_sso_failure(request, "tenant_suspended", tenant_id=tenant["id"])
+            raise HTTPException(status_code=403,
+                                detail="Votre entreprise est suspendue. Contactez Logitrak.")
         if not tenant:
+            await _audit_sso_failure(request, "tenant_unmapped")
             raise HTTPException(
                 status_code=403,
                 detail="Votre entreprise n'est pas encore activée sur le Journal de bord. Contactez Logitrak.")
-        # Compte principal Navixy → admin de son entreprise ; sous-utilisateur → gestionnaire
+        # Compte principal Navixy → admin de son entreprise ;
+        # nouveau sous-utilisateur → lecture_seule (moindre privilège, promotion par un admin autorisé)
         is_master_account = not master.get("id") or master.get("id") == info.get("id")
-        role = "admin" if is_master_account else "manager"
+        role = "admin" if is_master_account else "lecture_seule"
         user = {
             "id": str(uuid.uuid4()),
             "email": email,
@@ -255,6 +294,10 @@ async def navixy_sso(payload: NavixySsoIn, response: Response):
     _set_auth_cookies(response, access, refresh)
     user.pop("_id", None)
     user.pop("password_hash", None)
+    # Dernier accès SSO réussi du client (jamais modifié par le bouton de test superadmin)
+    await db.tenants.update_one(
+        {"id": user["tenant_id"]},
+        {"$set": {"last_sso_at": datetime.now(timezone.utc).isoformat()}})
     from app.audit import log_audit
     await log_audit("auth.sso", user, {"navixy_user_id": info.get("id")},
                     tenant_id=user.get("tenant_id"))

@@ -180,6 +180,84 @@ async def sync_tenant_now(tenant_id: str, current=Depends(require_superadmin)):
     return {"tenant_id": tenant_id, "last_sync_at": started, "result": result}
 
 
+# ---------- Accès Navixy (onglet fiche client) ----------
+def _navixy_access_status(t: dict) -> str:
+    """État d'accès SSO — indépendant de l'état de synchronisation."""
+    if not t.get("navixy_hash") or not t.get("navixy_master_user_id"):
+        return "incomplete"
+    st = t.get("last_navixy_test_status")
+    if st == "error":
+        return "error"
+    if st == "ok":
+        return "configured"
+    return "untested"
+
+
+def _navixy_sync_status(t: dict) -> dict:
+    if not t.get("last_sync_at"):
+        return {"status": "never", "last_sync_at": None, "error": None}
+    res = t.get("last_sync_result") or {}
+    err = res.get("error") or ((res.get("errors") or [None])[0])
+    return {"status": "error" if err else "ok", "last_sync_at": t.get("last_sync_at"),
+            "error": str(err)[:200] if err else None}
+
+
+@router.get("/tenants/{tenant_id}/navixy-access")
+async def tenant_navixy_access(tenant_id: str, current=Depends(require_superadmin)):
+    """Fiche « Accès Navixy » d'un client — aucun secret dans la réponse."""
+    db = get_raw_db()
+    t = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Client introuvable")
+    recent = await db.audit_log.find(
+        {"action": "auth.sso_failed", "tenant_id": tenant_id},
+        {"_id": 0, "at": 1, "details": 1}).sort("at", -1).to_list(10)
+    return {
+        "tenant": {"id": t["id"], "name": t["name"], "status": t["status"]},
+        "master": {"login": t.get("navixy_login"), "id": t.get("navixy_master_user_id")},
+        "access_status": _navixy_access_status(t),
+        "sync": _navixy_sync_status(t),
+        "last_sso_at": t.get("last_sso_at"),
+        "last_test": {"at": t.get("last_navixy_test_at"),
+                      "status": t.get("last_navixy_test_status"),
+                      "error": t.get("last_navixy_test_error")},
+        "recent_errors": [{"at": r.get("at"),
+                           "category": (r.get("details") or {}).get("category")} for r in recent],
+    }
+
+
+@router.post("/tenants/{tenant_id}/test-navixy")
+async def tenant_test_navixy(tenant_id: str, current=Depends(require_superadmin)):
+    """Teste la clé API permanente du client auprès de Navixy.
+    Ne crée NI utilisateur NI session NI cookie ; ne touche jamais last_sso_at."""
+    db = get_raw_db()
+    t = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Client introuvable")
+    now = datetime.now(timezone.utc).isoformat()
+    ident = None
+    if not t.get("navixy_hash"):
+        status, error = "error", "no_key"
+    else:
+        ident = await fetch_navixy_identity(
+            t.get("navixy_api_url") or "https://api.navixy.com/v2", t["navixy_hash"])
+        if not ident:
+            status, error = "error", "invalid_key_or_unreachable"
+        elif t.get("navixy_master_user_id") \
+                and ident["navixy_master_user_id"] != t["navixy_master_user_id"]:
+            status, error = "error", "master_mismatch"
+        else:
+            status, error = "ok", None
+    await db.tenants.update_one({"id": tenant_id}, {"$set": {
+        "last_navixy_test_at": now, "last_navixy_test_status": status,
+        "last_navixy_test_error": error}})
+    await log_audit("tenant.navixy_test", current, {"status": status, "error": error},
+                    tenant_id=tenant_id)
+    return {"ok": status == "ok", "status": status, "error": error, "tested_at": now,
+            "master": ({"login": ident.get("navixy_login"),
+                        "id": ident.get("navixy_master_user_id")} if status == "ok" else None)}
+
+
 # ---------- Utilisateurs ----------
 class UserIn(BaseModel):
     email: EmailStr

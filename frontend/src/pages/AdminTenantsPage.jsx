@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Building2, Plus, Pencil, KeyRound, RefreshCw, AlertTriangle } from "lucide-react";
+import { Building2, Plus, Pencil, KeyRound, RefreshCw, AlertTriangle, Link2 } from "lucide-react";
+import NavixyAccessDialog from "@/components/admin/NavixyAccessDialog";
 
 const EMPTY = { name: "", navixy_hash: "" };
 
@@ -26,6 +27,7 @@ export default function AdminTenantsPage() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(null);
+  const [accessDlg, setAccessDlg] = useState(null);
 
   async function syncNow(t) {
     setSyncing(t.id);
@@ -191,6 +193,10 @@ export default function AdminTenantsPage() {
                   )}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <Button data-testid={`tenant-navixy-access-${t.id}`} variant="ghost" size="sm"
+                          title="Accès Navixy" onClick={() => setAccessDlg(t)}>
+                    <Link2 className="w-4 h-4" />
+                  </Button>
                   <Button data-testid={`tenant-edit-${t.id}`} variant="ghost" size="sm" onClick={() => openEdit(t)}>
                     <Pencil className="w-4 h-4" />
                   </Button>
@@ -243,6 +249,8 @@ export default function AdminTenantsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {accessDlg && <NavixyAccessDialog tenant={accessDlg} onClose={() => setAccessDlg(null)} />}
     </div>
   );
 }

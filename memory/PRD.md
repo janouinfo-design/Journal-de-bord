@@ -614,6 +614,14 @@ affectation manuelle, droits par rôle.
 - POST /api/auth/navixy-sso {session_key} : valide via API Navixy user/get_info, find-or-create user (role driver par defaut, jamais admin/manager, password_hash=None => login mot de passe refuse), pose cookies JWT SameSite=None
 - Frontend AuthContext.jsx : capture ?session_key= au chargement du module (avant StrictMode), appelle le SSO, nettoie l URL
 - Config Navixy requise : application utilisateur avec methode d authentification "Session key"
+- MAJ 12 aout 2026 : nouveau sous-utilisateur SSO -> lecture_seule (moindre privilege, plus jamais manager auto) ; compte maitre -> admin ; existant -> role conserve ; jamais superadmin. last_sso_at mis a jour sur le tenant a chaque SSO reussi. Echecs audites en auth.sso_failed avec categorie controlee (invalid_format/navixy_rejected/navixy_timeout/tenant_unmapped/tenant_suspended/internal_error), jamais la cle, tenant_id seulement si identifie serveur, max 5 entrees/IP/10min (IP via X-Forwarded-For du proxy de confiance)
+
+## Onglet Acces Navixy super admin (12 aout 2026) — TESTE (13 scenarios mock Navixy)
+- GET /api/admin/tenants/{id}/navixy-access (superadmin) : URL unique (window.location.origin cote front), etat acces calcule (incomplete/untested/configured/error — INDEPENDANT de la synchro), etat synchro separe (never/ok/error + date), compte maitre, last_sso_at, dernier test, erreurs recentes (audit sso_failed du tenant) — AUCUN secret
+- POST /api/admin/tenants/{id}/test-navixy (superadmin) : teste la cle API permanente via fetch_navixy_identity (user/get_info accepte cles API permanentes ET session keys — confirme doc Navixy), stocke last_navixy_test_at/status/error (no_key/invalid_key_or_unreachable/master_mismatch), audit tenant.navixy_test ; NE cree ni user ni session ni cookie, NE touche jamais last_sso_at
+- Frontend : bouton Link2 par client dans AdminTenantsPage -> NavixyAccessDialog (URL+copier, instructions pas a pas, badges separes acces/synchro, bouton test, erreurs recentes)
+- Decision utilisateur : PAS de sous-domaines par client ; PAS de super admin central dans ce workspace (cible = 4e application administrative independante pilotant les 3 apps par API) ; PAS de hub raccourcis
+
 
 ## Package deploiement VPS (20 juil. 2026) — Phase 1 mono-client
 - Fichiers: docker-compose.yml (projet journal_logitrak, prefixes journal_*, reseau/volume dedies), backend/Dockerfile, frontend/Dockerfile+nginx.conf, mongo-init/create-app-user.sh (user Mongo limite), nginx/journal.logitrak.ch.conf (CSP iframe+WS), .env.example, scripts/deploy|backup|restore.sh, README_DEPLOYMENT.md
