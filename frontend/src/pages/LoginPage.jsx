@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { TEST_IDS } from "@/constants/testIds";
-import { Truck, MapPin, FileText, Loader2 } from "lucide-react";
+import { Truck, MapPin, FileText, Loader2, Eye, EyeOff } from "lucide-react";
 
 // Demo / mock seed accounts shown intentionally on the login screen so testers
 // can sign in without provisioning real users. These credentials are public
@@ -22,6 +22,7 @@ export default function LoginPage() {
   const { user, login, loading } = useAuth();
   const [email, setEmail] = useState("");
   const [pwd, setPwd] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
 
@@ -102,13 +103,24 @@ export default function LoginPage() {
             </div>
             <div>
               <Label htmlFor="pwd" className="text-xs font-semibold tracking-wide uppercase text-slate-500">Mot de passe</Label>
-              <Input
-                id="pwd" type="password" required
-                data-testid={TEST_IDS.auth.passwordInput}
-                value={pwd} onChange={(e) => setPwd(e.target.value)}
-                placeholder="••••••••"
-                className="mt-1.5 h-11"
-              />
+              <div className="relative mt-1.5">
+                <Input
+                  id="pwd" type={showPwd ? "text" : "password"} required
+                  data-testid={TEST_IDS.auth.passwordInput}
+                  value={pwd} onChange={(e) => setPwd(e.target.value)}
+                  placeholder="••••••••"
+                  className="h-11 pr-11"
+                />
+                <button
+                  type="button"
+                  data-testid="login-password-toggle"
+                  onClick={() => setShowPwd((v) => !v)}
+                  aria-label={showPwd ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  {showPwd ? <EyeOff className="w-4.5 h-4.5" size={18} /> : <Eye className="w-4.5 h-4.5" size={18} />}
+                </button>
+              </div>
             </div>
             {err && (
               <p data-testid={TEST_IDS.auth.error} className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
