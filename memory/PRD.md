@@ -622,6 +622,12 @@ affectation manuelle, droits par rôle.
 - Frontend : bouton Link2 par client dans AdminTenantsPage -> NavixyAccessDialog (URL+copier, instructions pas a pas, badges separes acces/synchro, bouton test, erreurs recentes)
 - Decision utilisateur : PAS de sous-domaines par client ; PAS de super admin central dans ce workspace (cible = 4e application administrative independante pilotant les 3 apps par API) ; PAS de hub raccourcis
 
+## Page de connexion (12 aout 2026)
+- Oeil afficher/masquer sur le champ mot de passe (data-testid login-password-toggle) — teste
+- Vignettes "Comptes de demo" affichees uniquement si REACT_APP_SHOW_DEMO_ACCOUNTS=true (frontend/.env preview) ; en production le build Docker n'a pas la variable (.env exclu par .dockerignore et non versionne) -> section masquee automatiquement
+- Mot de passe superadmin preview change (voir test_credentials.md) ; production via SUPERADMIN_PASSWORD du .env VPS
+- Pas de vignette superadmin sur la page de connexion (volontaire, securite) : connexion via le formulaire standard
+
 
 ## Package deploiement VPS (20 juil. 2026) — Phase 1 mono-client
 - Fichiers: docker-compose.yml (projet journal_logitrak, prefixes journal_*, reseau/volume dedies), backend/Dockerfile, frontend/Dockerfile+nginx.conf, mongo-init/create-app-user.sh (user Mongo limite), nginx/journal.logitrak.ch.conf (CSP iframe+WS), .env.example, scripts/deploy|backup|restore.sh, README_DEPLOYMENT.md

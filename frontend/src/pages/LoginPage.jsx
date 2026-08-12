@@ -18,6 +18,10 @@ const DEMO = [
   { id: TEST_IDS.auth.demoDriver, label: "Chauffeur", email: "chauffeur@logitrak.ch", password: "chauffeur123", desc: "Ses trajets" },
 ];
 
+// Vignettes de démo affichées uniquement si le build le demande (préversion/test).
+// En production (VPS), la variable n'est pas définie → section masquée.
+const SHOW_DEMO = process.env.REACT_APP_SHOW_DEMO_ACCOUNTS === "true";
+
 export default function LoginPage() {
   const { user, login, loading } = useAuth();
   const [email, setEmail] = useState("");
@@ -136,6 +140,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
+          {SHOW_DEMO && (
           <div className="mt-8">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-3">Comptes de démo</p>
             <div className="space-y-2">
@@ -158,6 +163,7 @@ export default function LoginPage() {
               ))}
             </div>
           </div>
+          )}
         </div>
       </div>
     </div>
