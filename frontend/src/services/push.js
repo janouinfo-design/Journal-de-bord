@@ -39,9 +39,22 @@ export function configureNotificationHandler() {
 }
 
 /**
- * Demande la permission et récupère le jeton push Expo.
- * @returns {Promise<{token: string|null, reason: string|null}>}
+ * Affiche une notification locale immédiate (ex: véhicule détecté).
+ * No-op sur web ou si le module est indisponible.
  */
+export async function showLocalNotification(title, body, data = {}) {
+  if (!isPushSupported()) return false;
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: { title, body, data },
+      trigger: null, // immédiat
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 export async function getExpoPushToken() {
   if (!isPushSupported()) {
     return {

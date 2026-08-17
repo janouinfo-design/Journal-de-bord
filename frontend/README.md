@@ -67,5 +67,11 @@ src/
 
 ## Points restants / bonus
 
-- Scan BLE **en arrière-plan** (détection auto) : structure prête (`app.config.js` background modes) — à finaliser dans un build natif.
-- Endpoint push exact à confirmer côté backend.
+- Scan BLE **en arrière-plan** (détection auto) : **implémenté** (`src/services/backgroundScan.js`) avec :
+  - toggle « Détection automatique » dans la console (persisté),
+  - **notification locale** « Véhicule détecté » au-delà d'un seuil de confiance (60 %),
+  - envoi des détections réelles au backend,
+  - restauration d'état iOS (`restoreStateIdentifier`).
+  - **Limites honnêtes** : sur **iOS**, le scan en arrière-plan n'est fiable qu'avec des `serviceUUIDs` (renseigner `extra.bleServiceUuids` ou `EXPO_PUBLIC_BLE_SERVICE_UUIDS`). Sur **Android**, un scan pleinement persistant en arrière-plan nécessite un **Foreground Service** (module natif dédié) — non inclus ; le scan fonctionne app au premier plan et un temps limité en arrière-plan. Testable uniquement en **build natif EAS**.
+- **Notifications push** : à la connexion (natif), l'app récupère le **jeton Expo** et l'envoie à `POST /api/livre/driver/push-token` avec `{ expo_push_token, platform: "expo" }`. Le statut est affiché dans la console.
+- Endpoint push confirmé : `POST /api/livre/driver/push-token`.

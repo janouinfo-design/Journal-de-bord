@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { bleService } from '../services/ble';
+import { backgroundScan } from '../services/backgroundScan';
+import { getExpoPushToken, isPushSupported } from '../services/push';
 import {
   getCurrentSession,
   getFleetTags,
   postBleDetection,
   setManualMode as apiSetManualMode,
+  registerPushToken,
   ApiError,
 } from '../services/api';
 import {
@@ -42,6 +45,9 @@ export function useDriverConsole() {
   const [modeSubmitting, setModeSubmitting] = useState(false);
   const [testingTagKey, setTestingTagKey] = useState(null);
 
+  const [autoDetect, setAutoDetect] = useState(false);
+  const [pushStatus, setPushStatus] = useState({ registered: false, reason: null });
+
   const detectionsRef = useRef([]);
   const lastPostRef = useRef({}); // throttle par tag
   const fleetIndexRef = useRef(new Map());
@@ -72,6 +78,7 @@ export function useDriverConsole() {
           : tags.value?.tags || tags.value?.data || tags.value?.items || [];
         setFleetTags(list);
         fleetIndexRef.current = indexFleetTags(list);
+        backgroundScan.setFleetTags(list); // synchro auto-détection
       } else if (tags.reason instanceof ApiError && tags.reason.status === 401) {
         throw tags.reason;
       }
@@ -225,6 +232,89 @@ export function useDriverConsole() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick, detections]);
 
+  // ---- Enregistrement du jeton push Expo (natif uniquement) ----
+  // À la première ouverture authentifiée, on récupère le jeton Expo réel et on
+  // l'envoie à POST /api/livre/driver/push-token. No-op sur web / Expo Go.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!token || !isPushSupported()) {
+        if (!isPushSupported()) {
+          setPushStatus({
+            registered: false,
+            reason: 'Notifications indisponibles (build natif requis).',
+          });
+        }
+        return;
+      }
+      const { token: expoToken, reason } = await getExpoPushToken();
+      if (cancelled) return;
+      if (!expoToken) {
+        setPushStatus({ registered: false, reason });
+        return;
+      }
+      try {
+        await registerPushToken(expoToken, token);
+        if (!cancelled) setPushStatus({ registered: true, reason: null });
+      } catch (e) {
+        if (!cancelled) {
+          setPushStatus({
+            registered: false,
+            reason: e instanceof ApiError ? e.message : "Échec de l'enregistrement du jeton push.",
+          });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  // ---- Détection automatique en arrière-plan (bonus) ----
+  useEffect(() => {
+    (async () => {
+      const pref = await backgroundScan.loadPreference();
+      if (pref && backgroundScan.isSupported()) {
+        setAutoDetect(true);
+        await backgroundScan.start({
+          onDetection: (d) =>
+            ingestDetection(
+              { id: d.tagKey, name: tagLabel(d.tag), rssi: d.rssi, timestamp: d.timestamp },
+              { forcedTag: d.tag }
+            ),
+        });
+      }
+    })();
+    return () => { backgroundScan.stop(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggleAutoDetect = useCallback(
+    async (on) => {
+      if (on && !backgroundScan.isSupported()) {
+        return { ok: false, message: bleService.unavailableReason() };
+      }
+      setAutoDetect(on);
+      await backgroundScan.setPreference(on);
+      if (on) {
+        const res = await backgroundScan.start({
+          onDetection: (d) =>
+            ingestDetection(
+              { id: d.tagKey, name: tagLabel(d.tag), rssi: d.rssi, timestamp: d.timestamp },
+              { forcedTag: d.tag }
+            ),
+        });
+        if (!res.ok) {
+          setAutoDetect(false);
+          await backgroundScan.setPreference(false);
+          return { ok: false, message: res.reason };
+        }
+      } else {
+        backgroundScan.stop();
+      }
+      return { ok: true };
+    },
+    [ingestDetection]
+  );
+
   return {
     // données
     session,
@@ -243,11 +333,14 @@ export function useDriverConsole() {
     modeSubmitting,
     testingTagKey,
     windowMs: DETECTION_WINDOW_MS,
+    autoDetect,
+    pushStatus,
     // actions
     refresh,
     startScan,
     stopScan,
     testTag,
     changeMode,
+    toggleAutoDetect,
   };
 }

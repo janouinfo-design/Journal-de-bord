@@ -51,7 +51,16 @@ class BleService {
 
   _getManager() {
     if (!this.isSupported()) return null;
-    if (!this.manager) this.manager = new BleManager();
+    if (!this.manager) {
+      // restoreStateIdentifier active la restauration d'état BLE sur iOS,
+      // indispensable pour la reprise du scan en arrière-plan après suspension.
+      this.manager = new BleManager({
+        restoreStateIdentifier: 'logitrak-ble-restore',
+        restoreStateFunction: (restored) => {
+          this._emit({ type: 'restored', restored });
+        },
+      });
+    }
     return this.manager;
   }
 

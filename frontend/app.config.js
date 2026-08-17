@@ -74,6 +74,12 @@ export default ({ config }) => ({
   extra: {
     // URL du reverse-proxy pour le preview web (source : REACT_APP_BACKEND_URL).
     webApiBase: WEB_API_BASE,
+    // UUID de service BLE à cibler (recommandé pour le scan iOS en arrière-plan).
+    // Vide par défaut : scan de toutes les balises puis filtrage via /fleet-tags.
+    // Ex: ['0000feaa-0000-1000-8000-00805f9b34fb']
+    bleServiceUuids: process.env.EXPO_PUBLIC_BLE_SERVICE_UUIDS
+      ? process.env.EXPO_PUBLIC_BLE_SERVICE_UUIDS.split(',').map((u) => u.trim())
+      : [],
     eas: {
       projectId: 'REPLACE_WITH_YOUR_EAS_PROJECT_ID',
     },

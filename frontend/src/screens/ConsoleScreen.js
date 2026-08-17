@@ -7,6 +7,7 @@ import {
   RefreshControl,
   Pressable,
   ActivityIndicator,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -40,6 +41,12 @@ export default function ConsoleScreen() {
     const res = await c.testTag(tag);
     if (res.ok) showToast(`Test envoyé : ${tagLabel(tag)}`, 'success');
     else showToast(res.message || 'Test échoué', 'error');
+  };
+
+  const onToggleAuto = async (val) => {
+    const res = await c.toggleAutoDetect(val);
+    if (!res.ok) showToast(res.message || 'Activation impossible', 'error');
+    else showToast(val ? 'Détection automatique activée' : 'Détection automatique désactivée', 'success');
   };
 
   const tagKeyOf = (tag) =>
@@ -123,6 +130,41 @@ export default function ConsoleScreen() {
             ) : null}
           </View>
           {c.bleError ? <Text style={styles.bleError}>{c.bleError}</Text> : null}
+        </Card>
+
+        {/* Détection automatique (bonus) */}
+        <Card style={styles.block}>
+          <View style={styles.autoRow}>
+            <View style={styles.autoInfo}>
+              <Text style={styles.autoTitle}>Détection automatique</Text>
+              <Text style={styles.autoSub}>
+                {c.bleAvailable
+                  ? 'Repère et notifie le véhicule le plus proche via les balises de la flotte.'
+                  : 'Disponible uniquement sur l\u2019application mobile (build natif).'}
+              </Text>
+            </View>
+            <Switch
+              testID="auto-detect-switch"
+              value={c.autoDetect}
+              onValueChange={onToggleAuto}
+              disabled={!c.bleAvailable}
+              trackColor={{ false: colors.surfaceAlt, true: colors.primary }}
+              thumbColor={colors.text}
+            />
+          </View>
+          <View style={styles.pushStatusRow}>
+            <View
+              style={[
+                styles.pushDot,
+                { backgroundColor: c.pushStatus.registered ? colors.success : colors.textFaint },
+              ]}
+            />
+            <Text style={styles.pushStatusText}>
+              {c.pushStatus.registered
+                ? 'Notifications push activées'
+                : c.pushStatus.reason || 'Notifications push non configurées'}
+            </Text>
+          </View>
         </Card>
 
         {/* Véhicule détecté */}
@@ -238,6 +280,21 @@ const styles = StyleSheet.create({
   scanLabel: { color: colors.text, fontSize: font.size.md, fontWeight: font.weight.medium },
   scanBtn: { height: 40, paddingHorizontal: spacing.md },
   bleError: { color: colors.warning, fontSize: font.size.sm, marginTop: spacing.sm },
+  autoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  autoInfo: { flex: 1, paddingRight: spacing.md },
+  autoTitle: { color: colors.text, fontSize: font.size.md, fontWeight: font.weight.semibold },
+  autoSub: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
+  pushStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  pushDot: { width: 8, height: 8, borderRadius: 4 },
+  pushStatusText: { color: colors.textMuted, fontSize: font.size.xs, flex: 1 },
   block: { marginBottom: spacing.lg },
   emptyTags: { paddingVertical: spacing.lg },
   emptyTagsText: { color: colors.textMuted, fontSize: font.size.sm, textAlign: 'center' },

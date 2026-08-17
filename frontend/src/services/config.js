@@ -44,6 +44,20 @@ export const API_BASE = resolveBase().replace(/\/$/, '');
 export const API_URL = `${API_BASE}/api`;
 export const IS_WEB_PLATFORM = IS_WEB;
 
+// UUID de service BLE à cibler pour le scan (surtout requis par iOS en arrière-plan).
+// Vide par défaut : on scanne toutes les balises puis on filtre via /fleet-tags.
+// Renseignable via app.config.js -> extra.bleServiceUuids (tableau) ou
+// EXPO_PUBLIC_BLE_SERVICE_UUIDS (liste séparée par des virgules).
+const rawUuids =
+  Constants?.expoConfig?.extra?.bleServiceUuids ||
+  (process.env.EXPO_PUBLIC_BLE_SERVICE_UUIDS
+    ? process.env.EXPO_PUBLIC_BLE_SERVICE_UUIDS.split(',')
+    : null);
+export const BLE_SERVICE_UUIDS =
+  Array.isArray(rawUuids) && rawUuids.length
+    ? rawUuids.map((u) => String(u).trim()).filter(Boolean)
+    : null;
+
 // Endpoints connus de l'API Logitrak (Livre de Bord).
 export const ENDPOINTS = {
   login: '/auth/login',

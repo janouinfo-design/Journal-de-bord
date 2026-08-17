@@ -61,6 +61,30 @@ frontend:
         agent: "main"
         comment: "Nécessite un development build EAS (téléphone réel). Sur web: indisponible par design."
 
+  - task: "Scan BLE arrière-plan + auto-détection + notif locale (bonus)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/services/backgroundScan.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Implémenté: toggle auto-détection persisté, notif locale au seuil de confiance, restoreState iOS. Testable uniquement en build natif EAS. Android background persistant nécessite un Foreground Service (non inclus, documenté)."
+
+  - task: "Enregistrement jeton push Expo (POST /livre/driver/push-token)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/services/push.js, frontend/src/hooks/useDriverConsole.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Câblé au montage de la console (natif). Endpoint confirmé par l'utilisateur. Non testable sur web."
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
