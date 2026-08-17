@@ -251,6 +251,7 @@ async def ble_cleanup_test_data(payload: dict = None,
         "tenant_id": "default",
         "$or": [
             {"tag_id": {"$in": matching_ids}} if matching_ids else {"tag_id": "__none__"},
+            {"ble_tag_id": {"$in": matching_ids}} if matching_ids else {"ble_tag_id": "__none__"},
             {"identifier": {"$in": matching_canons}} if matching_canons else {"identifier": "__none__"},
         ],
     }
@@ -391,6 +392,24 @@ async def ble_session_resolve(session_id: str, payload: dict,
         raise HTTPException(404, str(e))
     except PermissionError as e:
         raise HTTPException(409, str(e))
+
+
+# ---------- Beacons chauffeurs (Navixy) ----------
+@router.post("/ble/beacons/poll-now")
+async def ble_beacons_poll_now(window_min: Optional[int] = None,
+                               user=Depends(require_roles("admin"))):
+    """Interroge immédiatement l'API Beacon Navixy pour le tenant courant.
+    Sert de preuve terrain : tag chauffeur → traceur → Navixy → backend."""
+    from app.db import get_raw_db
+    from app.driver_beacons import poll_tenant_beacons
+    from app.tenant_context import get_tenant_id
+    tid = get_tenant_id() or "default"
+    tenant = await get_raw_db().tenants.find_one({"id": tid}, {"_id": 0})
+    if not tenant or not tenant.get("navixy_hash"):
+        raise HTTPException(400, "Clé Navixy non configurée pour ce client")
+    wm = max(1, min(int(window_min), 1440)) if window_min else None
+    result = await poll_tenant_beacons(tenant, window_min=wm)
+    return {"tenant_id": tid, **result}
 
 
 # ---------- Dashboard & settings ----------

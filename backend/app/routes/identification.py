@@ -85,6 +85,77 @@ async def driver_manual_mode(payload: dict, user=Depends(get_current_user)):
         raise HTTPException(404, str(e))
 
 
+class ClaimIn(BaseModel):
+    vehicle_id: str
+    client_timestamp: Optional[str] = None
+
+
+@router.post("/driver/claim")
+async def driver_claim(payload: ClaimIn, user=Depends(get_current_user)):
+    """« Je conduis » — confirmation explicite du conducteur (source APP).
+
+    Atomique côté serveur : un seul conducteur actif par véhicule ; toute
+    contradiction crée un conflit explicite, jamais un écrasement silencieux.
+    """
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    try:
+        return await ble_engine.claim_driving(
+            db, driver_id, payload.vehicle_id, actor=user.get("email", "?"),
+            client_timestamp=payload.client_timestamp)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/driver/my-vehicle")
+async def driver_my_vehicle(user=Depends(get_current_user)):
+    """Véhicule actuel (session en cours) ou dernier véhicule utilisé.
+    Données réelles uniquement — aucun champ inventé (pas de SoC/carburant)."""
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    sess = await ble_engine.get_current_session(db, driver_id)
+    current = bool(sess)
+    if not sess:
+        last = await db.driver_sessions.find_one(
+            {"driver_id": driver_id}, {"_id": 0}, sort=[("started_at", -1)])
+        if not last:
+            return {"vehicle": None, "current": False, "session": None}
+        vehicle = await db.vehicles.find_one({"id": last["vehicle_id"]}, {"_id": 0}) or {}
+        sess = {**last, "vehicle": {"id": vehicle.get("id"), "plate": vehicle.get("plate"),
+                                    "model": vehicle.get("model")}}
+    return {"vehicle": sess.get("vehicle"), "current": current,
+            "session": {k: sess.get(k) for k in (
+                "id", "status", "started_at", "ended_at", "identification_source",
+                "active_driver", "mobile_override", "confidence")}}
+
+
+@router.get("/driver/my-profile")
+async def driver_my_profile(user=Depends(get_current_user)):
+    """Profil mobile : compte, tag BLE associé, dernière détection. Jamais de mot de passe."""
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0}) if driver_id else None
+    last_det = None
+    if driver_id:
+        d = await db.ble_detections.find_one(
+            {"driver_id": driver_id, "ignored": False}, {"_id": 0, "ts": 1},
+            sort=[("ts", -1)])
+        last_det = d.get("ts") if d else None
+    return {
+        "name": (driver or {}).get("name") or user.get("name"),
+        "email": user.get("email"),
+        "account_active": user.get("active", True) is not False,
+        "must_change_password": bool(user.get("must_change_password")),
+        "driver_active": ((driver or {}).get("active", True) is not False) if driver else None,
+        "ble_tag_associated": bool((driver or {}).get("ble_id")),
+        "last_ble_detection": last_det,
+    }
+
+
 # ---------- Mobile push notifications (Expo Push token registration) ----------
 class PushTokenIn(BaseModel):
     token: str

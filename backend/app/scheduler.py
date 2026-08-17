@@ -116,6 +116,36 @@ async def _run_fuel_fx():
     logger.info("Sync taux BCE: %s | conversions: %s", result, conv)
 
 
+BEACON_JOB_ID = "beacon_poll"
+SWEEP_JOB_ID = "session_sweep"
+
+
+async def _run_beacon_poll():
+    try:
+        from app.driver_beacons import poll_all_tenants
+        res = await poll_all_tenants()
+        if any(v.get("processed") for v in res.values() if isinstance(v, dict)):
+            logger.info("Beacon poll: %s", res)
+    except Exception as e:
+        logger.error("Beacon poll error: %s", e)
+
+
+async def _run_session_sweep():
+    try:
+        from app.db import get_db, get_raw_db
+        from app.ble_engine import sweep_sessions
+        from app.tenant_context import reset_current_tenant, set_current_tenant
+        raw = get_raw_db()
+        async for t in raw.tenants.find({"status": "active"}, {"_id": 0, "id": 1}):
+            token = set_current_tenant(t["id"])
+            try:
+                await sweep_sessions(get_db())
+            finally:
+                reset_current_tenant(token)
+    except Exception as e:
+        logger.error("Session sweep error: %s", e)
+
+
 async def _persist_next_run(db):
     if _scheduler is None:
         return
@@ -155,6 +185,15 @@ async def init_scheduler():
     if await get_raw_db().fuel_exchange_rates.count_documents({}) == 0:
         _scheduler.add_job(_run_fuel_fx, id="fuel_fx_seed",
                            next_run_time=datetime.now(timezone.utc))
+    # Beacons chauffeurs (Navixy) toutes les 2 min + balayage des sessions toutes les 5 min
+    _scheduler.add_job(
+        _run_beacon_poll, IntervalTrigger(minutes=2),
+        id=BEACON_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(
+        _run_session_sweep, IntervalTrigger(minutes=5),
+        id=SWEEP_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
     await _persist_next_run(db)
     logger.info("Scheduler initialised (enabled=%s, interval_min=%s)",
                 state.get("enabled"), state.get("interval_min"))

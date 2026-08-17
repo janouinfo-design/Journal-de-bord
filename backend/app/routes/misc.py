@@ -267,7 +267,7 @@ class ClassifyIn(BaseModel):
 @router.put("/trips/{trip_id}/classify")
 async def classify_trip_route(
     trip_id: str, payload: ClassifyIn,
-    user=Depends(require_roles("admin", "manager")),
+    user=Depends(require_roles("admin", "manager", "driver")),
 ):
     if payload.classification not in ("professional", "personal"):
         raise HTTPException(400, "Classification invalide")
@@ -275,6 +275,11 @@ async def classify_trip_route(
     trip = await db.trips.find_one({"id": trip_id}, {"_id": 0})
     if not trip:
         raise HTTPException(404, "Trajet introuvable")
+    if user.get("role") == "driver":
+        from app.routes._helpers import resolve_driver_id_for_user
+        my_driver = await resolve_driver_id_for_user(db, user)
+        if not my_driver or trip.get("driver_id") != my_driver:
+            raise HTTPException(403, "Vous ne pouvez classer que vos propres trajets")
 
     old = trip.get("classification")
     await db.trips.update_one(

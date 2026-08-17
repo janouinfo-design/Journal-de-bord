@@ -117,7 +117,10 @@ async def resolve_driver_id_for_user(db, user: dict) -> Optional[str]:
         )
         if drv:
             return drv["id"]
-    return user.get("driver_id") or user.get("id")
+    for cand in (user.get("driver_id"), user.get("id")):
+        if cand and await db.drivers.find_one({"id": cand}, {"_id": 1}):
+            return cand
+    return None
 
 
 # ---------- Trip GPS polyline fallback ----------

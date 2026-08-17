@@ -36,7 +36,7 @@ def readonly():
 
 @pytest.fixture(scope="module")
 def superadmin():
-    return _login("superadmin@logitrak.ch", "superadmin123")
+    return _login("superadmin@logitrak.ch", os.environ["SUPERADMIN_PASSWORD"])
 
 
 @pytest.fixture(scope="module")

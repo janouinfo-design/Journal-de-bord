@@ -33,7 +33,7 @@ def manager(): return _login("manager@logitrak.ch", "manager123")
 
 
 @pytest.fixture(scope="module")
-def superadmin(): return _login("superadmin@logitrak.ch", "superadmin123")
+def superadmin(): return _login("superadmin@logitrak.ch", os.environ["SUPERADMIN_PASSWORD"])
 
 
 @pytest.fixture(scope="module")

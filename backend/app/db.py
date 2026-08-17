@@ -13,7 +13,7 @@ _client = None
 _db = None
 
 GLOBAL_COLLECTIONS = {"users", "tenants", "push_tokens", "app_state", "impersonation_tokens", "invitations",
-                      "fuel_exchange_rates"}
+                      "fuel_exchange_rates", "login_attempts"}
 
 
 class _ScopedCollection:

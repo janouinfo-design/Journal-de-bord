@@ -75,6 +75,13 @@ class TestNotificationsCatalog:
 
 class TestNotificationsPrefs:
     def test_get_default_prefs(self, driver_s):
+        # Réinitialise les prefs du chauffeur (état pollué par un run précédent)
+        import pymongo
+        me = driver_s.get(f"{API}/auth/me", timeout=10).json()
+        uid = me.get("id") or (me.get("user") or {}).get("id")
+        mc = pymongo.MongoClient(os.environ["MONGO_URL"])
+        mc[os.environ["DB_NAME"]].notification_preferences.delete_many({"user_id": uid})
+        mc.close()
         r = driver_s.get(f"{API}/livre/notifications/preferences", timeout=15)
         assert r.status_code == 200
         body = r.json()
@@ -284,8 +291,9 @@ class TestDispatcherWiring:
                              timeout=10).status_code
         assert before in (200, 405)  # GET on a POST route → 405 is fine
 
-        # Trigger conflict
-        for _ in range(3):
+        # Trigger conflict — nouvelle sémantique : contradiction de deux
+        # identités CONFIRMÉES (deux détections simples donnent « À valider »)
+        for _ in range(2):
             admin_s.post(f"{API}/livre/ble/simulate",
                          json={"driver_id": d1["id"],
                                "identifier": "CONFLICTAG", "rssi": -55}, timeout=15)
@@ -293,6 +301,16 @@ class TestDispatcherWiring:
                          json={"driver_id": d2["id"],
                                "identifier": "CONFLICTAG", "rssi": -55}, timeout=15)
             time.sleep(0.2)
+        rows = admin_s.get(f"{API}/livre/ble/sessions?limit=200", timeout=15).json()
+        for s in rows:
+            if s.get("vehicle_id") == v["id"] \
+                    and s.get("driver_id") in (d1["id"], d2["id"]) \
+                    and s.get("status") in ("open", "pending", "automatic", "manual"):
+                admin_s.put(f"{API}/livre/ble/sessions/{s['id']}",
+                            json={"status": "confirmed"}, timeout=15)
+        admin_s.post(f"{API}/livre/ble/simulate",
+                     json={"driver_id": d1["id"],
+                           "identifier": "CONFLICTAG", "rssi": -55}, timeout=15)
         time.sleep(0.6)
 
         # Verify the audit_log contains conflict_detected (we expose it via dashboard counters)

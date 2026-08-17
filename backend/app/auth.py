@@ -152,16 +152,62 @@ class RegisterIn(BaseModel):
     role: str = "driver"  # admin | manager | driver
 
 
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCK_MIN = 15
+LOGIN_GENERIC_MSG = "Identifiants incorrects ou accès temporairement bloqué"
+
+
+async def _register_login_failure(db, email: str):
+    """Compte les échecs et verrouille temporairement. Jamais de mot de passe en logs."""
+    from app.audit import log_audit
+    now = datetime.now(timezone.utc)
+    att = await db.login_attempts.find_one({"identifier": email})
+    window_start = (now - timedelta(minutes=LOGIN_LOCK_MIN)).isoformat()
+    count = 1
+    if att and (att.get("last_failed_at") or "") >= window_start:
+        count = int(att.get("count") or 0) + 1
+    update = {"identifier": email, "count": count, "last_failed_at": now.isoformat()}
+    if count >= LOGIN_MAX_ATTEMPTS:
+        update["locked_until"] = (now + timedelta(minutes=LOGIN_LOCK_MIN)).isoformat()
+        update["count"] = 0
+        await log_audit("auth.login_locked", None,
+                        {"email": email, "lock_minutes": LOGIN_LOCK_MIN})
+    else:
+        await log_audit("auth.login_failed", None, {"email": email, "attempt": count})
+    await db.login_attempts.update_one({"identifier": email}, {"$set": update}, upsert=True)
+
+
 @router.post("/login")
 async def login(payload: LoginIn, response: Response):
     from app.db import get_db
     db = get_db()
     email = payload.email.lower()
-    user = await db.users.find_one({"email": email})
-    if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
+    now_iso_ = datetime.now(timezone.utc).isoformat()
+
+    att = await db.login_attempts.find_one({"identifier": email})
+    if att and (att.get("locked_until") or "") > now_iso_:
         from app.audit import log_audit
-        await log_audit("auth.login_failed", None, {"email": email})
-        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+        await log_audit("auth.login_locked_attempt", None, {"email": email})
+        raise HTTPException(status_code=401, detail=LOGIN_GENERIC_MSG)
+
+    user = await db.users.find_one({"email": email})
+    ok = bool(user and user.get("password_hash")
+              and verify_password(payload.password, user["password_hash"]))
+    if ok and user.get("active") is False:
+        ok = False
+    if ok and user.get("role") == "driver":
+        drv = await db.drivers.find_one(
+            {"tenant_id": user.get("tenant_id"),
+             "$or": [{"user_id": user["id"]}, {"email": email}]},
+            {"_id": 0, "active": 1})
+        if drv and drv.get("active") is False:
+            ok = False
+    if not ok:
+        await _register_login_failure(db, email)
+        raise HTTPException(status_code=401, detail=LOGIN_GENERIC_MSG)
+
+    await db.login_attempts.delete_one({"identifier": email})
+    await db.users.update_one({"id": user["id"]}, {"$set": {"last_login_at": now_iso_}})
     access = create_access_token(user["id"], user["email"], user["role"])
     refresh = create_refresh_token(user["id"])
     _set_auth_cookies(response, access, refresh)
@@ -170,6 +216,31 @@ async def login(payload: LoginIn, response: Response):
     from app.audit import log_audit
     await log_audit("auth.login", user)
     return {"user": user, "access_token": access, "refresh_token": refresh}
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+async def change_password(payload: ChangePasswordIn, user=Depends(get_current_user)):
+    from app.db import get_db
+    db = get_db()
+    full = await db.users.find_one({"id": user["id"]})
+    if not full or not full.get("password_hash"):
+        raise HTTPException(400, "Ce compte utilise une connexion externe (SSO)")
+    if not verify_password(payload.current_password, full["password_hash"]):
+        raise HTTPException(401, "Mot de passe actuel incorrect")
+    if len(payload.new_password) < 8:
+        raise HTTPException(400, "Le nouveau mot de passe doit contenir au moins 8 caractères")
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(payload.new_password)},
+         "$unset": {"must_change_password": ""}})
+    from app.audit import log_audit
+    await log_audit("auth.password_changed", user, {})
+    return {"ok": True}
 
 
 class NavixySsoIn(BaseModel):

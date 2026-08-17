@@ -42,6 +42,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from pymongo.errors import DuplicateKeyError
+
 logger = logging.getLogger(__name__)
 
 # A session is considered ongoing if a detection arrived in the last X minutes.
@@ -49,12 +51,17 @@ SESSION_TIMEOUT = timedelta(minutes=5)
 # Window over which we compute confidence (median RSSI, variance, ...).
 RECENT_WINDOW = timedelta(minutes=30)
 
+# Statuts « en cours » d'une session (avant clôture définitive)
+OPEN_STATUSES = ["open", "automatic", "pending", "manual", "confirmed", "ending"]
+
 DEFAULT_SETTINGS = {
     "ble_enabled": True,
     "ble_min_duration_s": 120,
     "ble_min_rssi": -85,
     "ble_min_confidence": 60,
     "allow_driver_override": True,
+    "app_claim_conflict_window_min": 10,
+    "session_close_grace_min": 10,
 }
 
 
@@ -233,8 +240,30 @@ async def ingest_detection(db, driver_id: str, payload: dict) -> dict:
     }
 
 
+def _merge_sources(current: str | None, incoming: str) -> str:
+    if not current:
+        return incoming
+    if current == incoming:
+        return current
+    if current == "MANUEL" or incoming == "MANUEL":
+        return "MANUEL"
+    return "APP+BLE"
+
+
+async def _try_set_active(db, sess: dict) -> bool:
+    """Un seul conducteur actif par véhicule — garanti par index unique partiel."""
+    try:
+        await db.driver_sessions.update_one(
+            {"id": sess["id"], "active_driver": {"$ne": True}},
+            {"$set": {"active_driver": True, "active_since": now_iso()}})
+        return True
+    except DuplicateKeyError:
+        return False
+
+
 async def _update_session(db, driver_id: str, vehicle_id: str,
-                          detection: dict, settings: dict) -> dict:
+                          detection: dict, settings: dict,
+                          identification_source: str = "APP+BLE") -> dict:
     """Open or extend the current session for (driver, vehicle).
 
     Closes any other open session for this driver on a different vehicle.
@@ -242,19 +271,20 @@ async def _update_session(db, driver_id: str, vehicle_id: str,
     # Close stale / other sessions
     cutoff = (datetime.now(timezone.utc) - SESSION_TIMEOUT).isoformat()
     async for s in db.driver_sessions.find(
-        {"driver_id": driver_id, "status": {"$in": ["open", "automatic", "pending", "manual"]}},
+        {"driver_id": driver_id, "status": {"$in": OPEN_STATUSES}},
         {"_id": 0},
     ):
         if s["vehicle_id"] != vehicle_id or (s.get("last_seen") or "") < cutoff:
             await db.driver_sessions.update_one(
                 {"id": s["id"]},
-                {"$set": {"status": "closed", "ended_at": s.get("last_seen") or now_iso()}},
+                {"$set": {"status": "closed", "active_driver": False,
+                          "ended_at": s.get("last_seen") or now_iso()}},
             )
 
     # Find the still-open one for this exact (driver, vehicle)
     open_sess = await db.driver_sessions.find_one(
         {"driver_id": driver_id, "vehicle_id": vehicle_id,
-         "status": {"$in": ["open", "automatic", "pending", "manual"]}},
+         "status": {"$in": OPEN_STATUSES}},
         {"_id": 0},
     )
 
@@ -264,8 +294,10 @@ async def _update_session(db, driver_id: str, vehicle_id: str,
             "tenant_id": "default",
             "driver_id": driver_id,
             "vehicle_id": vehicle_id,
-            "ble_tag_id": detection["ble_tag_id"],
+            "ble_tag_id": detection.get("ble_tag_id"),
             "source": "ble",
+            "identification_source": identification_source,
+            "active_driver": False,
             "status": "open",
             "started_at": detection["ts"],
             "ended_at": None,
@@ -287,9 +319,15 @@ async def _update_session(db, driver_id: str, vehicle_id: str,
     confidence = await _compute_confidence(db, open_sess, settings)
     open_sess["confidence"] = confidence
 
-    # Status promotion
-    new_status = _derive_status(open_sess, settings)
+    # Status promotion — une identité confirmée (APP) n'est jamais rétrogradée
+    # par une simple détection, un conflit reste un conflit jusqu'à résolution.
+    if open_sess.get("status") in ("confirmed", "conflict"):
+        new_status = open_sess["status"]
+    else:
+        new_status = _derive_status(open_sess, settings)
     open_sess["status"] = new_status
+    merged_src = _merge_sources(open_sess.get("identification_source"), identification_source)
+    open_sess["identification_source"] = merged_src
 
     await db.driver_sessions.update_one(
         {"id": open_sess["id"]},
@@ -299,12 +337,12 @@ async def _update_session(db, driver_id: str, vehicle_id: str,
             "last_rssi": open_sess["last_rssi"],
             "confidence": confidence,
             "status": new_status,
+            "identification_source": merged_src,
         }},
     )
 
-    # Conflict detection — if other open sessions on the same vehicle exist
-    # for OTHER drivers with similar confidence, flag both as 'conflict'.
-    await _maybe_flag_conflict(db, open_sess)
+    # Réconciliation multi-personnes / conducteur actif sur ce véhicule
+    await _reconcile_vehicle_sessions(db, open_sess)
 
     # Realtime broadcast (best-effort)
     try:
@@ -320,65 +358,84 @@ async def _update_session(db, driver_id: str, vehicle_id: str,
     return open_sess
 
 
-async def _maybe_flag_conflict(db, sess: dict, confidence_delta: int = 30) -> None:
-    """If 2+ drivers have open sessions on the same vehicle within the timeout
-    window AND their confidence scores are within `confidence_delta` points,
-    mark ALL involved sessions as `status='conflict'`. Emit a realtime event.
+async def _flag_conflict(db, sessions: list[dict]) -> None:
+    """Marque un conflit explicite (jamais d'attribution silencieuse) + audit + push."""
+    ids = [s["id"] for s in sessions]
+    vehicle_id = sessions[0]["vehicle_id"]
+    driver_ids = list({s["driver_id"] for s in sessions})
+    await db.driver_sessions.update_many(
+        {"id": {"$in": ids}},
+        {"$set": {"status": "conflict", "conflict_at": now_iso(), "active_driver": False}},
+    )
+    await db.audit_log.insert_one({
+        "ts": now_iso(), "scope": "driver_identification", "action": "conflict_detected",
+        "vehicle_id": vehicle_id, "session_ids": ids,
+        "drivers": driver_ids,
+        "confidences": {s["driver_id"]: s.get("confidence") for s in sessions},
+    })
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish("conflict_detected", {
+            "vehicle_id": vehicle_id, "session_ids": ids, "drivers": driver_ids,
+        })
+    except Exception:
+        pass
+    try:
+        from app.notifications_service import dispatch
+        vehicle = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0}) or {}
+        await dispatch("ble.conflict", {
+            "session_id": ids[0], "vehicle_id": vehicle_id,
+            "vehicle_plate": vehicle.get("plate"), "vehicle_label": vehicle.get("model"),
+            "drivers": driver_ids,
+        }, driver_ids=driver_ids)
+    except Exception as e:
+        logger.warning("conflict push notification failed: %s", e)
 
-    Default delta=30 is intentionally lenient: as soon as a second phone
-    detects the same vehicle with a non-trivial confidence (>= 30), the
-    admin should review. Never auto-pick a winner.
+
+async def _reconcile_vehicle_sessions(db, sess: dict) -> None:
+    """Plusieurs personnes détectées sur le même véhicule :
+    - candidats BLE multiples sans confirmation → tous « À valider » (jamais de
+      choix arbitraire au RSSI le plus fort) ;
+    - contradiction avec une identité confirmée → conflit explicite ;
+    - candidat unique stable (automatic) → promu conducteur actif (atomique).
     """
     cutoff = (datetime.now(timezone.utc) - SESSION_TIMEOUT).isoformat()
     rivals = await db.driver_sessions.find({
         "tenant_id": "default",
         "vehicle_id": sess["vehicle_id"],
         "driver_id": {"$ne": sess["driver_id"]},
-        "status": {"$in": ["open", "automatic", "pending", "manual"]},
+        "status": {"$in": ["open", "automatic", "pending", "manual", "confirmed"]},
         "last_seen": {"$gte": cutoff},
     }, {"_id": 0}).to_list(50)
     if not rivals:
+        if sess.get("status") in ("automatic", "confirmed", "manual"):
+            await _try_set_active(db, sess)
         return
-    my_conf = sess.get("confidence") or 0
-    close = [r for r in rivals if abs((r.get("confidence") or 0) - my_conf) <= confidence_delta]
-    if not close:
+    group = [sess, *rivals]
+    confirmed = [s for s in group if s.get("status") == "confirmed"
+                 or s.get("identification_source") == "MANUEL"]
+    if confirmed and len(confirmed) < len(group):
+        others = [s for s in group if s not in confirmed]
+        # présence d'autres tags = occupants détectés (pas un conflit tant
+        # qu'aucune identification forte ne les désigne conducteur)
+        occupant_ids = [s["id"] for s in others if s.get("status") in ("open", "pending")]
+        if occupant_ids:
+            await db.driver_sessions.update_many(
+                {"id": {"$in": occupant_ids}, "status": {"$in": ["open", "pending"]}},
+                {"$set": {"status": "pending", "active_driver": False}})
+        contradicting = [s for s in others if s.get("status") in ("automatic", "manual")]
+        if contradicting:
+            await _flag_conflict(db, confirmed + contradicting)
         return
-    involved_ids = [sess["id"], *(r["id"] for r in close)]
+    if confirmed:
+        # plusieurs identités confirmées simultanées → conflit explicite
+        await _flag_conflict(db, group)
+        return
+    # aucun confirmé : plusieurs candidats détectés → tous à valider, aucun actif
+    ids = [s["id"] for s in group]
     await db.driver_sessions.update_many(
-        {"id": {"$in": involved_ids}},
-        {"$set": {"status": "conflict", "conflict_at": now_iso()}},
-    )
-    await db.audit_log.insert_one({
-        "ts": now_iso(), "scope": "driver_identification", "action": "conflict_detected",
-        "vehicle_id": sess["vehicle_id"], "session_ids": involved_ids,
-        "drivers": [sess["driver_id"], *(r["driver_id"] for r in close)],
-        "confidences": {sess["driver_id"]: my_conf,
-                        **{r["driver_id"]: r.get("confidence") for r in close}},
-    })
-    try:
-        from app.realtime import get_broadcaster
-        await get_broadcaster().publish("conflict_detected", {
-            "vehicle_id": sess["vehicle_id"],
-            "session_ids": involved_ids,
-            "drivers": [sess["driver_id"], *(r["driver_id"] for r in close)],
-        })
-    except Exception:
-        pass
-
-    # Push notification to involved drivers + admins
-    try:
-        from app.notifications_service import dispatch
-        vehicle = await db.vehicles.find_one({"id": sess["vehicle_id"]}, {"_id": 0}) or {}
-        driver_ids = [sess["driver_id"], *(r["driver_id"] for r in close)]
-        await dispatch("ble.conflict", {
-            "session_id": sess["id"],
-            "vehicle_id": sess["vehicle_id"],
-            "vehicle_plate": vehicle.get("plate"),
-            "vehicle_label": vehicle.get("model"),
-            "drivers": driver_ids,
-        }, driver_ids=driver_ids)
-    except Exception as e:
-        logger.warning("conflict push notification failed: %s", e)
+        {"id": {"$in": ids}, "status": {"$in": ["open", "automatic", "pending"]}},
+        {"$set": {"status": "pending", "active_driver": False}})
 
 
 async def resolve_conflict(db, session_id: str, winner_driver_id: str,
@@ -402,25 +459,25 @@ async def resolve_conflict(db, session_id: str, winner_driver_id: str,
         raise LookupError("Aucune session active pour ce chauffeur sur ce véhicule")
 
     settings = await get_ble_settings(db)
-    final_status = (
-        "confirmed" if (winner_session.get("confidence") or 0) >= settings["ble_min_confidence"]
-        else "pending"
-    )
+    final_status = "confirmed"
     losers = [s for s in siblings if s["driver_id"] != winner_driver_id]
     loser_ids = [s["id"] for s in losers]
 
     await db.driver_sessions.update_one(
         {"id": winner_session["id"]},
-        {"$set": {"status": final_status, "resolved_at": now_iso(),
+        {"$set": {"status": final_status, "identification_source": "MANUEL",
+                  "resolved_at": now_iso(),
                   "resolved_by": actor, "resolved_winner": winner_driver_id}},
     )
     if loser_ids:
         await db.driver_sessions.update_many(
             {"id": {"$in": loser_ids}},
-            {"$set": {"status": "closed", "resolved_at": now_iso(),
+            {"$set": {"status": "closed", "active_driver": False,
+                      "resolved_at": now_iso(),
                       "resolved_by": actor, "resolved_winner": winner_driver_id,
                       "ended_at": now_iso()}},
         )
+    await _try_set_active(db, winner_session)
     await db.audit_log.insert_one({
         "ts": now_iso(), "scope": "driver_identification", "action": "conflict_resolved",
         "actor": actor, "source": source, "vehicle_id": vehicle_id,
@@ -534,7 +591,7 @@ async def driver_set_mode(db, driver_id: str, mode: str, actor: str) -> dict:
 
     sess = await db.driver_sessions.find_one({
         "tenant_id": "default", "driver_id": driver_id,
-        "status": {"$in": ["open", "automatic", "pending", "manual"]},
+        "status": {"$in": OPEN_STATUSES},
     }, {"_id": 0})
     if not sess:
         raise LookupError("Aucune session active — montez dans un véhicule équipé d'un tag BLE")
@@ -575,7 +632,7 @@ async def get_current_session(db, driver_id: str) -> Optional[dict]:
     """For the PWA: return the active session (vehicle, mode, confidence)."""
     sess = await db.driver_sessions.find_one({
         "tenant_id": "default", "driver_id": driver_id,
-        "status": {"$in": ["open", "automatic", "pending", "manual"]},
+        "status": {"$in": OPEN_STATUSES},
     }, {"_id": 0})
     if not sess:
         return None
@@ -601,12 +658,25 @@ async def list_sessions(db, limit: int = 200, status: Optional[str] = None,
     for r in rows:
         drv = drivers.get(r["driver_id"], {})
         veh = vehicles.get(r["vehicle_id"], {})
+        ident = r.get("identification_source") or ("APP+BLE" if r.get("source") == "ble" else "MANUEL")
         out.append({
             **r,
+            "identification_source": ident,
             "driver_name": drv.get("name"),
             "vehicle_plate": veh.get("plate"),
             "vehicle_model": veh.get("model"),
         })
+    # Occupants : autres sessions en cours sur le même véhicule (présence détectée)
+    open_rows = [r for r in out if r.get("status") in OPEN_STATUSES or r.get("status") == "conflict"]
+    by_vehicle: dict = {}
+    for r in open_rows:
+        by_vehicle.setdefault(r["vehicle_id"], []).append(r)
+    for r in out:
+        peers = [p for p in by_vehicle.get(r["vehicle_id"], []) if p["id"] != r["id"]] \
+            if r.get("status") in OPEN_STATUSES or r.get("status") == "conflict" else []
+        r["occupants"] = [{"driver_id": p["driver_id"], "driver_name": p.get("driver_name")}
+                          for p in peers]
+        r["occupants_count"] = len(peers)
     return out
 
 
@@ -619,10 +689,14 @@ async def amend_session(db, session_id: str, patch: dict, actor: str) -> dict:
     for k in ("driver_id", "vehicle_id"):
         if k in patch and patch[k]:
             update[k] = patch[k]
+    if "driver_id" in update and update["driver_id"] != sess.get("driver_id"):
+        update["identification_source"] = "MANUEL"
     if "status" in patch and patch["status"] in (
-        "open", "automatic", "confirmed", "pending", "manual", "closed", "cancelled", "conflict",
+        "open", "automatic", "confirmed", "pending", "manual", "closed", "cancelled", "conflict", "ending",
     ):
         update["status"] = patch["status"]
+        if patch["status"] in ("closed", "cancelled"):
+            update["active_driver"] = False
     if "mobile_override" in patch and patch["mobile_override"] in ("professional", "personal", None):
         update["mobile_override"] = patch["mobile_override"]
     if not update:
@@ -647,29 +721,232 @@ async def dashboard_kpis(db, start: Optional[str] = None, end: Optional[str] = N
 
     total = await db.driver_sessions.count_documents(base)
     auto = await db.driver_sessions.count_documents({**base, "status": "automatic"})
+    confirmed = await db.driver_sessions.count_documents({**base, "status": "confirmed"})
     pending = await db.driver_sessions.count_documents({**base, "status": "pending"})
-    manual = await db.driver_sessions.count_documents({**base, "status": "manual"})
     conflict = await db.driver_sessions.count_documents({**base, "status": "conflict"})
-    forced_pro = await db.driver_sessions.count_documents({**base, "mobile_override": "professional"})
-    forced_perso = await db.driver_sessions.count_documents({**base, "mobile_override": "personal"})
+    # Sources d'identification (APP / BLE / APP+BLE / MANUEL) — séparées de PRO/PRIVÉ
+    ident_app = await db.driver_sessions.count_documents(
+        {**base, "identification_source": "APP"})
+    ident_ble = await db.driver_sessions.count_documents(
+        {**base, "identification_source": "BLE"})
+    ident_app_ble = await db.driver_sessions.count_documents(
+        {**base, "$or": [{"identification_source": "APP+BLE"},
+                         {"identification_source": {"$exists": False}, "source": "ble"}]})
+    manual_cnt = await db.driver_sessions.count_documents(
+        {**base, "$or": [{"identification_source": "MANUEL"}, {"status": "manual"}]})
 
-    # Avg detections per closed session as proxy for stability
+    # Détections BLE brutes dans la fenêtre
+    dq: dict = {"tenant_id": "default", "ignored": False}
+    if start:
+        dq["ts"] = {"$gte": start}
+    if end:
+        dq.setdefault("ts", {})["$lte"] = end
+    detections = await db.ble_detections.count_documents(dq)
+
+    # Trajets : identification chauffeur + PRO/PRIVÉ (contexte trajets, pas sessions)
+    tq: dict = {"tenant_id": "default"}
+    if start:
+        tq["start_time"] = {"$gte": start}
+    if end:
+        tq.setdefault("start_time", {})["$lte"] = end
+    trips_total = await db.trips.count_documents(tq)
+    trips_unidentified = await db.trips.count_documents(
+        {**tq, "$or": [{"driver_id": None}, {"driver_id": {"$exists": False}}]})
+    forced_pro = await db.trips.count_documents({**tq, "mobile_override": "professional"})
+    forced_perso = await db.trips.count_documents({**tq, "mobile_override": "personal"})
+
     closed_rows = await db.driver_sessions.find(
         {**base, "status": "closed"}, {"_id": 0, "detection_count": 1},
     ).to_list(1000)
     avg_det = sum(r.get("detection_count", 0) for r in closed_rows) / max(len(closed_rows), 1)
 
+    identified = total - pending - conflict
     return {
         "total_sessions": total,
+        "identified_app": ident_app,
+        "identified_ble": ident_ble,
+        "identified_app_ble": ident_app_ble,
+        "manual_set": manual_cnt,
         "auto_identified": auto,
+        "confirmed": confirmed,
         "pending_validation": pending,
-        "manual_set": manual,
         "conflicts": conflict,
+        "success_rate": round(max(identified, 0) / total * 100, 1) if total else 0.0,
+        "detections": detections,
+        "avg_detections_per_session": round(avg_det, 1),
+        "trips": {
+            "total": trips_total,
+            "unidentified": trips_unidentified,
+            "identification_rate": round((trips_total - trips_unidentified) / trips_total * 100, 1)
+            if trips_total else 0.0,
+            "forced_pro": forced_pro,
+            "forced_perso": forced_perso,
+        },
+        # rétro-compatibilité (anciens noms utilisés par le widget)
         "forced_pro": forced_pro,
         "forced_perso": forced_perso,
-        "success_rate": round(auto / total * 100, 1) if total else 0.0,
-        "avg_detections_per_session": round(avg_det, 1),
     }
+
+
+# ---------- « Je conduis » — confirmation explicite APP (§9, §15-17, §23, §45) ----------
+async def _get_or_create_session(db, driver_id: str, vehicle_id: str,
+                                 src: str, ts: str) -> dict:
+    sess = await db.driver_sessions.find_one(
+        {"driver_id": driver_id, "vehicle_id": vehicle_id,
+         "status": {"$in": OPEN_STATUSES + ["conflict"]}},
+        {"_id": 0}, sort=[("started_at", -1)])
+    if sess:
+        return sess
+    sess = {
+        "id": str(uuid.uuid4()), "tenant_id": "default",
+        "driver_id": driver_id, "vehicle_id": vehicle_id,
+        "ble_tag_id": None, "source": "app",
+        "identification_source": src, "active_driver": False,
+        "status": "open", "started_at": ts, "ended_at": None,
+        "last_seen": ts, "detection_count": 0, "last_rssi": None,
+        "mobile_override": None, "confidence": None, "created_at": now_iso(),
+    }
+    await db.driver_sessions.insert_one(dict(sess))
+    return sess
+
+
+async def claim_driving(db, driver_id: str, vehicle_id: str, actor: str,
+                        client_timestamp: str | None = None) -> dict:
+    """« Je conduis » : validation atomique côté serveur — un seul conducteur
+    actif par véhicule, jamais d'écrasement silencieux d'une autre identité."""
+    settings = await get_ble_settings(db)
+    vehicle = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
+    if not vehicle:
+        raise LookupError("Véhicule introuvable")
+    now = datetime.now(timezone.utc)
+    ts = now.isoformat()
+    ble_cutoff = (now - RECENT_WINDOW).isoformat()
+    has_ble = await db.ble_detections.find_one({
+        "driver_id": driver_id, "vehicle_id": vehicle_id,
+        "ignored": False, "ts": {"$gte": ble_cutoff}}, {"_id": 1})
+    src = "APP+BLE" if has_ble else "APP"
+
+    other = await db.driver_sessions.find_one({
+        "vehicle_id": vehicle_id, "driver_id": {"$ne": driver_id},
+        "status": {"$in": ["automatic", "manual", "confirmed"]},
+        "$or": [{"ended_at": None}, {"ended_at": {"$exists": False}}],
+    }, {"_id": 0}, sort=[("started_at", -1)])
+    if other:
+        window_min = int(settings.get("app_claim_conflict_window_min", 10))
+        presence_cutoff = (now - SESSION_TIMEOUT).isoformat()
+        confirm_cutoff = (now - timedelta(minutes=window_min)).isoformat()
+        other_still_present = (other.get("last_seen") or "") >= presence_cutoff \
+            and (other.get("detection_count") or 0) > 0
+        other_confirmed_recent = other.get("status") == "confirmed" \
+            and (other.get("confirmed_at") or "") >= confirm_cutoff
+        if other_still_present or other_confirmed_recent:
+            # contradiction (§16-17) → conflit explicite, résolution admin/app requise
+            mine = await _get_or_create_session(db, driver_id, vehicle_id, src, ts)
+            await _flag_conflict(db, [other, mine])
+            return {"status": "conflict", "session": {**mine, "status": "conflict"},
+                    "conflict_with_driver_id": other["driver_id"]}
+        # changement volontaire de chauffeur (§23) : clôturer l'ancien à l'heure de la confirmation
+        await db.driver_sessions.update_one(
+            {"id": other["id"]},
+            {"$set": {"status": "closed", "ended_at": ts, "active_driver": False,
+                      "end_reason": "driver_change"}})
+        await db.audit_log.insert_one({
+            "ts": ts, "scope": "driver_identification", "action": "driver_change",
+            "actor": actor, "vehicle_id": vehicle_id,
+            "from_driver_id": other["driver_id"], "to_driver_id": driver_id,
+            "source": "APP"})
+
+    # mes sessions sur d'autres véhicules → clôturées
+    await db.driver_sessions.update_many(
+        {"driver_id": driver_id, "vehicle_id": {"$ne": vehicle_id},
+         "status": {"$in": OPEN_STATUSES}},
+        {"$set": {"status": "closed", "ended_at": ts, "active_driver": False}})
+
+    mine = await _get_or_create_session(db, driver_id, vehicle_id, src, ts)
+    upd = {"status": "confirmed",
+           "identification_source": _merge_sources(mine.get("identification_source"), src),
+           "confirmed_at": ts, "confirmed_by": actor, "last_seen": ts}
+    if client_timestamp:
+        upd["client_timestamp"] = str(client_timestamp)[:40]
+    await db.driver_sessions.update_one({"id": mine["id"]}, {"$set": upd})
+    mine.update(upd)
+
+    try:
+        await db.driver_sessions.update_one(
+            {"id": mine["id"], "active_driver": {"$ne": True}},
+            {"$set": {"active_driver": True, "active_since": ts}})
+        mine["active_driver"] = True
+    except DuplicateKeyError:
+        # deux « Je conduis » quasi simultanés → conflit explicite (§17, §45)
+        winner = await db.driver_sessions.find_one(
+            {"vehicle_id": vehicle_id, "active_driver": True,
+             "driver_id": {"$ne": driver_id}}, {"_id": 0})
+        if winner:
+            await _flag_conflict(db, [winner, mine])
+            return {"status": "conflict", "session": {**mine, "status": "conflict"},
+                    "conflict_with_driver_id": winner["driver_id"]}
+
+    # autres candidats non confirmés = occupants détectés (à valider)
+    await db.driver_sessions.update_many(
+        {"vehicle_id": vehicle_id, "driver_id": {"$ne": driver_id},
+         "status": {"$in": ["open", "automatic", "pending"]}},
+        {"$set": {"status": "pending", "active_driver": False}})
+
+    await db.audit_log.insert_one({
+        "ts": ts, "scope": "driver_identification", "action": "driver_claim",
+        "actor": actor, "driver_id": driver_id, "vehicle_id": vehicle_id,
+        "session_id": mine["id"], "identification_source": mine["identification_source"],
+        "client_timestamp": (str(client_timestamp)[:40] if client_timestamp else None)})
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish("session_updated", {
+            "session_id": mine["id"], "driver_id": driver_id,
+            "vehicle_id": vehicle_id, "status": "confirmed"})
+    except Exception:
+        pass
+    return {"status": "confirmed",
+            "session": {**mine, "vehicle": {"id": vehicle.get("id"),
+                                            "plate": vehicle.get("plate"),
+                                            "model": vehicle.get("model")}}}
+
+
+# ---------- Fin de session liée aux trajets Navixy (§20-22) ----------
+async def mark_sessions_trip_end(db, trip: dict) -> None:
+    """Fin de trajet véhicule → sessions passent en 'ending' avec délai de grâce.
+    Ne s'applique qu'aux fins de trajet récentes (jamais au backfill historique)."""
+    end_time = trip.get("end_time")
+    if not end_time:
+        return
+    recent_floor = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    if end_time < recent_floor:
+        return
+    q = {"vehicle_id": trip["vehicle_id"],
+         "status": {"$in": ["open", "automatic", "pending", "manual", "confirmed"]},
+         "started_at": {"$lte": end_time},
+         "last_seen": {"$lte": end_time}}
+    await db.driver_sessions.update_many(
+        q, {"$set": {"status": "ending", "ending_since": end_time,
+                     "vehicle_trip_id": trip.get("id")}})
+
+
+async def sweep_sessions(db) -> dict:
+    """Balayage périodique : ENDING → CLOSED après le délai de grâce ;
+    sessions candidates sans détection prolongée → CLOSED (sécurité)."""
+    settings = await get_ble_settings(db)
+    grace = int(settings.get("session_close_grace_min", 10))
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=grace)).isoformat()
+    r1 = await db.driver_sessions.update_many(
+        {"status": "ending", "ending_since": {"$lte": cutoff}},
+        [{"$set": {"status": "closed", "active_driver": False,
+                   "ended_at": {"$ifNull": ["$ended_at", "$ending_since"]}}}])
+    stale_cutoff = (now - SESSION_TIMEOUT * 6).isoformat()
+    r2 = await db.driver_sessions.update_many(
+        {"status": {"$in": ["open", "automatic", "pending"]},
+         "last_seen": {"$lte": stale_cutoff}},
+        [{"$set": {"status": "closed", "active_driver": False,
+                   "ended_at": {"$ifNull": ["$ended_at", "$last_seen"]}}}])
+    return {"ending_closed": r1.modified_count, "stale_closed": r2.modified_count}
 
 
 # ---------- Simulation (for testing without physical hardware) ----------

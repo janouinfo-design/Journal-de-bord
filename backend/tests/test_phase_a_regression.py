@@ -264,6 +264,30 @@ def two_drivers(drivers_list):
     return drivers_list[0], drivers_list[1]
 
 
+def _force_conflict(admin_s, vehicle, d1, d2):
+    """Nouvelle sémantique : un conflit naît d'une CONTRADICTION d'identités
+    confirmées (jamais de deux simples détections, qui donnent « À valider »).
+    On confirme les deux candidats puis on déclenche une détection pour forcer
+    la réconciliation → conflit explicite."""
+    for _ in range(2):
+        for d in (d1, d2):
+            admin_s.post(f"{API}/livre/ble/simulate",
+                         json={"driver_id": d["id"], "identifier": "CONFLICTAG",
+                               "rssi": -55}, timeout=15)
+        time.sleep(0.15)
+    rows = admin_s.get(f"{API}/livre/ble/sessions?limit=200", timeout=15).json()
+    for s in rows:
+        if s.get("vehicle_id") == vehicle["id"] \
+                and s.get("driver_id") in (d1["id"], d2["id"]) \
+                and s.get("status") in ("open", "pending", "automatic", "manual"):
+            admin_s.put(f"{API}/livre/ble/sessions/{s['id']}",
+                        json={"status": "confirmed"}, timeout=15)
+    admin_s.post(f"{API}/livre/ble/simulate",
+                 json={"driver_id": d1["id"], "identifier": "CONFLICTAG",
+                       "rssi": -55}, timeout=15)
+    time.sleep(0.5)
+
+
 class TestBleConflict:
     def test_admin_can_simulate_two_drivers_on_same_vehicle(
         self, admin_s, conflict_vehicle, two_drivers,
@@ -283,17 +307,34 @@ class TestBleConflict:
             assert r1.status_code == 200 and r2.status_code == 200
             time.sleep(0.2)
 
-    def test_conflict_flagged_on_sessions(self, admin_s, two_drivers):
-        # Allow a brief moment for the conflict-detection coroutine to settle
+    def test_conflict_flagged_on_sessions(self, admin_s, two_drivers, conflict_vehicle):
+        # Nouvelle sémantique : plusieurs candidats NON confirmés sur le même
+        # véhicule → tous « À valider » (pending), jamais de conflit ni de
+        # choix arbitraire au RSSI le plus fort.
         time.sleep(0.5)
-        r = admin_s.get(f"{API}/livre/ble/sessions?status=conflict&limit=100",
+        d1, d2 = two_drivers
+        r = admin_s.get(f"{API}/livre/ble/sessions?status=pending&limit=100",
                         timeout=15)
         assert r.status_code == 200, r.text
         rows = r.json()
-        d1, d2 = two_drivers
         involved = [s for s in rows
-                    if s.get("driver_id") in (d1["id"], d2["id"])]
-        assert involved, f"expected at least one session in conflict for {d1['id']}/{d2['id']}"
+                    if s.get("driver_id") in (d1["id"], d2["id"])
+                    and s.get("vehicle_id") == conflict_vehicle["id"]]
+        assert len(involved) >= 2, \
+            f"les deux candidats doivent être « À valider », obtenu {len(involved)}"
+        assert all(not s.get("active_driver") for s in involved), \
+            "aucun candidat ne doit être conducteur actif sans confirmation"
+
+    def test_confirmed_contradiction_creates_conflict(
+        self, admin_s, two_drivers, conflict_vehicle,
+    ):
+        # Deux identités confirmées simultanées → conflit explicite (résolution admin)
+        d1, d2 = two_drivers
+        _force_conflict(admin_s, conflict_vehicle, d1, d2)
+        rows = admin_s.get(f"{API}/livre/ble/sessions?status=conflict&limit=100",
+                           timeout=15).json()
+        involved = [s for s in rows if s.get("driver_id") in (d1["id"], d2["id"])]
+        assert involved, "une contradiction confirmée doit créer un conflit explicite"
 
     def test_manager_cannot_resolve(self, manager_s, admin_s, two_drivers):
         rows = admin_s.get(f"{API}/livre/ble/sessions?status=conflict&limit=100").json()
@@ -422,17 +463,8 @@ class TestRealtimeWebSocket:
             except Exception:
                 pass
 
-            # Trigger fresh conflict
-            for _ in range(3):
-                admin_s.post(f"{API}/livre/ble/simulate",
-                             json={"driver_id": d1["id"],
-                                   "identifier": "CONFLICTAG",
-                                   "rssi": -55}, timeout=15)
-                admin_s.post(f"{API}/livre/ble/simulate",
-                             json={"driver_id": d2["id"],
-                                   "identifier": "CONFLICTAG",
-                                   "rssi": -55}, timeout=15)
-                time.sleep(0.15)
+            # Trigger fresh conflict (contradiction de deux identités confirmées)
+            _force_conflict(admin_s, conflict_vehicle, d1, d2)
 
             msg = _drain_until(ws, "conflict_detected", max_seconds=10.0)
             assert msg is not None, "expected conflict_detected event"
@@ -441,7 +473,7 @@ class TestRealtimeWebSocket:
             assert set([d1["id"], d2["id"]]).issubset(set(drivers_in_event)), \
                 f"both drivers should appear in event, got {drivers_in_event}"
 
-    def test_admin_receives_conflict_resolved(self, admin_s, two_drivers):
+    def test_admin_receives_conflict_resolved(self, admin_s, two_drivers, conflict_vehicle):
         d1, _ = two_drivers
         # Find a still-conflicting session OWNED BY d1 (the future winner)
         def _find_d1_conflict():
@@ -454,17 +486,7 @@ class TestRealtimeWebSocket:
         if not target:
             # Re-trigger a conflict to have something to resolve
             d1_again, d2 = two_drivers
-            for _ in range(3):
-                admin_s.post(f"{API}/livre/ble/simulate",
-                             json={"driver_id": d1_again["id"],
-                                   "identifier": "CONFLICTAG",
-                                   "rssi": -55}, timeout=15)
-                admin_s.post(f"{API}/livre/ble/simulate",
-                             json={"driver_id": d2["id"],
-                                   "identifier": "CONFLICTAG",
-                                   "rssi": -55}, timeout=15)
-                time.sleep(0.15)
-            time.sleep(0.5)
+            _force_conflict(admin_s, conflict_vehicle, d1_again, d2)
             target = _find_d1_conflict()
         if not target:
             pytest.skip("could not produce a conflict involving d1")

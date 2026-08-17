@@ -283,6 +283,9 @@ async def _upsert_trip(db, doc: dict) -> str:
         if not existing.get("auto_classified", True):
             update.pop("driver_id", None)
         await db.trips.update_one({"navixy_track_id": navixy_track_id}, {"$set": update})
+        if doc.get("end_time"):
+            from app.ble_engine import mark_sessions_trip_end
+            await mark_sessions_trip_end(db, {**doc, "id": existing.get("id")})
         return "updated"
     doc.update({
         "id": str(uuid.uuid4()),
@@ -293,6 +296,9 @@ async def _upsert_trip(db, doc: dict) -> str:
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     await db.trips.insert_one(doc)
+    if doc.get("end_time"):
+        from app.ble_engine import mark_sessions_trip_end
+        await mark_sessions_trip_end(db, doc)
     return "new"
 
 

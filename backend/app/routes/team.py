@@ -284,6 +284,14 @@ async def team_create_driver(payload: DriverIn, current=Depends(require_roles("a
            "created_at": datetime.now(timezone.utc).isoformat(),
            **{k: getattr(payload, k) for k in DRIVER_FIELDS}}
     doc["email"] = (doc.get("email") or "").lower() or ""
+    if doc.get("ble_id"):
+        from app.ble_engine import normalize_identifier
+        norm = normalize_identifier(doc["ble_id"])
+        dup = await db.drivers.find_one(
+            {"ble_id_norm": norm, "active": {"$ne": False}}, {"_id": 1})
+        if dup:
+            raise HTTPException(409, "Ce tag BLE est déjà attribué à un autre chauffeur")
+        doc["ble_id_norm"] = norm
     await db.drivers.insert_one(dict(doc))
     await log_audit("driver.create", current, {"name": payload.name})
     doc.pop("_id", None)
@@ -303,6 +311,16 @@ async def team_update_driver(driver_id: str, payload: DriverUpdate,
         updates["email"] = updates["email"].lower()
     if not updates:
         raise HTTPException(400, "Aucun champ à mettre à jour")
+    if "ble_id" in updates:
+        from app.ble_engine import normalize_identifier
+        norm = normalize_identifier(updates["ble_id"]) if updates.get("ble_id") else None
+        if norm:
+            dup = await db.drivers.find_one(
+                {"ble_id_norm": norm, "id": {"$ne": driver_id}, "active": {"$ne": False}},
+                {"_id": 1})
+            if dup:
+                raise HTTPException(409, "Ce tag BLE est déjà attribué à un autre chauffeur")
+        updates["ble_id_norm"] = norm
     await db.drivers.update_one({"id": driver_id}, {"$set": updates})
     await log_audit("driver.update", current, {"name": driver.get("name"), "fields": list(updates)})
     return await db.drivers.find_one({"id": driver_id}, {"_id": 0})

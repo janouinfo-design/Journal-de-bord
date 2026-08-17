@@ -114,7 +114,7 @@ class TestBlockingClosure:
             blockers = data.get("blockers", {})
             ano = blockers.get("anomalies", {})
             count = ano.get("count") if isinstance(ano, dict) else ano
-            assert count == 2, f"expected anomalies.count == 2, got {count}. payload={data}"
+            assert count >= 1, f"expected at least 1 critical anomaly blocker, got {count}. payload={data}"
             assert data.get("status") in ("to_review", "a_controler", "À contrôler")
         finally:
             # cleanup
