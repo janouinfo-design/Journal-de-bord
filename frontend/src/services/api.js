@@ -166,3 +166,52 @@ export function decodeJwt(token) {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Diagnostic de connexion (aide au dépannage — n'affiche que des données réelles).
+// ---------------------------------------------------------------------------
+
+/** Vérifie la joignabilité de l'API (racine). */
+export async function pingApi() {
+  const started = Date.now();
+  try {
+    const resp = await fetch(`${API_URL}/`, { method: 'GET' });
+    const ms = Date.now() - started;
+    return { reachable: true, status: resp.status, ms, url: `${API_URL}/` };
+  } catch (e) {
+    return {
+      reachable: false,
+      status: 0,
+      ms: Date.now() - started,
+      url: `${API_URL}/`,
+      error: e?.message || 'inconnue',
+    };
+  }
+}
+
+/**
+ * Teste l'endpoint de login et renvoie la réponse BRUTE réelle du serveur,
+ * sans interprétation ni masquage. Sert à diagnostiquer un refus d'identifiants.
+ */
+export async function diagnoseLogin(email, password) {
+  const url = `${API_URL}${ENDPOINTS.login}`;
+  const started = Date.now();
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const ms = Date.now() - started;
+    const text = await resp.text();
+    let detail = text;
+    try {
+      const j = JSON.parse(text);
+      detail = typeof j?.detail === 'string' ? j.detail : JSON.stringify(j).slice(0, 300);
+    } catch (e) {}
+    return { status: resp.status, ok: resp.ok, detail, ms, url };
+  } catch (e) {
+    return { status: 0, ok: false, detail: e?.message || 'réseau', ms: Date.now() - started, url };
+  }
+}
+

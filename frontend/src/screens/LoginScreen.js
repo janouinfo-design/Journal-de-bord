@@ -7,14 +7,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Button from '../components/Button';
 import { colors, spacing, radius, font } from '../theme/theme';
 import { useAuth } from '../context/AuthContext';
-import { ApiError } from '../services/api';
+import { ApiError, pingApi, diagnoseLogin } from '../services/api';
+import { API_URL } from '../services/config';
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
@@ -23,6 +23,10 @@ export default function LoginScreen() {
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diag, setDiag] = useState(null);
 
   const canSubmit = email.trim().length > 3 && password.length >= 1;
 
@@ -36,11 +40,30 @@ export default function LoginScreen() {
     try {
       await signIn(email.trim(), password);
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : 'Connexion impossible.';
+      let msg = e instanceof ApiError ? e.message : 'Connexion impossible.';
+      // Enrichissement diagnostique en cas de refus d'identifiants.
+      if (e instanceof ApiError && e.status === 401) {
+        msg =
+          (e.message || 'Identifiants refusés.') +
+          '\nVérifiez le mot de passe et que ce compte chauffeur est actif.';
+      }
       setError(msg);
     } finally {
       setLoading(false);
     }
+  };
+
+  const runDiagnostic = async () => {
+    setDiagRunning(true);
+    setDiag(null);
+    const ping = await pingApi();
+    let loginTest = null;
+    if (email.trim() && password) {
+      loginTest = await diagnoseLogin(email.trim(), password);
+    }
+    setDiag({ ping, loginTest });
+    setDiagRunning(false);
+    setDiagOpen(true);
   };
 
   return (
@@ -117,6 +140,56 @@ export default function LoginScreen() {
             <Text style={styles.hint}>
               Connexion sécurisée — votre entreprise est reconnue automatiquement.
             </Text>
+
+            <Text
+              testID="login-diagnostic-toggle"
+              style={styles.diagLink}
+              onPress={runDiagnostic}
+            >
+              {diagRunning ? 'Diagnostic en cours…' : 'Diagnostic de connexion'}
+            </Text>
+
+            {diagOpen && diag ? (
+              <View style={styles.diagBox} testID="login-diagnostic-box">
+                <Text style={styles.diagTitle}>Diagnostic</Text>
+                <Text style={styles.diagLine} numberOfLines={2}>
+                  Serveur : {diag.ping.url}
+                </Text>
+                <Text
+                  style={[
+                    styles.diagLine,
+                    { color: diag.ping.reachable ? colors.success : colors.danger },
+                  ]}
+                >
+                  Joignabilité : {diag.ping.reachable ? `OK (HTTP ${diag.ping.status}, ${diag.ping.ms} ms)` : `échec — ${diag.ping.error || 'injoignable'}`}
+                </Text>
+                {diag.loginTest ? (
+                  <>
+                    <Text
+                      style={[
+                        styles.diagLine,
+                        { color: diag.loginTest.ok ? colors.success : colors.warning },
+                      ]}
+                    >
+                      Test login : HTTP {diag.loginTest.status} ({diag.loginTest.ms} ms)
+                    </Text>
+                    <Text style={styles.diagDetail}>
+                      Réponse serveur : {diag.loginTest.detail}
+                    </Text>
+                    {diag.loginTest.status === 401 ? (
+                      <Text style={styles.diagAdvice}>
+                        → Identifiants refusés par Logitrak. Vérifiez le mot de passe et que ce
+                        compte chauffeur est actif.
+                      </Text>
+                    ) : null}
+                  </>
+                ) : (
+                  <Text style={styles.diagDetail}>
+                    Saisissez email + mot de passe pour tester aussi la connexion.
+                  </Text>
+                )}
+              </View>
+            ) : null}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -184,4 +257,30 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing.lg,
   },
+  diagLink: {
+    color: colors.primary,
+    fontSize: font.size.sm,
+    textAlign: 'center',
+    marginTop: spacing.md,
+    fontWeight: font.weight.medium,
+  },
+  diagBox: {
+    marginTop: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  diagTitle: {
+    color: colors.textMuted,
+    fontSize: font.size.xs,
+    fontWeight: font.weight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: spacing.sm,
+  },
+  diagLine: { color: colors.text, fontSize: font.size.xs, marginBottom: 4 },
+  diagDetail: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 4 },
+  diagAdvice: { color: colors.warning, fontSize: font.size.xs, marginTop: spacing.sm },
 });
