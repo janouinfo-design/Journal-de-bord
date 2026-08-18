@@ -10,8 +10,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { showConfirm } from '@/utils/alert';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import { useSessionStore } from '@/store/sessionStore';
 import { useQueueStore } from '@/store/queueStore';
@@ -22,15 +20,11 @@ import { useRealtime } from '@/hooks/useRealtime';
 import { bleScanner, ScannerState } from '@/ble/scanner';
 import { showLocalNotification } from '@/utils/notifications';
 import { getVehicles, Vehicle } from '@/api/ble';
-import type { RootStackParamList } from '@/navigation/RootNavigator';
-
-type Nav = NativeStackNavigationProp<RootStackParamList, 'Driver'>;
 
 // Véhicule sélectionnable pour « Je conduis » (vehicle_id réel).
 type SelectableVehicle = { vehicle_id: string; plate: string; model: string | null };
 
 export function DriverScreen() {
-  const nav = useNavigation<Nav>();
   const {
     session,
     refresh,
@@ -202,13 +196,6 @@ export function DriverScreen() {
             <Text style={styles.helloLabel}>Connecté en tant que</Text>
             <Text style={styles.helloName}>{user?.full_name || user?.email}</Text>
           </View>
-          <TouchableOpacity
-            onPress={() => nav.navigate('Settings')}
-            style={styles.settingsBtn}
-            testID="driver-open-settings"
-          >
-            <Text style={styles.settingsBtnText}>⚙</Text>
-          </TouchableOpacity>
         </View>
 
         {/* Conflict banner (ne PAS masquer) */}
@@ -475,17 +462,6 @@ const styles = StyleSheet.create({
   },
   helloLabel: { color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase' },
   helloName: { color: colors.text, fontSize: font.size.lg, fontWeight: '600' },
-  settingsBtn: {
-    backgroundColor: colors.bgCard,
-    borderRadius: radius.pill,
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  settingsBtnText: { color: colors.text, fontSize: font.size.lg },
 
   conflictBanner: {
     backgroundColor: 'rgba(245, 158, 11, 0.15)',

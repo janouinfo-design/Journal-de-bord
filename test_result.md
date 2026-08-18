@@ -1,88 +1,85 @@
 #====================================================================================================
-# Testing Protocol - Logitrak Journal de bord — App Chauffeur (Expo) + Backend Phase 3
+# Phase 4.1 — Finalisation App Chauffeur Expo (Mes trajets, Profil, Réglages)
 #====================================================================================================
 
 user_problem_statement: |
-  Sync depuis le repo GitHub janouinfo-design/Journal-de-bord (main, Phase 3, 442/442).
-  Auditer les contrats API du backend ACTUEL. Corriger l'app Expo déjà développée
-  (logitrak-driver-app) SANS repartir de zéro : implémenter « Je m'arrête » (POST /driver/stop),
-  le flux must_change_password, conserver les corrections précédentes. Tests obligatoires :
-  typecheck, lint, jest, expo-doctor + régression backend pertinente.
-
-backend:
-  - task: "Backend Phase 3 (repo) déployé comme backend de travail"
-    implemented: true
-    working: true
-    file: "backend/server.py (repo)"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: true
-        agent: "main"
-        comment: "Remplacé l'ancien backend v1 par le backend Phase 3 du repo. Endpoints driver/stop, change-password, must_change_password, ble/detections {detections:[...]}, claim, manual-mode, fleet-tags confirmés. Login {user,access_token,refresh_token}."
-  - task: "Régression backend (suites pertinentes)"
-    implemented: true
-    working: true
-    file: "backend/tests/*"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: true
-        agent: "main"
-        comment: "Sur HTTPS preview: test_phase3_admin_driver 23 pass/4 skip (stop, idempotence, conflit, historique, unicité tag), test_iteration8_ble 32/32, test_iteration22_ble_normalize 5/5, test_livre_de_bord majoritaire pass. Skips/échecs restants = 2e tenant (admin-b) + seed fuel/fines non provisionnés (environnemental). Cookies auth Secure => tests DOIVENT tourner via URL HTTPS, pas http://localhost."
+  Phase 4.1 : terminer UNIQUEMENT les écrans manquants de l'app chauffeur Expo — Mes trajets,
+  détail trajet, classification PRO/PRIVÉ, Profil, Réglages, navigation par onglets — sans
+  toucher au cœur validé (login, claim, current-session, stop, PRO/PRIVÉ, BLE, conflits, push).
+  Données réelles uniquement, N/A si champ absent.
 
 frontend:
-  - task: "« Je m'arrête » (POST /driver/stop) — bouton, confirmation, anti-double-clic, idempotence"
+  - task: "Mes trajets (liste)"
     implemented: true
     working: true
-    file: "frontend/src/screens/DriverScreen.tsx, src/store/sessionStore.ts"
+    file: "frontend/src/screens/TripsScreen.tsx, src/store/tripsStore.ts, src/api/trips.ts"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
       - working: true
         agent: "testing"
-        comment: "E2E web 10/10 PASS : stop clôture la session, bouton masqué sans session active, garde submitting. Idempotence gérée (stopped:false)."
-  - task: "Flux must_change_password (écran forcé)"
+        comment: "64 trajets réels affichés (date, badge PRO/PRIVÉ/À classer, plaque, distance, durée). Loading/empty/error/pull-to-refresh gérés."
+  - task: "Détail trajet + tracé + reclassification"
     implemented: true
     working: true
-    file: "frontend/src/screens/ChangePasswordScreen.tsx, src/store/authStore.ts, src/navigation/RootNavigator.tsx"
+    file: "frontend/src/screens/TripDetailScreen.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
       - working: true
         agent: "testing"
-        comment: "Gate implémenté : si must_change_password, seul l'écran de changement est accessible. Compte test = false, donc pas déclenché (comportement correct)."
-  - task: "« Je conduis » (claim) + sélecteur véhicule + PRO/PRIVÉ + mapping session.vehicle.plate/model"
+        comment: "Itinéraire (adresses réelles), Détails (distance/durée/vitesses/carburant), Tracé (points GPS réels, source affichée), reclassify PRO/PRIVÉ après confirmation serveur — sans crash."
+  - task: "Profil chauffeur (read-only)"
     implemented: true
     working: true
-    file: "frontend/src/screens/DriverScreen.tsx, src/api/ble.ts"
+    file: "frontend/src/screens/ProfileScreen.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
       - working: true
         agent: "testing"
-        comment: "E2E: claim GE 123456 -> SESSION ACTIVE, PRO/PRIVÉ bannières OK, plaque/modèle corrects."
-  - task: "Adaptateurs plateforme (storage web/native, alert web/native)"
+        comment: "my-profile réel : nom, email, statut compte, accès mobile, tag BLE (Non), dernière détection. Boutons changer mdp + logout. Read-only (aucun endpoint d'édition driver)."
+  - task: "Réglages (compte, notifications réelles, application)"
     implemented: true
     working: true
-    file: "frontend/src/utils/storage.ts, src/utils/alert.ts"
+    file: "frontend/src/screens/SettingsScreen.tsx, src/api/notifications.ts"
     stuck_count: 0
-    priority: "medium"
+    priority: "high"
     needs_retesting: false
     status_history:
       - working: true
-        agent: "main"
-        comment: "expo-secure-store (natif) / localStorage (web) ; Alert.alert (natif) / window.confirm (web). Nécessaire pour le preview web ; natif inchangé."
+        agent: "testing"
+        comment: "Compte (changer mdp, logout), Bluetooth toggle, Notifications = préférences RÉELLES (2 toggles push), Application (version + env dev). Aucune URL/secret affichée."
+  - task: "Navigation par onglets (Conduite/Trajets/Profil/Réglages)"
+    implemented: true
+    working: true
+    file: "frontend/src/navigation/RootNavigator.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Bottom tabs OK. Gate must_change_password conservé. TripDetail + ChangePassword en stack. Gear Settings retiré de Conduite (anti-duplication)."
+  - task: "RÉGRESSION cœur (login/claim/PRO-PRIVÉ/stop)"
+    implemented: true
+    working: true
+    file: "frontend/src/screens/DriverScreen.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "E2E post-Phase4.1 : CLAIM PASS, PRIVÉ PASS, STOP PASS, bouton stop masqué après. Aucune régression."
 
 metadata:
   created_by: "main_agent"
-  version: "2.0"
-  test_sequence: 2
+  version: "3.0"
+  test_sequence: 3
   run_ui: true
 
 test_plan:
@@ -94,5 +91,6 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Qualité app: typecheck PASS, lint 0 erreurs (2 warnings pré-existants), jest 10/10, expo-doctor 17/17.
-      E2E web 10/10. Backend régression driver/BLE PASS. Reste PARTIEL = 2e tenant + seed fuel/fines + BLE terrain + push device.
+      Phase 4.1 terminée. Qualité: typecheck PASS, lint 0 err (2 warnings pré-existants),
+      jest 23/23, expo-doctor 17/17. Backend régression 60 pass / 4 skip (2e tenant non provisionné).
+      Cœur intact. PARTIEL inchangés : BLE device, push device, Navixy, SMTP.

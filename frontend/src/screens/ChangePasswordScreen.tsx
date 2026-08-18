@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { showConfirm } from '@/utils/alert';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import { changePassword } from '@/api/client';
@@ -21,7 +22,8 @@ import { useAuthStore } from '@/store/authStore';
  * (le RootNavigator n'affiche que cet écran). Utilise l'endpoint réel /auth/change-password.
  */
 export function ChangePasswordScreen() {
-  const { clearMustChangePassword, signOut } = useAuthStore();
+  const { clearMustChangePassword, signOut, mustChangePassword } = useAuthStore();
+  const nav = useNavigation<any>();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -42,7 +44,12 @@ export function ChangePasswordScreen() {
     try {
       await changePassword(current, next);
       clearMustChangePassword();
-      showConfirm('Mot de passe modifié', 'Vous pouvez maintenant utiliser l’application.');
+      // Accès non forcé (depuis Profil/Réglages) : revenir en arrière après succès.
+      if (!mustChangePassword && nav.canGoBack?.()) {
+        nav.goBack();
+      } else {
+        showConfirm('Mot de passe modifié', 'Vous pouvez maintenant utiliser l’application.');
+      }
     } catch (e: any) {
       const msg = e?.response?.data?.detail || 'Impossible de changer le mot de passe.';
       setError(msg);
