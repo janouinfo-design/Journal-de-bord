@@ -1,123 +1,70 @@
-# Logitrak Driver — App Native (Phase B)
+# Getting Started with Create React App
 
-App **Expo / React Native** pour les chauffeurs Logitrak, conçue pour le scan
-BLE continu en arrière-plan (la limitation principale de la PWA Chrome).
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-## ✅ Statut actuel
+## Available Scripts
 
-Tout le code est **production-ready** :
+In the project directory, you can run:
 
-- ✅ Scanner BLE continu avec `react-native-ble-plx` (state machine, dedupe, permissions)
-- ✅ Background task `expo-background-fetch` (flush queue offline toutes les ~15 min)
-- ✅ Queue offline avec retry + backoff exponentiel + cap d'âge 24 h
-- ✅ Auth JWT + refresh token sécurisé (`expo-secure-store`)
-- ✅ Push notifications Expo + handlers d'actions (PRO/PRIVÉ depuis la notif)
-- ✅ Realtime WebSocket (conflits BLE, kill switch)
-- ✅ Écrans : Login, Driver (vehicle + mode override), Settings
-- ✅ TypeScript strict (typecheck PASS)
-- ✅ Permissions configurées : iOS `bluetooth-central` + Android `BLUETOOTH_SCAN/CONNECT` + `FOREGROUND_SERVICE`
+### `npm start`
 
-## 🚀 Mise en route
+Runs the app in the development mode.\
+Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
 
-### 1. Prérequis (poste local)
+The page will reload when you make changes.\
+You may also see any lint errors in the console.
 
-```bash
-# Node 20 + Yarn
-node -v       # >= 20.x
-yarn -v       # 1.22+
+### `npm test`
 
-# Outils Expo
-npm install -g eas-cli
-eas login     # connectez-vous avec le compte Expo (gratuit)
-```
+Launches the test runner in the interactive watch mode.\
+See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
 
-### 2. Configuration
+### `npm run build`
 
-Éditer `app.json` :
-- Remplacez `"projectId": "00000000-0000-0000-0000-000000000000"` par le vrai
-  ID donné par `eas init` (étape suivante).
-- Remplacez `"owner": "logitrak"` par votre slug Expo.
+Builds the app for production to the `build` folder.\
+It correctly bundles React in production mode and optimizes the build for the best performance.
 
-```bash
-cd /app/logitrak-driver-app
-yarn install
-eas init    # crée l'app sur Expo + écrit le projectId
-```
+The build is minified and the filenames include the hashes.\
+Your app is ready to be deployed!
 
-### 3. Build de test (APK Android, le plus simple pour démarrer)
+See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
 
-```bash
-eas build --profile preview --platform android
-```
+### `npm run eject`
 
-EAS compile dans le cloud (~10 min) et fournit un lien APK à télécharger
-directement sur la Tab A9.
+**Note: this is a one-way operation. Once you `eject`, you can't go back!**
 
-### 4. Installation sur la Tab A9
+If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
 
-1. Ouvrir le lien APK depuis Chrome sur la tablette
-2. Autoriser l'installation d'apps inconnues
-3. Lancer **Logitrak Driver**
-4. Accorder :
-   - **Bluetooth** → autoriser
-   - **Localisation** → choisir **« Toujours »** (sinon le scan s'arrête en arrière-plan)
-   - **Notifications** → autoriser
+Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
 
-### 5. Login + test
+You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
-- Identifiants chauffeur : `chauffeur@logitrak.ch` / `chauffeur123`
-- L'écran principal affiche **"Recherche en cours…"** puis bascule sur le véhicule détecté dès que le scan capte un beacon configuré (matching par MAC ou par alias).
+## Learn More
 
-### 6. Build de production
+You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
 
-```bash
-# Mise à jour dans app.json : "version": "1.0.0"
-eas build --profile production --platform all
-```
+To learn React, check out the [React documentation](https://reactjs.org/).
 
-## 🔧 Comment ça marche techniquement
+### Code Splitting
 
-### Scanner BLE foreground (app ouverte)
-`src/ble/scanner.ts` lance `react-native-ble-plx` en mode continu. À chaque
-détection, le scanner :
-1. Extrait l'identifiant (`device.name` > `device.localName` > suffixe MAC)
-2. Filtre par dedupe (2 s par identifier)
-3. Met en queue dans AsyncStorage (`src/ble/queue.ts`)
-4. Tente immédiatement un flush HTTP vers `POST /api/livre/ble/detections`
+This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
 
-### Scanner BLE arrière-plan
-- **iOS** : `UIBackgroundModes: ["bluetooth-central"]` permet à Core Bluetooth de
-  continuer le scan tant qu'iOS ne tue pas le processus. Les détections sont
-  écrites en queue et flushées au prochain réveil.
-- **Android** : la permission `FOREGROUND_SERVICE` est déclarée, mais le scaffold
-  actuel utilise `expo-background-fetch` (~15 min) qui suffit pour flusher la
-  queue. Pour un scan vraiment continu app fermée, il faut ajouter un plugin
-  natif foreground service — réservé Phase C.
+### Analyzing the Bundle Size
 
-### Queue offline
-La queue persiste dans `AsyncStorage` jusqu'à 5 000 détections / 24 h. Le flush
-est déclenché :
-- au démarrage de l'app (hook `useQueueFlusher`)
-- à chaque détection (foreground)
-- périodiquement par `expo-background-fetch` (background)
-- manuellement via le bouton "Flush" dans Settings (à venir)
+This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
 
-## 🧪 Comment vérifier que ça fonctionne
+### Making a Progressive Web App
 
-1. Démarrer l'app + se connecter en tant que chauffeur
-2. Activer le Bluetooth de votre **phone** et celui d'un beacon Logitrak (`BC57291D22C5`)
-3. Approcher la phone du beacon (< 5 m)
-4. L'écran principal doit afficher le véhicule lié au beacon (`LOGITRAK AUDI`)
-5. Côté admin (Chrome desktop) → page **Identification chauffeurs** → la session apparaît avec statut `automatic`, confiance > 80 %
+This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
 
-## 🛡️ Sécurité
+### Advanced Configuration
 
-- Tokens JWT stockés dans **`expo-secure-store`** (Keychain iOS / EncryptedSharedPreferences Android)
-- HTTPS obligatoire (les profils EAS dev/preview/production utilisent toutes des URLs HTTPS)
-- Pas de logging des tokens ni des données sensibles en clair
+This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
 
-## 📚 Liens utiles
+### Deployment
 
-- Spec native complète : `/app/docs/phase_b_native_spec.md`
-- Spec BLE Phase A : `/app/docs/ble_phase_a.md`
-- Backend endpoints utilisés : `POST /api/livre/ble/detections`, `GET /api/livre/driver/current-session`, `POST /api/livre/driver/push-token`
+This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+
+### `npm run build` fails to minify
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)

@@ -1,0 +1,37 @@
+node_modules/
+.expo/
+dist/
+npm-debug.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+
+# macOS
+.DS_Store
+
+# Local env (committed for Emergent deployment tooling — see /app/.gitignore)
+.env.local
+.env.*.local
+
+# Native
+ios/
+android/
+.gradle/
+*.xcworkspace/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Misc
+google-services.json
+GoogleService-Info.plist
+play-store-service-account.json
+
+# Env (never commit — use EAS secrets / EXPO_PUBLIC_ at build)
+.env

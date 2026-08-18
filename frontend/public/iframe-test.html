@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Logitrak — Iframe Test</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #F4F6F8; }
+    header { background: #0f172a; color: white; padding: 16px 24px; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    header p  { margin: 4px 0 0; font-size: 13px; opacity: 0.7; }
+    .status  { padding: 12px 24px; background: white; border-bottom: 1px solid #e2e8f0;
+               font-size: 13px; font-family: ui-monospace, monospace; }
+    .ok  { color: #059669; }
+    .err { color: #dc2626; }
+    iframe { width: 100%; height: calc(100vh - 130px); border: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Test embed iframe — Logitrak Livre de bord</h1>
+    <p>Simule un embed depuis <span id="parentOrigin"></span>. Si l'iframe ci-dessous est vide/blanche, ouvrez la console : le CSP a probablement bloqué.</p>
+  </header>
+  <div class="status" id="status">
+    ⏳ Chargement de l'iframe…
+  </div>
+  <iframe id="app" src="/livre/dashboard"></iframe>
+  <script>
+    document.getElementById('parentOrigin').textContent = window.location.origin;
+    const iframe = document.getElementById('app');
+    const status = document.getElementById('status');
+    iframe.addEventListener('load', () => {
+      status.innerHTML = '<span class="ok">✅ Iframe chargée</span> — src = <code>' + iframe.src + '</code>';
+    });
+    setTimeout(() => {
+      // Sanity check : si l'iframe est bloquée par CSP, son location.href sera 'about:blank'
+      try {
+        const url = iframe.contentWindow.location.href;
+        if (url === 'about:blank') {
+          status.innerHTML = '<span class="err">❌ Iframe bloquée</span> (about:blank). Vérifiez le CSP frame-ancestors.';
+        }
+      } catch (e) {
+        // cross-origin — c'est bon signe, ça veut dire que le contenu s'est chargé
+        status.innerHTML += ' <span style="color:#94a3b8">(contenu cross-origin, ok)</span>';
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

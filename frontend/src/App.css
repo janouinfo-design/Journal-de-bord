@@ -1,0 +1,4 @@
+/* Layout root — keep light, no dark App-header (was clashing) */
+.App {
+    min-height: 100vh;
+}

@@ -1,0 +1,112 @@
+{
+  "theme": "light",
+  "archetype": "Archetype 4: Swiss & High-Contrast (Tailored for B2B SaaS / Dashboard)",
+  "typography": {
+    "font_family_headings": "IBM Plex Sans, sans-serif",
+    "font_family_body": "IBM Plex Sans, sans-serif",
+    "font_family_mono": "IBM Plex Mono, monospace",
+    "h1": "text-3xl font-semibold tracking-tight text-slate-900",
+    "h2": "text-xl font-medium tracking-tight text-slate-800",
+    "h3": "text-lg font-medium text-slate-800",
+    "body": "text-sm text-slate-600 leading-relaxed",
+    "label": "text-xs font-semibold tracking-[0.05em] uppercase text-slate-500",
+    "value": "text-2xl font-semibold text-slate-900"
+  },
+  "colors": {
+    "primary": {
+      "DEFAULT": "#2196F3",
+      "hover": "#1E88E5",
+      "active": "#1976D2",
+      "subtle": "#E3F2FD"
+    },
+    "accent": {
+      "DEFAULT": "#E53935",
+      "hover": "#D32F2F"
+    },
+    "neutral": {
+      "900": "#0F172A",
+      "800": "#1E293B",
+      "700": "#334155",
+      "600": "#475569",
+      "500": "#64748B",
+      "400": "#94A3B8",
+      "300": "#CBD5E1",
+      "200": "#E2E8F0",
+      "100": "#F1F5F9",
+      "50": "#F8FAFC",
+      "white": "#FFFFFF"
+    },
+    "status": {
+      "pro": "#2196F3",
+      "personal": "#94A3B8",
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "danger": "#EF4444"
+    },
+    "background": {
+      "sidebar_primary": "#1A202C",
+      "sidebar_secondary": "#FFFFFF",
+      "header": "#FFFFFF",
+      "canvas": "#F4F6F8",
+      "card": "#FFFFFF"
+    }
+  },
+  "layout": {
+    "spacing_system": "Dense & structured (Dashboard standard: p-4, p-6 for cards, gap-4)",
+    "page_structure": "Left dual-sidebar (Dark primary + White secondary) + Top Header (White) + Main Canvas (Light Grey)",
+    "sidebar_primary_width": "w-20",
+    "sidebar_secondary_width": "w-64",
+    "header_height": "h-16",
+    "grid_system": "Bento-style Control Room (grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 or gap-6)"
+  },
+  "components": {
+    "kpi_card": {
+      "style": "bg-white border border-slate-200 rounded-md p-5 shadow-sm",
+      "interactions": "hover:shadow-md transition-shadow duration-200",
+      "typography": "Label text-slate-500 text-sm font-medium, Value text-3xl text-slate-900 font-semibold"
+    },
+    "button_primary": {
+      "style": "bg-[#2196F3] text-white px-4 py-2 rounded-md font-medium text-sm shadow-sm",
+      "interactions": "hover:bg-[#1E88E5] hover:shadow transition-all focus:ring-2 focus:ring-[#2196F3]/50"
+    },
+    "button_secondary": {
+      "style": "bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-md font-medium text-sm",
+      "interactions": "hover:bg-slate-50 hover:text-slate-900 transition-colors"
+    },
+    "table": {
+      "style": "w-full text-sm text-left border-collapse",
+      "header": "bg-slate-50 text-slate-500 font-medium py-3 px-4 border-b border-slate-200",
+      "row": "border-b border-slate-100 hover:bg-slate-50 transition-colors",
+      "cell": "py-3 px-4 text-slate-700"
+    },
+    "badge": {
+      "pro": "bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full text-xs font-medium",
+      "perso": "bg-slate-100 text-slate-700 border border-slate-200 px-2.5 py-0.5 rounded-full text-xs font-medium"
+    },
+    "sidebar_item": {
+      "primary": "text-slate-400 hover:text-white hover:bg-slate-800 p-3 rounded-lg flex justify-center items-center cursor-pointer transition-colors",
+      "primary_active": "text-[#2196F3] bg-slate-800 p-3 rounded-lg flex justify-center items-center",
+      "secondary": "text-slate-600 hover:text-slate-900 hover:bg-slate-50 px-3 py-2 rounded-md flex items-center text-sm font-medium transition-colors",
+      "secondary_active": "text-[#2196F3] bg-blue-50 px-3 py-2 rounded-md flex items-center text-sm font-medium"
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-in-out",
+    "modal_enter": "animate-in fade-in zoom-in-95 duration-200",
+    "page_enter": "animate-in fade-in slide-in-from-bottom-2 duration-300"
+  },
+  "icons_and_assets": {
+    "icon_library": "phosphor-icons/react or lucide-react",
+    "icon_style": "Solid/Duotone for primary sidebar, Regular for UI elements",
+    "avatar_placeholder": "Use a generic highly-readable initial avatar (e.g. 'A')"
+  },
+  "instructions_to_main_agent": [
+    "Install Google Fonts 'IBM Plex Sans' and 'IBM Plex Mono' in the HTML head or via CSS import.",
+    "Set up the layout precisely: The leftmost sidebar should be very narrow (w-20 or w-16) and very dark (bg-slate-900). The secondary sidebar immediately to its right should be white (bg-white) and contain the 'Livre de bord' sub-menu items. The header runs horizontally at the top, over the content area, but right of the primary sidebar.",
+    "The primary CTA buttons should strictly use the Logitrak Blue (#2196F3).",
+    "Use Recharts for the KPI charts (Pro vs Perso breakdown pie chart).",
+    "Add the red accent to the Logitrak logo (the 'i' dot).",
+    "Ensure all interactive elements (buttons, inputs, menu items, table rows) have a descriptive `data-testid` attribute using kebab-case.",
+    "Mock data should simulate Navixy track history (e.g., depart address, arrival address, distance km, duration, pro/perso status)."
+  ]
+}

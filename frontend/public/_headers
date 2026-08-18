@@ -1,0 +1,10 @@
+# Headers file for Cloudflare Pages / Netlify / static hosts that read this
+# convention. This runs alongside any CI-driven deploy of the CRA build.
+#
+# frame-ancestors must be an HTTP header — meta http-equiv is ignored by
+# browsers for this directive.
+
+/*
+  Content-Security-Policy: frame-ancestors 'self' https://*.logitrak.fr https://logitrak.fr https://*.logitrak.ch https://logitrak.ch https://*.navixy.com https://*.navixy.io https://*.emergentagent.com;
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
