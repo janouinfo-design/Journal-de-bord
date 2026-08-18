@@ -6,8 +6,10 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "assetBundlePatterns": ["**/*"],
+    "web": {
+      "bundler": "metro"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "ch.logitrak.driver",
@@ -63,15 +65,12 @@
         "origin": false
       },
       "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
+        "projectId": "SET_VIA_eas_init"
       }
     },
     "owner": "logitrak",
     "runtimeVersion": {
       "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/00000000-0000-0000-0000-000000000000"
     }
   }
 }

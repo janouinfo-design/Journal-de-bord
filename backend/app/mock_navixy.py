@@ -138,11 +138,14 @@ async def seed_mock_data(force: bool = False):
     # Drivers — first driver maps to the chauffeur user account (env DRIVER_EMAIL)
     import os
     driver_user_email = os.environ.get("DRIVER_EMAIL", "chauffeur@logitrak.ch").lower()
+    # Le premier chauffeur (Jean Dupont) porte un id STABLE : la suite de tests
+    # Phase 3 (test_phase3_admin_driver) référence cet id fixe (JEAN_ID).
+    JEAN_STABLE_ID = "1580345e-6b8e-45a2-88e7-513a008b6b12"
     drivers = []
     for i, name in enumerate(DRIVER_NAMES):
         email = driver_user_email if i == 0 else f"{name.lower().replace(' ', '.')}@logitrak.ch"
         drivers.append({
-            "id": str(uuid.uuid4()),
+            "id": JEAN_STABLE_ID if i == 0 else str(uuid.uuid4()),
             "tenant_id": "default",
             "name": name,
             "email": email,

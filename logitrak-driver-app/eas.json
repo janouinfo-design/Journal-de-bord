@@ -8,8 +8,11 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://driver-fleet-ble.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -22,7 +25,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://driver-fleet-ble.preview.emergentagent.com"
       }
     },
     "production": {
