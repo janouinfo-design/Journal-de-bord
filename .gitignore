@@ -123,3 +123,6 @@ backups/
 logs/
 frontend/node_modules/.cache/default-development/7.pack
 frontend/node_modules/.cache/default-development/19.pack
+
+# Projet Expo séparé (workspace uniquement) — ne pas versionner dans Journal-de-bord
+/logitrak-driver-app/
