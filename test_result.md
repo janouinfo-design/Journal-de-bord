@@ -1,100 +1,92 @@
 #====================================================================================================
-# Testing Protocol - Logitrak Chauffeur (Expo mobile app)
+# Testing Protocol - Logitrak Journal de bord — App Chauffeur (Expo) + Backend Phase 3
 #====================================================================================================
 
 user_problem_statement: |
-  App mobile Expo « Logitrak Chauffeur » multi-entreprises consommant l'API existante
-  https://journal.logitrak.ch/api. Login JWT, console chauffeur (véhicule détecté par BLE,
-  signal dBm, nb détections, score confiance, boutons PRO/PRIVÉ, liste tags BLE flotte + test).
-  Endpoints: POST /auth/login, GET /livre/driver/current-session, GET /livre/driver/fleet-tags,
-  POST /livre/ble/detections, POST /livre/driver/manual-mode. Français, thème sombre.
-  BLE natif via react-native-ble-plx (nécessite development build EAS). Bonus: scan BLE
-  background + notifications push Expo.
+  Sync depuis le repo GitHub janouinfo-design/Journal-de-bord (main, Phase 3, 442/442).
+  Auditer les contrats API du backend ACTUEL. Corriger l'app Expo déjà développée
+  (logitrak-driver-app) SANS repartir de zéro : implémenter « Je m'arrête » (POST /driver/stop),
+  le flux must_change_password, conserver les corrections précédentes. Tests obligatoires :
+  typecheck, lint, jest, expo-doctor + régression backend pertinente.
 
 backend:
-  - task: "Reverse-proxy transparent vers l'API Logitrak (web preview only)"
+  - task: "Backend Phase 3 (repo) déployé comme backend de travail"
     implemented: true
     working: true
-    file: "backend/server.py"
+    file: "backend/server.py (repo)"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
       - working: true
-        agent: "testing"
-        comment: "8/8 tests passés. Forward réel auth/ et livre/, JWT passé, 401 réels relayés (Email ou mot de passe incorrect, Token invalide), 404 hors namespace, routes locales non régressées."
+        agent: "main"
+        comment: "Remplacé l'ancien backend v1 par le backend Phase 3 du repo. Endpoints driver/stop, change-password, must_change_password, ble/detections {detections:[...]}, claim, manual-mode, fleet-tags confirmés. Login {user,access_token,refresh_token}."
+  - task: "Régression backend (suites pertinentes)"
+    implemented: true
+    working: true
+    file: "backend/tests/*"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Sur HTTPS preview: test_phase3_admin_driver 23 pass/4 skip (stop, idempotence, conflit, historique, unicité tag), test_iteration8_ble 32/32, test_iteration22_ble_normalize 5/5, test_livre_de_bord majoritaire pass. Skips/échecs restants = 2e tenant (admin-b) + seed fuel/fines non provisionnés (environnemental). Cookies auth Secure => tests DOIVENT tourner via URL HTTPS, pas http://localhost."
 
 frontend:
-  - task: "Écran de connexion JWT"
+  - task: "« Je m'arrête » (POST /driver/stop) — bouton, confirmation, anti-double-clic, idempotence"
     implemented: true
     working: true
-    file: "frontend/src/screens/LoginScreen.js"
+    file: "frontend/src/screens/DriverScreen.tsx, src/store/sessionStore.ts"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
       - working: true
         agent: "testing"
-        comment: "Rendu OK (thème sombre FR), toggle mot de passe OK, validation OK, erreur réelle serveur affichée (Email ou mot de passe incorrect) via proxy same-origin."
-
-  - task: "Console chauffeur (session, tags flotte, PRO/PRIVÉ, scan BLE)"
+        comment: "E2E web 10/10 PASS : stop clôture la session, bouton masqué sans session active, garde submitting. Idempotence gérée (stopped:false)."
+  - task: "Flux must_change_password (écran forcé)"
     implemented: true
-    working: "NA"
-    file: "frontend/src/screens/ConsoleScreen.js"
+    working: true
+    file: "frontend/src/screens/ChangePasswordScreen.tsx, src/store/authStore.ts, src/navigation/RootNavigator.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
-      - working: "NA"
-        agent: "main"
-        comment: "Implémenté. Non testable au-delà du login sans identifiants chauffeur valides. BLE natif non testable sur web (état 'indisponible' affiché, aucune donnée fictive)."
-
-  - task: "Service BLE (react-native-ble-plx) + score de confiance tracé"
+      - working: true
+        agent: "testing"
+        comment: "Gate implémenté : si must_change_password, seul l'écran de changement est accessible. Compte test = false, donc pas déclenché (comportement correct)."
+  - task: "« Je conduis » (claim) + sélecteur véhicule + PRO/PRIVÉ + mapping session.vehicle.plate/model"
     implemented: true
-    working: "NA"
-    file: "frontend/src/services/ble.js, frontend/src/services/detection.js"
+    working: true
+    file: "frontend/src/screens/DriverScreen.tsx, src/api/ble.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "E2E: claim GE 123456 -> SESSION ACTIVE, PRO/PRIVÉ bannières OK, plaque/modèle corrects."
+  - task: "Adaptateurs plateforme (storage web/native, alert web/native)"
+    implemented: true
+    working: true
+    file: "frontend/src/utils/storage.ts, src/utils/alert.ts"
     stuck_count: 0
     priority: "medium"
     needs_retesting: false
     status_history:
-      - working: "NA"
+      - working: true
         agent: "main"
-        comment: "Nécessite un development build EAS (téléphone réel). Sur web: indisponible par design."
-
-  - task: "Scan BLE arrière-plan + auto-détection + notif locale (bonus)"
-    implemented: true
-    working: "NA"
-    file: "frontend/src/services/backgroundScan.js"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: "Implémenté: toggle auto-détection persisté, notif locale au seuil de confiance, restoreState iOS. Testable uniquement en build natif EAS. Android background persistant nécessite un Foreground Service (non inclus, documenté)."
-
-  - task: "Enregistrement jeton push Expo (POST /livre/driver/push-token)"
-    implemented: true
-    working: "NA"
-    file: "frontend/src/services/push.js, frontend/src/hooks/useDriverConsole.js"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: "Câblé au montage de la console (natif). Endpoint confirmé par l'utilisateur. Non testable sur web."
+        comment: "expo-secure-store (natif) / localStorage (web) ; Alert.alert (natif) / window.confirm (web). Nécessaire pour le preview web ; natif inchangé."
 
 metadata:
   created_by: "main_agent"
-  version: "1.0"
-  test_sequence: 1
-  run_ui: false
+  version: "2.0"
+  test_sequence: 2
+  run_ui: true
 
 test_plan:
-  current_focus:
-    - "Console chauffeur avec identifiants réels (en attente de credentials)"
-    - "Scan BLE réel via build EAS natif"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -102,7 +94,5 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      MVP livré et vérifié: login JWT via API réelle (proxy web pour contourner CORS,
-      natif appelle l'API directement). Console chauffeur implémentée mais flux authentifié
-      non testé (aucun identifiant chauffeur fourni). BLE/push nécessitent un build EAS natif.
-      Aucune donnée fictive: états N/A / erreur / indisponible clairs partout.
+      Qualité app: typecheck PASS, lint 0 erreurs (2 warnings pré-existants), jest 10/10, expo-doctor 17/17.
+      E2E web 10/10. Backend régression driver/BLE PASS. Reste PARTIEL = 2e tenant + seed fuel/fines + BLE terrain + push device.

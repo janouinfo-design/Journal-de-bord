@@ -1,26 +1,49 @@
 {
   "cli": {
-    "version": ">= 5.0.0"
+    "version": ">= 5.9.1",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "android": {
-        "buildType": "apk"
+      "channel": "development",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
       }
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
+      "ios": {
+        "simulator": false
+      },
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
       }
     },
     "production": {
-      "autoIncrement": true
+      "channel": "production",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://documents-web.logitrak.ch"
+      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "ops@logitrak.ch",
+        "ascAppId": "0000000000",
+        "appleTeamId": "AAAAAAAAAA"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./play-store-service-account.json",
+        "track": "internal"
+      }
+    }
   }
 }

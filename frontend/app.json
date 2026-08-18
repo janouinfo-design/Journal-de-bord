@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "Logitrak Driver",
+    "slug": "logitrak-driver-app",
+    "scheme": "logitrakdriver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "web": {
+      "bundler": "metro"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ch.logitrak.driver",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Logitrak utilise le Bluetooth pour identifier automatiquement le véhicule conduit.",
+        "NSBluetoothPeripheralUsageDescription": "Détection des tags BLE installés à bord du véhicule.",
+        "NSLocationWhenInUseUsageDescription": "Requis par iOS pour le scan BLE en arrière-plan.",
+        "UIBackgroundModes": [
+          "bluetooth-central",
+          "fetch",
+          "remote-notification",
+          "processing"
+        ]
+      }
+    },
+    "android": {
+      "package": "ch.logitrak.driver",
+      "versionCode": 1,
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "WAKE_LOCK",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "color": "#3b82f6"
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "Logitrak utilise le Bluetooth pour identifier automatiquement le véhicule conduit."
+        }
+      ]
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "owner": "logitrak",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}

@@ -6,9 +6,6 @@ const config = getDefaultConfig(__dirname);
 // Environnement conteneurisé : limites inotify basses (ENOSPC).
 // On restreint les dossiers surveillés pour éviter la surcharge du watcher.
 config.watchFolders = [path.resolve(__dirname)];
-
-// Exclure les dossiers volumineux et inutiles au bundle web (natif Android/iOS
-// de react-native contenant des milliers de fichiers de ressources).
 config.resolver = config.resolver || {};
 config.resolver.blockList = [
   /node_modules\/react-native\/ReactAndroid\/.*/,
