@@ -46,6 +46,16 @@
     "plugins": [
       "expo-secure-store",
       [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34
+          }
+        }
+      ],
+      [
         "expo-notifications",
         {
           "color": "#3b82f6"
