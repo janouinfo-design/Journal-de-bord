@@ -41,6 +41,13 @@ function FuelIndexRedirect() {
     ? "/livre/carburant/mes-transactions" : "/livre/carburant/apercu"} replace />;
 }
 
+function AdministrationIndex() {
+  const { user } = useAuth();
+  const isAdmin = ["admin", "superadmin"].includes(user?.role);
+  return <Navigate to={isAdmin
+    ? "/livre/administration/utilisateurs" : "/livre/administration/chauffeurs"} replace />;
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -104,14 +111,16 @@ function App() {
                 <ProtectedRoute roles={["driver", "admin", "manager"]}><FuelMyTransactionsPage /></ProtectedRoute>} />
             </Route>
             <Route path="administration" element={
-              <ProtectedRoute roles={["admin"]}>
+              <ProtectedRoute roles={["admin", "manager"]}>
                 <AdministrationLayout />
               </ProtectedRoute>
             }>
-              <Route index element={<Navigate to="/livre/administration/utilisateurs" replace />} />
-              <Route path="utilisateurs" element={<TeamUsersPage />} />
+              <Route index element={<AdministrationIndex />} />
+              <Route path="utilisateurs" element={
+                <ProtectedRoute roles={["admin"]}><TeamUsersPage /></ProtectedRoute>} />
               <Route path="chauffeurs" element={<TeamDriversPage />} />
-              <Route path="apercus" element={<TeamImpersonationPage />} />
+              <Route path="apercus" element={
+                <ProtectedRoute roles={["admin"]}><TeamImpersonationPage /></ProtectedRoute>} />
             </Route>
             <Route path="settings" element={
               <ProtectedRoute roles={["admin", "manager"]}>

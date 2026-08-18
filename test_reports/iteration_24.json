@@ -1,0 +1,48 @@
+{
+  "summary": "PHASE 3 — Fiche Admin Chauffeur + KPI Identification + « Je m'arrête ». Suite pytest dédiée /app/backend/tests/test_phase3_admin_driver.py : 27/27 PASS (14.4 s). Frontend testé via Playwright (Chrome desktop 1920x1080) : login admin OK, page /livre/administration/chauffeurs OK avec search/filter/create + drawer DriverSheet complet (6 sections avec data-testid vérifiés), page /livre/identification affiche 8 cartes KPI + strip PRO/PRIVÉ séparé + filtre source, console /driver affiche driver-stop-btn dès qu'une session existe et revient à 'Aucun véhicule détecté' après clic (notification 'Session terminée — GE 123456'). Non-régression : test_phase_a_regression.py, test_iteration8_ble.py, test_notifications.py, test_iteration23_regression.py = 100 PASS / 1 FAIL flaky (voir minor). Tous les artefacts test nettoyés : aucun driver.ble_id résiduel, aucune session ouverte parasite, mot de passe chauffeur@logitrak.ch intact.\n\nVERDICT par test :\n- A Fiche chauffeur (overview admin+manager+404) : PASS\n- B Désactivation driver + user : PASS\n- C Association / retrait tag BLE + normalisation : PASS\n- D Tag déjà utilisé (casse+séparateur variés) → 409 : PASS\n- E Session actuelle (identification_source=APP, status=confirmed, vehicle_plate) : PASS\n- F Historique sessions filtré au driver_id : PASS\n- G/H/I KPI sources cohérents avec Mongo (identified_app/ble/app_ble/manual_set) : PASS\n- J KPIs cliquables + Select source + filtres driver/vehicle : PASS (backend + smoke frontend)\n- K Conflit + résolution + audit conflict_resolved : PASS\n- L Non identifiés = trips.unidentified : PASS\n- M « Je m'arrête » avec session (status=closed, end_source=APP, end_reason=app_stop, audit driver_session_closed) : PASS\n- N Idempotent sans session (200 stopped=false, jamais 500, double appel idempotent) : PASS\n- O Stop chauffeur A n'affecte pas B ; admin sans driver → 400 : PASS\n- P Multi-tenant (drivers/overview/patch/reset-pw → 404 pour tenant B) : PASS\n- Q Reset password (temp one-shot, pas de fuite audit, must_change_password=true, manager 403) : PASS\n- R Création first_name+last_name→name calculé, création vide → 400 : PASS\n- S Responsive : NON RE-TESTÉ (déjà validé Phase 1/2, DOM+testid identiques)\n- T Non-régression pytest : 100 PASS / 1 FAIL flaky (test_iteration23::test_07 attend APP mais reçoit APP+BLE quand des ble_detections simulées récentes traînent — pré-existant, non lié à Phase 3, résolu en supprimant les détections test)\n- BLE terrain physique : NON TESTÉ (attendu, simulation uniquement).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "tests/test_iteration23_regression.py::test_07_driver_claim_app", "issue": "Flaky test-ordering : quand test_iteration8_ble ou tout test qui laisse une détection BLE sur Jean dans la fenêtre RECENT_WINDOW précède, le claim APP devient APP+BLE. Le test s'attend à 'APP' strict. Recommandation : soit le test purge les ble_detections de Jean avant claim, soit accepte 'APP' ou 'APP+BLE'. Non bloquant."},
+      {"endpoint": "POST /api/livre/team/drivers", "issue": "Toujours pas d'unicité (tenant_id, internal_number) ni sur email (déjà signalé iteration_23). Optionnel."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "console_warnings": [
+      "Récurrent : 'Encountered two children with the same key' (déjà signalé) — non bloquant.",
+      "Récurrent : DialogContent requires a DialogTitle for accessibility — accessibilité à améliorer, non bloquant.",
+      "Récurrent : hydration warning '<div> cannot be a descendant of <p>' dans un Presence/FocusScope — probablement dans un composant Radix DialogContent. Non bloquant."
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_admin_driver.py",
+    "/app/test_reports/pytest/iteration24.xml"
+  ],
+  "action_items": [
+    "Optionnel : rendre test_iteration23::test_07_driver_claim_app robuste au bruit de détections BLE simulées (purge locale ou tolérance APP/APP+BLE).",
+    "Optionnel : améliorer accessibilité Radix DialogContent (ajouter DialogTitle + Description) pour supprimer les warnings récurrents.",
+    "Optionnel : investiguer le warning React hydration '<div> ne peut pas être descendant de <p>' (probablement un <p> englobant un composant Radix).",
+    "SUIVI utilisateur (hors backend) : preuve terrain Teltonika→Navixy toujours en attente — script scripts/ble_proof.py disponible."
+  ],
+  "critical_code_review_comments": [
+    "team.py overview : bonne séparation identification.app / identification.ble avec field_validation_note 'Validation terrain BLE en attente' — pas de fausse promesse. sessions limitées à 20, events à 15 avec union {driver_id, from_driver_id, to_driver_id, details.driver, user_email}. Sûr et lisible.",
+    "team.py reset-password : mot de passe temp généré via secrets.token_urlsafe(9), stocké seulement en hash bcrypt, log_audit ne contient que {driver, email} — pas de fuite du temp. Bien.",
+    "identification.py /driver/stop : idempotent, appelle stop_driving qui ne crée jamais de nouvelle session — safe.",
+    "ble_engine.stop_driving : audit_log inclut end_source='APP' + end_reason='app_stop' + session_id + vehicle_id, broadcast WebSocket best-effort.",
+    "team.py création : first_name+last_name→name calculé côté serveur, refusé sans nom (400) — cohérent avec Phase 3.",
+    "identification_source APP+BLE vs APP : côté claim, dépend de la présence d'une ble_detection RECENT (10 min). Cela peut mener à des cas où l'utilisateur clique 'Je conduis' mais est marqué APP+BLE juste parce qu'une détection récente traîne — SEMANTIQUEMENT correct mais rend certains tests unitaires fragiles (cf. test_07)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3_admin_driver.py"
+  ],
+  "success_rate": {"backend": "100% (27/27 test_phase3_admin_driver + suites régression 100/101, la 101ᵉ étant une flakiness pré-existante non-Phase 3)", "frontend": "100% (drawer + KPI + stop button vérifiés)"},
+  "seed_data_creation": "Créés et intégralement supprimés durant la suite : ~10 chauffeurs test (Ivan Petrov*), leurs comptes utilisateurs, quelques tags BLE test (AA:BB:CC:DD:EE:51/52), sessions de claim+conflit sur véhicules démo (toutes closes). Aucun ble_id ne subsiste sur les chauffeurs (contrôle Mongo direct = 0). Mot de passe chauffeur@logitrak.ch intact (chauffeur123, login 200 vérifié).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@logitrak.ch/admin123, chauffeur@logitrak.ch/chauffeur123 (intact), paul.test@client.ch/paul1234, admin-b@test.ch/testb123 — tous fonctionnels.",
+  "context_for_next_testing_agent": "Phase 3 validée backend + frontend. Suite pytest de non-régression Phase 3 : /app/backend/tests/test_phase3_admin_driver.py (27 tests, ~15 s). Auto-cleanup ble_id sur Jean/Paul + fermeture sessions test + purge users test. À NOTER si on relance la régression complète : le test test_iteration23::test_07 (identification_source == 'APP' strict) est flaky lorsqu'il tourne APRÈS un test qui laisse une ble_detection récente sur Jean (par ex. test_iteration8_ble ou le pipeline complet). Isoler le test ou purger d.ble_detections avant. BLE terrain physique = toujours en attente de preuve utilisateur (script ble_proof.py).",
+  "rca_of_the_issue": "Aucun bug bloquant Phase 3. Le seul échec (test_iteration23::test_07) est une flakiness d'ordre d'exécution : ble_engine.claim_driving marque la session 'APP+BLE' au lieu d'APP dès qu'une ble_detection récente (< RECENT_WINDOW, 10 min par défaut) existe pour ce driver+vehicle. Comportement fonctionnellement CORRECT (§18-19), mais l'assertion stricte du test ne l'anticipe pas. Correctif proposé : rendre le test tolérant ou purger db.ble_detections du driver Jean avant test_07."
+}

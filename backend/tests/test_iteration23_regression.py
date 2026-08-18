@@ -397,6 +397,8 @@ def test_07_driver_claim_app(driver_session, tenant_vehicles, mongo):
         {"driver_id": JEAN_DRIVER_ID, "active_driver": True},
         {"$set": {"active_driver": False, "status": "closed",
                   "ended_at": datetime.now(timezone.utc).isoformat()}})
+    # purge les détections BLE récentes de Jean (sinon le claim devient APP+BLE — comportement correct §18-19)
+    mongo.ble_detections.delete_many({"driver_id": JEAN_DRIVER_ID})
     r = driver_session.post(f"{BASE_URL}/api/livre/driver/claim",
                             json={"vehicle_id": v["id"]}, timeout=15)
     assert r.status_code == 200, r.text

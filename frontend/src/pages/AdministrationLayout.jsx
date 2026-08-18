@@ -1,8 +1,16 @@
 import { Outlet } from "react-router-dom";
 import SubTabs from "@/components/layout/SubTabs";
+import { useAuth } from "@/contexts/AuthContext";
 import { Users, IdCard, Eye } from "lucide-react";
 
 export default function AdministrationLayout() {
+  const { user } = useAuth();
+  const isAdmin = ["admin", "superadmin"].includes(user?.role);
+  const tabs = [
+    ...(isAdmin ? [{ to: "/livre/administration/utilisateurs", label: "Utilisateurs", icon: Users, testId: "subtab-team-users" }] : []),
+    { to: "/livre/administration/chauffeurs", label: "Chauffeurs", icon: IdCard, testId: "subtab-team-drivers" },
+    ...(isAdmin ? [{ to: "/livre/administration/apercus", label: "Aperçus", icon: Eye, testId: "subtab-team-impersonation" }] : []),
+  ];
   return (
     <div data-testid="administration-page" className="space-y-5">
       <div>
@@ -13,11 +21,7 @@ export default function AdministrationLayout() {
           (avec ou sans compte).
         </p>
       </div>
-      <SubTabs tabs={[
-        { to: "/livre/administration/utilisateurs", label: "Utilisateurs", icon: Users, testId: "subtab-team-users" },
-        { to: "/livre/administration/chauffeurs", label: "Chauffeurs", icon: IdCard, testId: "subtab-team-drivers" },
-        { to: "/livre/administration/apercus", label: "Aperçus", icon: Eye, testId: "subtab-team-impersonation" },
-      ]} />
+      <SubTabs tabs={tabs} />
       <Outlet />
     </div>
   );

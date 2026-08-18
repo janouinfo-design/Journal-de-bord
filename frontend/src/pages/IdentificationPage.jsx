@@ -20,6 +20,7 @@ import { useRealtime } from "@/hooks/useRealtime";
 import BleTagsManager from "@/components/livre/BleTagsManager";
 import BleDebugDialog from "@/components/livre/BleDebugDialog";
 import SubTabs from "@/components/layout/SubTabs";
+import { SourceBadge } from "@/components/livre/SourceBadge";
 
 const STATUS_BADGE = {
   open:       { color: "bg-blue-50 text-blue-700 border-blue-200",         label: "Ouverte" },
@@ -57,7 +58,10 @@ export default function IdentificationPage() {
   const [drivers, setDrivers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ status: "all", start: "", end: "" });
+  const [filters, setFilters] = useState({
+    status: "all", source: "all", driver_id: "all", vehicle_id: "all", start: "", end: "",
+  });
+  const [occupantsOf, setOccupantsOf] = useState(null);
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ driver_id: "", vehicle_id: "", status: "" });
   const [resolving, setResolving] = useState(null);    // session_id in conflict
@@ -70,6 +74,9 @@ export default function IdentificationPage() {
     try {
       const params = {};
       if (filters.status && filters.status !== "all") params.status = filters.status;
+      if (filters.source && filters.source !== "all") params.source = filters.source;
+      if (filters.driver_id && filters.driver_id !== "all") params.driver_id = filters.driver_id;
+      if (filters.vehicle_id && filters.vehicle_id !== "all") params.vehicle_id = filters.vehicle_id;
       if (filters.start) params.start = new Date(filters.start).toISOString();
       if (filters.end) params.end = new Date(filters.end).toISOString();
       const [s, k, d, v] = await Promise.all([
@@ -81,7 +88,8 @@ export default function IdentificationPage() {
       setRows(s); setKpis(k); setDrivers(d); setVehicles(v);
     } finally { setLoading(false); }
   }
-  useEffect(() => { loadAll(); /* eslint-disable-next-line */ }, [filters.status, filters.start, filters.end]);
+  useEffect(() => { loadAll(); /* eslint-disable-next-line */ },
+    [filters.status, filters.source, filters.driver_id, filters.vehicle_id, filters.start, filters.end]);
 
   // Realtime channel — push toasts and trigger silent refresh
   const { connected } = useRealtime((evt) => {
@@ -268,30 +276,53 @@ export default function IdentificationPage() {
         ]}
       />
 
-      {/* KPI cards */}
+      {/* KPI cards — identité chauffeur (APP/BLE/MANUEL), cliquables ; période = filtres dates */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3" data-testid="ident-kpis">
         {[
-          { k: "total_sessions",      label: "Sessions",           cls: "text-slate-700" },
-          { k: "auto_identified",     label: "Auto identifiés",    cls: "text-emerald-600", icon: CheckCircle2 },
-          { k: "pending_validation",  label: "À valider",          cls: "text-amber-600",   icon: AlertTriangle },
-          { k: "conflicts",           label: "Conflits",           cls: "text-rose-600",    icon: XCircle },
-          { k: "forced_pro",          label: "Forcés PRO (app)",   cls: "text-blue-600" },
-          { k: "forced_perso",        label: "Forcés PRIVÉ (app)", cls: "text-slate-700" },
-          { k: "success_rate",        label: "Taux de réussite",   cls: "text-emerald-600", suffix: "%" },
-          { k: "avg_detections_per_session", label: "Détections/sess.", cls: "text-slate-600" },
+          { k: "total_sessions",     label: "Sessions",         cls: "text-slate-700",
+            filter: { status: "all", source: "all" }, title: "Sessions chauffeur↔véhicule de la période — clic : réinitialiser les filtres" },
+          { k: "identified_app",     label: "Identifiés APP",   cls: "text-blue-600",   icon: Smartphone,
+            filter: { source: "APP" }, title: "Identité issue de l'application (« Je conduis »)" },
+          { k: "identified_ble",     label: "Identifiés BLE",   cls: "text-cyan-600",   icon: Bluetooth,
+            filter: { source: "BLE" }, title: "Identité issue du BLE uniquement — validation terrain BLE en attente" },
+          { k: "identified_app_ble", label: "APP + BLE",        cls: "text-emerald-600", icon: CheckCircle2,
+            filter: { source: "APP+BLE" }, title: "Les deux sources sont cohérentes" },
+          { k: "pending_validation", label: "À valider",        cls: "text-amber-600",  icon: AlertTriangle,
+            filter: { status: "pending" }, title: "Sessions sans attribution suffisamment certaine" },
+          { k: "conflicts",          label: "Conflits",         cls: "text-rose-600",   icon: XCircle,
+            filter: { status: "conflict" }, title: "Contradiction entre plusieurs identités/sources" },
+          { k: "unidentified",       label: "Non identifiés",   cls: "text-slate-500",
+            getter: (kk) => kk?.trips?.unidentified, title: "Trajets de la période sans chauffeur identifié (conservés, jamais supprimés)" },
+          { k: "success_rate",       label: "Taux d'identification", cls: "text-emerald-600", suffix: "%",
+            title: "Formule : (Sessions − À valider − Conflits) ÷ Sessions de la période" },
         ].map(c => {
           const Icon = c.icon;
+          const value = kpis ? (c.getter ? (c.getter(kpis) ?? 0) : (kpis[c.k] ?? 0)) : "—";
           return (
-            <Card key={c.k} className="bg-white p-3 border-slate-200 shadow-sm rounded-md" data-testid={`ident-kpi-${c.k}`}>
+            <Card key={c.k} title={c.title}
+              onClick={c.filter ? () => setFilters({ ...filters, status: "all", source: "all", ...c.filter }) : undefined}
+              className={`bg-white p-3 border-slate-200 shadow-sm rounded-md transition-colors ${c.filter ? "cursor-pointer hover:border-[#2196F3]/50 hover:bg-blue-50/30" : ""}`}
+              data-testid={`ident-kpi-${c.k}`}>
               <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 {Icon && <Icon className="w-3 h-3" />} {c.label}
               </p>
               <p className={`text-xl font-semibold mt-0.5 ${c.cls}`}>
-                {kpis ? (kpis[c.k] ?? 0) : "—"}{c.suffix || ""}
+                {value}{c.suffix || ""}
               </p>
             </Card>
           );
         })}
+      </div>
+
+      {/* Mode de trajet PRO/PRIVÉ — zone dédiée, DISTINCT de l'identité chauffeur */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 px-1"
+           data-testid="ident-trip-mode-strip">
+        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+          Mode de trajet (PRO/PRIVÉ — distinct de l'identité chauffeur) :
+        </span>
+        <span data-testid="ident-forced-pro">Forcés PRO (app) : <strong className="text-blue-600">{kpis?.trips?.forced_pro ?? 0}</strong></span>
+        <span data-testid="ident-forced-perso">Forcés PRIVÉ (app) : <strong className="text-slate-700">{kpis?.trips?.forced_perso ?? 0}</strong></span>
+        <span data-testid="ident-detections-count">Détections BLE : <strong className="text-slate-600">{kpis?.detections ?? 0}</strong></span>
       </div>
 
       {/* Filters */}
@@ -305,7 +336,7 @@ export default function IdentificationPage() {
             Rafraîchir
           </Button>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Statut</p>
             <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
@@ -313,12 +344,45 @@ export default function IdentificationPage() {
               <SelectContent>
                 <SelectItem value="all">Tous</SelectItem>
                 <SelectItem value="automatic">Automatique</SelectItem>
-                <SelectItem value="pending">En attente</SelectItem>
-                <SelectItem value="manual">Manuel</SelectItem>
-                <SelectItem value="conflict">Conflit</SelectItem>
                 <SelectItem value="confirmed">Confirmé</SelectItem>
+                <SelectItem value="pending">À valider</SelectItem>
+                <SelectItem value="conflict">Conflit</SelectItem>
+                <SelectItem value="manual">Manuel</SelectItem>
                 <SelectItem value="closed">Clôturée</SelectItem>
                 <SelectItem value="cancelled">Annulée</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Source</p>
+            <Select value={filters.source} onValueChange={(v) => setFilters({ ...filters, source: v })}>
+              <SelectTrigger data-testid="ident-filter-source"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Toutes</SelectItem>
+                <SelectItem value="APP">APP</SelectItem>
+                <SelectItem value="BLE">BLE</SelectItem>
+                <SelectItem value="APP+BLE">APP + BLE</SelectItem>
+                <SelectItem value="MANUEL">MANUEL</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Chauffeur</p>
+            <Select value={filters.driver_id} onValueChange={(v) => setFilters({ ...filters, driver_id: v })}>
+              <SelectTrigger data-testid="ident-filter-driver"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous</SelectItem>
+                {drivers.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Véhicule</p>
+            <Select value={filters.vehicle_id} onValueChange={(v) => setFilters({ ...filters, vehicle_id: v })}>
+              <SelectTrigger data-testid="ident-filter-vehicle"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous</SelectItem>
+                {vehicles.map(v => <SelectItem key={v.id} value={v.id}>{v.plate}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -370,16 +434,31 @@ export default function IdentificationPage() {
                       {fmtDate(r.started_at)}<br/>
                       <span className="text-slate-400">→ {fmtDate(r.ended_at || r.last_seen)}</span>
                     </td>
-                    <td className="py-3 px-4 text-sm text-slate-800 font-medium">{r.driver_name || "—"}</td>
+                    <td className="py-3 px-4 text-sm text-slate-800 font-medium">
+                      {r.driver_name || "—"}
+                      {r.occupants_count > 0 && (
+                        <button type="button"
+                          onClick={() => setOccupantsOf(r)}
+                          className="block text-[10px] text-amber-600 hover:underline mt-0.5"
+                          title="Autres personnes détectées (présence BLE, non confirmées comme conducteurs)"
+                          data-testid={`ident-occupants-${r.id}`}>
+                          +{r.occupants_count} détecté{r.occupants_count > 1 ? "s" : ""}
+                        </button>
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-sm">
                       <p className="font-mono text-xs">{r.vehicle_plate || "—"}</p>
                       <p className="text-[10px] text-slate-400">{r.vehicle_model}</p>
                     </td>
-                    <td className="py-3 px-4"><Confidence value={r.confidence} /></td>
                     <td className="py-3 px-4">
-                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">
-                        {r.source}
-                      </span>
+                      {r.confidence == null
+                        ? (r.status === "confirmed"
+                          ? <span className="text-xs font-medium text-emerald-700">Confirmé</span>
+                          : <span className="text-xs text-slate-400">—</span>)
+                        : <Confidence value={r.confidence} />}
+                    </td>
+                    <td className="py-3 px-4">
+                      <SourceBadge source={r.identification_source} />
                     </td>
                     <td className="py-3 px-4">
                       {r.mobile_override ? (
@@ -537,6 +616,40 @@ export default function IdentificationPage() {
               className="bg-[#2196F3] hover:bg-[#1E88E5]" data-testid="ident-resolve-save">
               Valider le choix
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Autres personnes détectées */}
+      <Dialog open={!!occupantsOf} onOpenChange={(o) => !o && setOccupantsOf(null)}>
+        <DialogContent data-testid="ident-occupants-dialog" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold">Personnes détectées à bord</DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Présence BLE détectée — ces personnes ne sont PAS confirmées comme conducteurs.
+            </DialogDescription>
+          </DialogHeader>
+          {occupantsOf && (
+            <div className="space-y-2 py-1">
+              <p className="text-xs text-slate-500">
+                Véhicule : <span className="font-mono text-slate-700">{occupantsOf.vehicle_plate || "—"}</span>
+              </p>
+              <div className="rounded-md border border-slate-200 p-3">
+                <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Chauffeur de la session</p>
+                <p className="text-sm font-semibold text-slate-800">{occupantsOf.driver_name || "—"}</p>
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3">
+                <p className="text-[10px] uppercase tracking-wider text-amber-600 mb-1">Autres personnes détectées</p>
+                {(occupantsOf.occupants || []).map((o) => (
+                  <p key={o.driver_id} className="text-sm text-slate-700" data-testid={`ident-occupant-${o.driver_id}`}>
+                    {o.driver_name || o.driver_id}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOccupantsOf(null)}>Fermer</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

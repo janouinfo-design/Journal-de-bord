@@ -641,12 +641,49 @@ async def get_current_session(db, driver_id: str) -> Optional[dict]:
                                 "model": vehicle.get("model")}}
 
 
+# ---------- « Je m'arrête » — clôture volontaire côté chauffeur (§21-27) ----------
+async def stop_driving(db, driver_id: str, actor: str) -> dict:
+    """Clôture la session active du chauffeur. Idempotent : sans session active,
+    réponse propre (jamais de 500, jamais de nouvelle session créée)."""
+    ts = now_iso()
+    sess = await db.driver_sessions.find_one(
+        {"driver_id": driver_id, "status": {"$in": OPEN_STATUSES},
+         "$or": [{"ended_at": None}, {"ended_at": {"$exists": False}}]},
+        {"_id": 0}, sort=[("started_at", -1)])
+    if not sess:
+        return {"stopped": False, "message": "Aucune session active"}
+    await db.driver_sessions.update_one(
+        {"id": sess["id"]},
+        {"$set": {"status": "closed", "ended_at": ts, "active_driver": False,
+                  "end_reason": "app_stop", "end_source": "APP"}})
+    vehicle = await db.vehicles.find_one({"id": sess["vehicle_id"]}, {"_id": 0, "plate": 1})
+    await db.audit_log.insert_one({
+        "ts": ts, "scope": "driver_identification", "action": "driver_session_closed",
+        "actor": actor, "driver_id": driver_id, "vehicle_id": sess["vehicle_id"],
+        "session_id": sess["id"], "end_source": "APP", "end_reason": "app_stop"})
+    try:
+        from app.realtime import get_broadcaster
+        await get_broadcaster().publish("session_updated", {
+            "session_id": sess["id"], "driver_id": driver_id,
+            "vehicle_id": sess["vehicle_id"], "status": "closed"})
+    except Exception:
+        pass
+    return {"stopped": True, "vehicle_plate": (vehicle or {}).get("plate"),
+            "session": {**sess, "status": "closed", "ended_at": ts, "active_driver": False}}
+
+
 # ---------- Admin: list / amend sessions ----------
 async def list_sessions(db, limit: int = 200, status: Optional[str] = None,
-                        start: Optional[str] = None, end: Optional[str] = None) -> list[dict]:
+                        start: Optional[str] = None, end: Optional[str] = None,
+                        source: Optional[str] = None, driver_id: Optional[str] = None,
+                        vehicle_id: Optional[str] = None) -> list[dict]:
     query: dict = {"tenant_id": "default"}
     if status and status != "all":
         query["status"] = status
+    if driver_id:
+        query["driver_id"] = driver_id
+    if vehicle_id:
+        query["vehicle_id"] = vehicle_id
     if start:
         query["started_at"] = {"$gte": start}
     if end:
@@ -677,6 +714,8 @@ async def list_sessions(db, limit: int = 200, status: Optional[str] = None,
         r["occupants"] = [{"driver_id": p["driver_id"], "driver_name": p.get("driver_name")}
                           for p in peers]
         r["occupants_count"] = len(peers)
+    if source and source != "all":
+        out = [r for r in out if (r.get("identification_source") or "") == source]
     return out
 
 
@@ -697,6 +736,9 @@ async def amend_session(db, session_id: str, patch: dict, actor: str) -> dict:
         update["status"] = patch["status"]
         if patch["status"] in ("closed", "cancelled"):
             update["active_driver"] = False
+            if not sess.get("ended_at"):
+                update["ended_at"] = now_iso()
+            update["end_reason"] = sess.get("end_reason") or "admin"
     if "mobile_override" in patch and patch["mobile_override"] in ("professional", "personal", None):
         update["mobile_override"] = patch["mobile_override"]
     if not update:
@@ -760,6 +802,10 @@ async def dashboard_kpis(db, start: Optional[str] = None, end: Optional[str] = N
     ).to_list(1000)
     avg_det = sum(r.get("detection_count", 0) for r in closed_rows) / max(len(closed_rows), 1)
 
+    # Taux d'identification (formule documentée) :
+    #   sessions identifiées = total − « à valider » (pending) − conflits
+    #   success_rate = identifiées ÷ total des sessions de la période
+    # Seules les vraies sessions chauffeur↔véhicule comptent (pas les trajets).
     identified = total - pending - conflict
     return {
         "total_sessions": total,
@@ -946,7 +992,16 @@ async def sweep_sessions(db) -> dict:
          "last_seen": {"$lte": stale_cutoff}},
         [{"$set": {"status": "closed", "active_driver": False,
                    "ended_at": {"$ifNull": ["$ended_at", "$last_seen"]}}}])
-    return {"ending_closed": r1.modified_count, "stale_closed": r2.modified_count}
+    # sessions confirmées/manuelles sans aucune activité depuis 24 h → clôture timeout
+    old_cutoff = (now - timedelta(hours=24)).isoformat()
+    r3 = await db.driver_sessions.update_many(
+        {"status": {"$in": ["confirmed", "manual"]},
+         "$or": [{"ended_at": None}, {"ended_at": {"$exists": False}}],
+         "last_seen": {"$lte": old_cutoff}},
+        [{"$set": {"status": "closed", "active_driver": False, "end_reason": "timeout",
+                   "ended_at": {"$ifNull": ["$ended_at", "$last_seen"]}}}])
+    return {"ending_closed": r1.modified_count, "stale_closed": r2.modified_count,
+            "timeout_closed": r3.modified_count}
 
 
 # ---------- Simulation (for testing without physical hardware) ----------

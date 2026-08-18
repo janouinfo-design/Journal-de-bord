@@ -91,6 +91,22 @@ export default function DriverConsolePage() {
     } finally { setTestingTagId(null); }
   }
 
+  async function stopDriving() {
+    setSending(true);
+    try {
+      const { data } = await api.post("/livre/driver/stop");
+      if (data.stopped) {
+        toast.success(`Session terminée${data.vehicle_plate ? ` — ${data.vehicle_plate}` : ""}`);
+        setSession(null);
+      } else {
+        toast.info(data.message || "Aucune session active");
+      }
+      await loadSession();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Échec");
+    } finally { setSending(false); }
+  }
+
   async function setMode(mode) {
     setSending(true);
     try {
@@ -211,6 +227,17 @@ export default function DriverConsolePage() {
             {isPerso && <span className="absolute top-2 right-2 text-[9px] bg-slate-900 text-white px-1.5 py-0.5 rounded font-bold">ACTIF</span>}
           </button>
         </div>
+
+        {session && (
+          <Button
+            data-testid="driver-stop-btn"
+            disabled={sending}
+            onClick={stopDriving}
+            className="w-full h-12 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-2xl"
+          >
+            <Square className="w-4 h-4 mr-2" /> Je m&apos;arrête
+          </Button>
+        )}
 
         {session?.mobile_override && (
           <Card className="bg-amber-500/10 border-amber-500/30 text-amber-200 p-3 text-xs flex gap-2 items-start"

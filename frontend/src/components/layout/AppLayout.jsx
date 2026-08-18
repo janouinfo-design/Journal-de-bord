@@ -44,7 +44,7 @@ const TABS = [
   { to: "/livre/identification",  label: "Identification",  icon: Bluetooth,       testId: "nav-identification", roles: ["admin", "manager"] },
   { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console", roles: ["admin", "manager", "driver"] },
   { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager", "lecture_seule"] },
-  { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration", roles: ["admin"] },
+  { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration", roles: ["admin", "manager"] },
   { to: "/livre/settings",        label: "Paramètres",      icon: Settings,        testId: TEST_IDS.layout.navSettings, roles: ["admin", "manager"] },
   { to: "/admin/clients",         label: "Clients",         icon: Building2,       testId: "nav-admin-tenants", roles: ["superadmin"] },
   { to: "/admin/utilisateurs",    label: "Utilisateurs",    icon: Users,           testId: "nav-admin-users",   roles: ["superadmin"] },

@@ -109,6 +109,18 @@ async def driver_claim(payload: ClaimIn, user=Depends(get_current_user)):
         raise HTTPException(404, str(e))
 
 
+@router.post("/driver/stop")
+async def driver_stop(user=Depends(get_current_user)):
+    """« Je m'arrête » — clôture volontaire de la session active du chauffeur.
+    Idempotent : sans session active → réponse propre (pas d'erreur 500).
+    Un chauffeur ne peut clôturer que SA session, dans SON tenant."""
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    return await ble_engine.stop_driving(db, driver_id, actor=user.get("email", "?"))
+
+
 @router.get("/driver/my-vehicle")
 async def driver_my_vehicle(user=Depends(get_current_user)):
     """Véhicule actuel (session en cours) ou dernier véhicule utilisé.

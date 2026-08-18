@@ -180,9 +180,13 @@ async def ble_simulate(payload: dict, user=Depends(require_roles("admin"))):
 async def ble_sessions(
     limit: int = 200, status: Optional[str] = None,
     start: Optional[str] = None, end: Optional[str] = None,
+    source: Optional[str] = None, driver_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
     user=Depends(require_roles("admin", "manager")),
 ):
-    return await ble_engine.list_sessions(get_db(), limit=limit, status=status, start=start, end=end)
+    return await ble_engine.list_sessions(
+        get_db(), limit=limit, status=status, start=start, end=end,
+        source=source, driver_id=driver_id, vehicle_id=vehicle_id)
 
 
 @router.put("/ble/sessions/{session_id}")

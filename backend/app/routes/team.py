@@ -43,6 +43,7 @@ class TeamUserUpdate(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
     password: Optional[str] = None
+    active: Optional[bool] = None
 
 
 @router.get("/users")
@@ -101,6 +102,10 @@ async def team_update_user(user_id: str, payload: TeamUserUpdate,
         updates["role"] = payload.role
     if payload.password:
         updates["password_hash"] = hash_password(payload.password)
+    if payload.active is not None:
+        if target["id"] == current["id"] and payload.active is False:
+            raise HTTPException(400, "Vous ne pouvez pas désactiver votre propre compte")
+        updates["active"] = payload.active
     if not updates:
         raise HTTPException(400, "Aucun champ à mettre à jour")
     await raw.users.update_one({"id": user_id, "tenant_id": tid}, {"$set": updates})
@@ -222,7 +227,9 @@ async def list_impersonation_sessions(tenant_id: Optional[str] = None,
 
 # ====================== CHAUFFEURS (personnes qui conduisent) ======================
 class DriverIn(BaseModel):
-    name: str
+    name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     internal_number: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -237,6 +244,8 @@ class DriverIn(BaseModel):
 
 class DriverUpdate(BaseModel):
     name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     internal_number: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -249,8 +258,9 @@ class DriverUpdate(BaseModel):
     end_date: Optional[str] = None
 
 
-DRIVER_FIELDS = ("name", "internal_number", "phone", "email", "active",
-                 "ibutton_id", "rfid_id", "ble_id", "group", "start_date", "end_date")
+DRIVER_FIELDS = ("name", "first_name", "last_name", "internal_number", "phone",
+                 "email", "active", "ibutton_id", "rfid_id", "ble_id", "group",
+                 "start_date", "end_date")
 
 
 @router.get("/drivers")
@@ -259,20 +269,49 @@ async def team_list_drivers(user=Depends(require_roles("admin", "manager"))):
     db = get_db()
     drivers = await db.drivers.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
     raw = get_raw_db()
-    user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
-    users = await raw.users.find({"id": {"$in": user_ids}}, {"_id": 0, "id": 1, "email": 1}).to_list(1000) if user_ids else []
+    users = await raw.users.find(
+        {"tenant_id": tid},
+        {"_id": 0, "id": 1, "email": 1, "active": 1, "last_login_at": 1,
+         "driver_id": 1, "role": 1}).to_list(2000)
     by_id = {u["id"]: u for u in users}
+    by_driver = {u["driver_id"]: u for u in users if u.get("driver_id")}
+    by_email = {u["email"]: u for u in users if u.get("role") == "driver"}
+    open_sessions = await db.driver_sessions.find(
+        {"status": {"$in": ["open", "automatic", "pending", "manual", "confirmed", "conflict", "ending"]},
+         "$or": [{"ended_at": None}, {"ended_at": {"$exists": False}}]},
+        {"_id": 0, "id": 1, "driver_id": 1, "vehicle_id": 1, "status": 1, "started_at": 1,
+         "identification_source": 1, "last_seen": 1}).to_list(2000)
+    veh_ids = list({s["vehicle_id"] for s in open_sessions})
+    veh_rows = await db.vehicles.find(
+        {"id": {"$in": veh_ids}}, {"_id": 0, "id": 1, "plate": 1, "model": 1}).to_list(2000) if veh_ids else []
+    vby = {v["id"]: v for v in veh_rows}
+    sess_by_driver: dict = {}
+    for s in sorted(open_sessions, key=lambda x: x.get("started_at") or "", reverse=True):
+        sess_by_driver.setdefault(s["driver_id"], s)
     now = datetime.now(timezone.utc).isoformat()
     invitations = await raw.invitations.find(
         {"tenant_id": tid, "used": False, "expires_at": {"$gt": now}},
         {"_id": 0, "driver_id": 1, "email": 1, "expires_at": 1, "created_at": 1}).to_list(1000)
     inv_by_driver = {i["driver_id"]: i for i in invitations}
     for d in drivers:
-        acc = by_id.get(d.get("user_id"))
-        d["account"] = {"user_id": acc["id"], "email": acc["email"]} if acc else None
+        acc = by_id.get(d.get("user_id")) or by_driver.get(d["id"]) \
+            or (by_email.get(d.get("email")) if d.get("email") else None)
+        d["account"] = ({"user_id": acc["id"], "email": acc["email"],
+                         "active": acc.get("active", True) is not False,
+                         "last_login_at": acc.get("last_login_at")} if acc else None)
         inv = inv_by_driver.get(d["id"]) if not acc else None
         d["pending_invitation"] = ({"email": inv["email"], "expires_at": inv["expires_at"],
                                     "created_at": inv["created_at"]} if inv else None)
+        s = sess_by_driver.get(d["id"])
+        d["current_session"] = ({**s, "vehicle_plate": vby.get(s["vehicle_id"], {}).get("plate"),
+                                 "vehicle_model": vby.get(s["vehicle_id"], {}).get("model")}
+                                if s else None)
+        acts = []
+        if acc and acc.get("last_login_at"):
+            acts.append((acc["last_login_at"], "Connexion"))
+        if s:
+            acts.append((s.get("last_seen") or s.get("started_at") or "", "Session"))
+        d["last_activity"] = ({"ts": max(acts)[0], "kind": max(acts)[1]} if acts else None)
     return drivers
 
 
@@ -283,6 +322,12 @@ async def team_create_driver(payload: DriverIn, current=Depends(require_roles("a
     doc = {"id": str(uuid.uuid4()),
            "created_at": datetime.now(timezone.utc).isoformat(),
            **{k: getattr(payload, k) for k in DRIVER_FIELDS}}
+    full = (doc.get("name") or "").strip() or " ".join(
+        p for p in [(doc.get("first_name") or "").strip(),
+                    (doc.get("last_name") or "").strip()] if p)
+    if not full:
+        raise HTTPException(400, "Nom du chauffeur requis (nom complet ou prénom + nom)")
+    doc["name"] = full
     doc["email"] = (doc.get("email") or "").lower() or ""
     if doc.get("ble_id"):
         from app.ble_engine import normalize_identifier
@@ -293,7 +338,10 @@ async def team_create_driver(payload: DriverIn, current=Depends(require_roles("a
             raise HTTPException(409, "Ce tag BLE est déjà attribué à un autre chauffeur")
         doc["ble_id_norm"] = norm
     await db.drivers.insert_one(dict(doc))
-    await log_audit("driver.create", current, {"name": payload.name})
+    await log_audit("driver.create", current, {"name": doc["name"]})
+    if doc.get("ble_id"):
+        await log_audit("driver.ble_tag_assigned", current,
+                        {"driver": doc["name"], "tag": doc["ble_id"]})
     doc.pop("_id", None)
     return doc
 
@@ -321,8 +369,22 @@ async def team_update_driver(driver_id: str, payload: DriverUpdate,
             if dup:
                 raise HTTPException(409, "Ce tag BLE est déjà attribué à un autre chauffeur")
         updates["ble_id_norm"] = norm
+    if ("first_name" in updates or "last_name" in updates) and "name" not in updates:
+        fn = (updates.get("first_name") if "first_name" in updates else driver.get("first_name")) or ""
+        ln = (updates.get("last_name") if "last_name" in updates else driver.get("last_name")) or ""
+        combined = f"{fn} {ln}".strip()
+        if combined:
+            updates["name"] = combined
     await db.drivers.update_one({"id": driver_id}, {"$set": updates})
     await log_audit("driver.update", current, {"name": driver.get("name"), "fields": list(updates)})
+    if "ble_id" in updates:
+        await log_audit(
+            "driver.ble_tag_assigned" if updates.get("ble_id") else "driver.ble_tag_removed",
+            current, {"driver": driver.get("name"),
+                      "tag": updates.get("ble_id") or driver.get("ble_id")})
+    if "active" in updates and updates["active"] != driver.get("active", True):
+        await log_audit("driver.disabled" if updates["active"] is False else "driver.enabled",
+                        current, {"driver": driver.get("name")})
     return await db.drivers.find_one({"id": driver_id}, {"_id": 0})
 
 
@@ -356,6 +418,141 @@ async def grant_driver_access(driver_id: str, payload: GrantAccessIn,
     await db.drivers.update_one({"id": driver_id}, {"$set": {"user_id": user["id"], "email": driver.get("email") or email}})
     await log_audit("driver.grant_access", current, {"driver": driver.get("name"), "email": email})
     return {"driver_id": driver_id, "user_id": user["id"], "email": email}
+
+
+async def _find_driver_account(raw, tid: str, driver: dict) -> Optional[dict]:
+    """Résout le compte lié : drivers.user_id, sinon users.driver_id, sinon email (rôle driver)."""
+    proj = {"_id": 0, "password_hash": 0}
+    if driver.get("user_id"):
+        u = await raw.users.find_one({"id": driver["user_id"], "tenant_id": tid}, proj)
+        if u:
+            return u
+    u = await raw.users.find_one({"driver_id": driver["id"], "tenant_id": tid}, proj)
+    if u:
+        return u
+    if driver.get("email"):
+        return await raw.users.find_one(
+            {"email": driver["email"], "tenant_id": tid, "role": "driver"}, proj)
+    return None
+
+
+@router.post("/drivers/{driver_id}/reset-password")
+async def reset_driver_password(driver_id: str, current=Depends(require_roles("admin"))):
+    """Génère un mot de passe temporaire (affiché UNE SEULE FOIS, jamais loggé,
+    jamais relisible) et force le changement à la prochaine connexion."""
+    tid = _tenant_or_400()
+    db = get_db()
+    raw = get_raw_db()
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
+    if not driver:
+        raise HTTPException(404, "Chauffeur introuvable")
+    target = await _find_driver_account(raw, tid, driver)
+    if not target:
+        raise HTTPException(400, "Ce chauffeur n'a pas de compte lié")
+    temp = secrets.token_urlsafe(9)
+    await raw.users.update_one(
+        {"id": target["id"]},
+        {"$set": {"password_hash": hash_password(temp), "must_change_password": True}})
+    await raw.login_attempts.delete_many({"identifier": target["email"]})
+    await log_audit("driver.password_reset", current,
+                    {"driver": driver.get("name"), "email": target["email"]})
+    return {"temp_password": temp, "email": target["email"], "must_change_password": True}
+
+
+OPEN_SESSION_STATUSES = ["open", "automatic", "pending", "manual", "confirmed", "ending"]
+AUDIT_EVENT_ACTIONS = [
+    "driver_claim", "driver_change", "driver_session_closed", "amend_session",
+    "resolve_conflict", "driver.create", "driver.update", "driver.grant_access",
+    "driver.password_reset", "driver.ble_tag_assigned", "driver.ble_tag_removed",
+    "driver.disabled", "driver.enabled", "auth.login",
+]
+
+
+@router.get("/drivers/{driver_id}/overview")
+async def driver_overview(driver_id: str, current=Depends(require_roles("admin", "manager"))):
+    """Fiche admin chauffeur : identité, compte, méthodes d'identification,
+    session actuelle, historique sessions + événements. Aucune donnée inventée."""
+    tid = _tenant_or_400()
+    db = get_db()
+    raw = get_raw_db()
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
+    if not driver:
+        raise HTTPException(404, "Chauffeur introuvable")
+
+    account = None
+    u = await _find_driver_account(raw, tid, driver)
+    if u:
+        account = {"user_id": u["id"], "email": u["email"],
+                   "active": u.get("active", True) is not False,
+                   "last_login_at": u.get("last_login_at"),
+                   "must_change_password": bool(u.get("must_change_password")),
+                   "created_at": u.get("created_at")}
+
+    sessions = await db.driver_sessions.find(
+        {"driver_id": driver_id}, {"_id": 0}).sort("started_at", -1).to_list(20)
+    veh_ids = list({s["vehicle_id"] for s in sessions})
+    veh_rows = await db.vehicles.find(
+        {"id": {"$in": veh_ids}}, {"_id": 0, "id": 1, "plate": 1, "model": 1}).to_list(500) if veh_ids else []
+    vby = {v["id"]: v for v in veh_rows}
+    for s in sessions:
+        s["vehicle_plate"] = vby.get(s["vehicle_id"], {}).get("plate")
+        s["vehicle_model"] = vby.get(s["vehicle_id"], {}).get("model")
+    current_session = next(
+        (s for s in sessions
+         if s.get("status") in OPEN_SESSION_STATUSES and not s.get("ended_at")), None)
+
+    last_claim = await db.driver_sessions.find_one(
+        {"driver_id": driver_id, "confirmed_at": {"$ne": None}},
+        {"_id": 0, "confirmed_at": 1}, sort=[("confirmed_at", -1)])
+    last_det = await db.ble_detections.find_one(
+        {"driver_id": driver_id, "ignored": False},
+        {"_id": 0, "ts": 1}, sort=[("ts", -1)])
+    proof = await raw.app_state.find_one({"id": f"ble_field_proof_{tid}"}, {"_id": 0})
+
+    ors = [{"driver_id": driver_id}, {"from_driver_id": driver_id},
+           {"to_driver_id": driver_id}, {"details.driver": driver.get("name")}]
+    if account:
+        ors.append({"user_email": account["email"]})
+    events = await db.audit_log.find(
+        {"$or": ors, "action": {"$in": AUDIT_EVENT_ACTIONS}}, {"_id": 0}).to_list(200)
+    for e in events:
+        e["event_ts"] = e.get("ts") or e.get("at")
+    events.sort(key=lambda e: e.get("event_ts") or "", reverse=True)
+    events = events[:15]
+
+    candidates = []
+    if account and account.get("last_login_at"):
+        candidates.append((account["last_login_at"], "Connexion APP"))
+    if last_claim and last_claim.get("confirmed_at"):
+        candidates.append((last_claim["confirmed_at"], "Confirmation APP"))
+    if last_det and last_det.get("ts"):
+        candidates.append((last_det["ts"], "Détection BLE"))
+    if sessions:
+        candidates.append((sessions[0].get("last_seen") or sessions[0].get("started_at") or "", "Session"))
+    last_activity = None
+    if candidates:
+        ts, kind = max(candidates)
+        last_activity = {"ts": ts, "kind": kind}
+
+    return {
+        "driver": driver,
+        "account": account,
+        "identification": {
+            "app": {"enabled": bool(account),
+                    "account_active": account["active"] if account else None,
+                    "last_login_at": account.get("last_login_at") if account else None,
+                    "last_claim_at": (last_claim or {}).get("confirmed_at")},
+            "ble": {"tag": driver.get("ble_id"),
+                    "last_detection_at": (last_det or {}).get("ts"),
+                    "field_validated": bool((proof or {}).get("validated")),
+                    "field_validation_note": None if (proof or {}).get("validated")
+                    else "Validation terrain BLE en attente"},
+        },
+        "current_session": current_session,
+        "sessions": sessions,
+        "events": events,
+        "last_activity": last_activity,
+    }
 
 
 class InviteIn(BaseModel):
