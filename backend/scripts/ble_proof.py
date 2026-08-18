@@ -90,28 +90,35 @@ async def main(tenant_id: str, minutes: int):
             frm.strftime(TS), now.strftime(TS))
         if err:
             print(f"   ✗ Erreur Navixy : {err}")
-            matched = 0
+            matches = []
         else:
-            matched = _show_records(records, by_tag, by_tracker)
+            matches = _show_records(records, by_tag, by_tracker)
 
     print("\n=== VERDICT ===")
-    if matched:
-        print("✓ CHAÎNE PROUVÉE : au moins un tag chauffeur configuré a été détecté par un")
-        print("  traceur mappé et remonté par Navixy. L'ingestion backend peut être activée")
-        print("  (POST /api/livre/ble/beacons/poll-now en tant qu'admin).")
+    if matches:
+        print("✓ CHAUFFEUR RECONNU — chaîne complète prouvée :")
+        print("  tag chauffeur → traceur Teltonika → Navixy → backend Logitrak")
+        for m_ in matches[:20]:
+            print(f"  • CHAUFFEUR RECONNU : {m_['driver']}")
+            print(f"      tag BLE   : {m_['tag']} (canon {m_['canon']})")
+            print(f"      véhicule  : {m_['vehicle']}  |  tracker : {m_['tracker']}")
+            print(f"      détection : {m_['ts']} UTC  |  rssi {m_['rssi']}  |  source : BLE")
+        print("\n  → Le poller (toutes les 2 min) ingérera ces détections et ouvrira/mettra")
+        print("    à jour la session chauffeur (source BLE). Contrôlez ensuite la page")
+        print("    Identification ou GET /api/livre/team/drivers/{id}/overview.")
     else:
         print("✗ Chaîne NON prouvée sur cette fenêtre : aucun enregistrement Navixy ne")
         print("  correspond à un tag chauffeur configuré. Vérifiez : 1) le tag émet (pile),")
         print("  2) le traceur Teltonika a « Beacon List/Detection » activé (ex. FMC130 :")
         print("  Bluetooth 4.0 → Beacon Detection = All / Configured), 3) la fenêtre de temps,")
-        print("  4) drivers.ble_id correspond bien au MAC/ID du tag.")
+        print("  4) drivers.ble_id correspond bien au MAC/UUID du tag.")
 
     client.close()
 
 
-def _show_records(records: list, by_tag: dict, by_tracker: dict) -> int:
+def _show_records(records: list, by_tag: dict, by_tracker: dict) -> list:
     print(f"   {len(records)} enregistrement(s) reçu(s)")
-    matched = 0
+    matches = []
     for rec in records[:200]:
         norm = normalize_identifier(rec.get("hardware_id"))
         drv = by_tag.get(norm)
@@ -119,18 +126,23 @@ def _show_records(records: list, by_tag: dict, by_tracker: dict) -> int:
         status = []
         if drv:
             status.append(f"CHAUFFEUR RECONNU → {drv['name']}")
-            matched += 1
+            matches.append({
+                "driver": drv["name"], "tag": drv.get("ble_id"), "canon": norm,
+                "vehicle": (veh or {}).get("plate") or "traceur non mappé",
+                "tracker": rec.get("tracker_id"),
+                "ts": rec.get("get_time"), "rssi": rec.get("rssi"),
+            })
         else:
             status.append("beacon inconnu (aucun chauffeur avec ce tag)")
         if veh:
             status.append(f"véhicule {veh.get('plate')}")
         else:
             status.append(f"traceur {rec.get('tracker_id')} NON mappé")
-        print(f"   • hw={rec.get('hardware_id')} (canon {norm}) rssi={rec.get('rssi')} "
-              f"t={rec.get('get_time')} | {' | '.join(status)}")
+        print(f"   • tracker={rec.get('tracker_id')} hw={rec.get('hardware_id')} "
+              f"(canon {norm}) rssi={rec.get('rssi')} t={rec.get('get_time')} | {' | '.join(status)}")
     if len(records) > 200:
         print(f"   … {len(records) - 200} lignes supplémentaires tronquées")
-    return matched
+    return matches
 
 
 if __name__ == "__main__":

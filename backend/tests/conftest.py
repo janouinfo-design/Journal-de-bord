@@ -16,3 +16,27 @@ except Exception:
 
 # Make the backend `app` package importable from any test.
 sys.path.insert(0, str(ROOT / "backend"))
+
+import pytest  # noqa: E402
+
+_SHARED_ACCOUNTS = [
+    "superadmin@logitrak.ch", "admin@logitrak.ch", "manager@logitrak.ch",
+    "chauffeur@logitrak.ch", "paul.test@client.ch", "admin-b@test.ch",
+    "lecteur@logitrak.ch",
+]
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _reset_login_attempts():
+    """La protection brute force (5 échecs/15 min) est volontairement globale.
+    Les suites cumulent des logins ratés sur les comptes partagés : on purge le
+    compteur au début de chaque module pour éviter les verrous en cascade."""
+    try:
+        import pymongo
+        mc = pymongo.MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=3000)
+        mc[os.environ["DB_NAME"]].login_attempts.delete_many(
+            {"identifier": {"$in": _SHARED_ACCOUNTS}})
+        mc.close()
+    except Exception:
+        pass
+    yield

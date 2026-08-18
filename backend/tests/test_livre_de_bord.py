@@ -108,12 +108,33 @@ class TestRoles:
 # ---------- Driver visibility ----------
 class TestDriverVisibility:
     def test_driver_only_sees_own_trips(self, driver_session):
-        r = driver_session.get(f"{API}/livre/trips?limit=500", timeout=30)
-        assert r.status_code == 200
-        trips = r.json()["trips"]
-        assert trips, "driver should have trips"
-        names = {t.get("driver_name") for t in trips}
-        assert names == {"Jean Dupont"}, f"Driver saw other drivers: {names}"
+        # Les données démo ont été remplacées par la synchro Navixy réelle :
+        # Jean n'a plus forcément de trajet. On en seed un, puis on vérifie
+        # l'isolation stricte côté serveur.
+        import pymongo
+        JEAN = "1580345e-6b8e-45a2-88e7-513a008b6b12"
+        mc = pymongo.MongoClient(os.environ["MONGO_URL"])
+        dbn = mc[os.environ["DB_NAME"]]
+        veh = dbn.vehicles.find_one({"tenant_id": "default"}, {"id": 1, "plate": 1})
+        seeded = {
+            "id": "test-visibility-trip-jean", "tenant_id": "default",
+            "driver_id": JEAN, "driver_name": "Jean Dupont",
+            "vehicle_id": veh["id"], "vehicle_plate": veh.get("plate") or "",
+            "start_time": "2026-08-18T07:00:00+00:00",
+            "end_time": "2026-08-18T07:30:00+00:00",
+            "classification": "professional", "auto_classified": True,
+        }
+        dbn.trips.update_one({"id": seeded["id"]}, {"$set": seeded}, upsert=True)
+        try:
+            r = driver_session.get(f"{API}/livre/trips?limit=500", timeout=30)
+            assert r.status_code == 200
+            trips = r.json()["trips"]
+            assert trips, "driver should have trips"
+            names = {t.get("driver_name") for t in trips}
+            assert names == {"Jean Dupont"}, f"Driver saw other drivers: {names}"
+        finally:
+            dbn.trips.delete_one({"id": seeded["id"]})
+            mc.close()
 
 
 # ---------- Dashboard ----------
@@ -172,27 +193,24 @@ class TestClassify:
 # ---------- Settings modes ----------
 class TestSettings:
     def test_modes_and_reapply(self, admin_session):
-        # current settings
+        # Modes actuels : 'mixte' | 'masked' (A/B legacy mappés, C supprimé)
         cur = admin_session.get(f"{API}/livre/settings", timeout=15).json()
         rules = cur["rules"]
-        # switch A -> B -> C
-        for mode in ("A", "B", "C"):
+        original = cur.get("mode") or "mixte"
+        try:
+            for legacy, expected in (("A", "mixte"), ("B", "masked"), ("mixte", "mixte"), ("masked", "masked")):
+                r = admin_session.put(f"{API}/livre/settings",
+                                      json={"mode": legacy, "rules": rules}, timeout=60)
+                assert r.status_code == 200, r.text
+                assert r.json()["mode"] == expected, f"{legacy} → {r.json()['mode']}"
+            # Mode C supprimé → erreur explicite
             r = admin_session.put(f"{API}/livre/settings",
-                                  json={"mode": mode, "rules": rules}, timeout=60)
+                                  json={"mode": "C", "rules": rules}, timeout=60)
+            assert r.status_code >= 400, "mode C doit être refusé"
+        finally:
+            r = admin_session.put(f"{API}/livre/settings",
+                                  json={"mode": original, "rules": rules}, timeout=60)
             assert r.status_code == 200, r.text
-            assert r.json()["mode"] == mode
-
-        # in mode C, all auto-classified trips should be professional
-        trips = admin_session.get(f"{API}/livre/trips?limit=2000", timeout=30).json()["trips"]
-        auto = [t for t in trips if t.get("auto_classified", True)]
-        assert auto, "expected some auto-classified trips"
-        bad = [t for t in auto if t["classification"] != "professional"]
-        assert not bad, f"Mode C: {len(bad)} auto trips still personal"
-
-        # reset back to A
-        r = admin_session.put(f"{API}/livre/settings",
-                              json={"mode": "A", "rules": rules}, timeout=60)
-        assert r.status_code == 200
 
     def test_mode_b_masks_personal_for_manager(self, admin_session, manager_session):
         cur = admin_session.get(f"{API}/livre/settings", timeout=15).json()

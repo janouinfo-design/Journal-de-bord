@@ -8,6 +8,7 @@ AUCUN ble_id ne doit rester posé sur un chauffeur de la démo à la fin
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -68,8 +69,35 @@ def admin_b_tok():
     return r.json()["access_token"]
 
 
+_LOOP = None
+
+
+def _loop():
+    """Boucle asyncio dédiée au module — les suites précédentes peuvent avoir
+    fermé la boucle du MainThread (get_event_loop est déprécié/fragile)."""
+    global _LOOP
+    if _LOOP is None or _LOOP.is_closed():
+        _LOOP = asyncio.new_event_loop()
+        asyncio.set_event_loop(_LOOP)
+    return _LOOP
+
+
+def _run(coro):
+    return _loop().run_until_complete(coro)
+
+
+@pytest.fixture(autouse=True)
+def _ensure_loop():
+    # Les coroutines Motor sont construites au call-site (avant _run) :
+    # la policy asyncio doit avoir une boucle valide avant CHAQUE test,
+    # même si un module/test précédent l'a remise à None (asyncio.run).
+    _loop()
+    yield
+
+
 @pytest.fixture(scope="module")
 def mongo():
+    _loop()
     cli = AsyncIOMotorClient(MONGO_URL)
     return cli[DB_NAME]
 
@@ -122,7 +150,7 @@ def _cleanup(created, admin_tok):
             {"$set": {"status": "closed",
                       "ended_at": datetime.now(timezone.utc).isoformat(),
                       "active_driver": False, "end_reason": "test_cleanup"}})
-    asyncio.get_event_loop().run_until_complete(_wipe())
+    _run(_wipe())
 
 
 def _make_test_driver(admin_tok, with_account=True, ble_id=None):
@@ -238,7 +266,7 @@ class TestB_Disable:
         # supprimer d'éventuels login_attempts posés par les tentatives ratées
         import asyncio
         cli = AsyncIOMotorClient(MONGO_URL)
-        asyncio.get_event_loop().run_until_complete(
+        _run(
             cli[DB_NAME].login_attempts.delete_many({"identifier": drv["email"].lower()}))
         assert login(drv["email"], drv["password"]).status_code == 200
 
@@ -257,7 +285,7 @@ class TestB_Disable:
         assert r.status_code == 200
         import asyncio
         cli = AsyncIOMotorClient(MONGO_URL)
-        asyncio.get_event_loop().run_until_complete(
+        _run(
             cli[DB_NAME].login_attempts.delete_many({"identifier": drv["email"].lower()}))
         assert login(drv["email"], drv["password"]).status_code == 200
 
@@ -311,7 +339,7 @@ class TestSessions:
         # Fermer une éventuelle session Jean/Paul restée ouverte
         import asyncio
         cli = AsyncIOMotorClient(MONGO_URL)
-        asyncio.get_event_loop().run_until_complete(
+        _run(
             cli[DB_NAME].driver_sessions.update_many(
                 {"driver_id": {"$in": [JEAN_ID, PAUL_ID]},
                  "status": {"$nin": ["closed"]}},
@@ -330,6 +358,13 @@ class TestSessions:
     def test_E_claim_session_in_overview(self, admin_tok):
         vehicles = self._pick_vehicle(admin_tok)
         veh = vehicles[0]
+        # Purge les détections BLE résiduelles de Jean (laissées par les suites
+        # de simulation) : sinon la fusion APP+BLE — comportement produit correct —
+        # rend la source différente de "APP".
+        import pymongo
+        mc = pymongo.MongoClient(MONGO_URL)
+        mc[DB_NAME].ble_detections.delete_many({"driver_id": JEAN_ID})
+        mc.close()
         jtok = _tok(*DRIVER)
         r = requests.post(f"{BASE}/api/livre/driver/claim",
                           headers=_h(jtok), json={"vehicle_id": veh["id"]}, timeout=15)
@@ -375,7 +410,7 @@ class TestSessions:
         # audit
         import asyncio
         cli = AsyncIOMotorClient(MONGO_URL)
-        aud = asyncio.get_event_loop().run_until_complete(
+        aud = _run(
             cli[DB_NAME].audit_log.find_one(
                 {"action": "driver_session_closed", "driver_id": JEAN_ID,
                  "end_source": "APP"},
@@ -438,7 +473,7 @@ class TestKPIs:
                          headers=_h(admin_tok), timeout=10)
         d = r.json()
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = _loop()
         n_app = loop.run_until_complete(
             mongo.driver_sessions.count_documents(
                 {"tenant_id": "default", "identification_source": "APP"}))
@@ -472,7 +507,7 @@ class TestKPIs:
                          headers=_h(admin_tok), timeout=10)
         d = r.json()
         import asyncio
-        n = asyncio.get_event_loop().run_until_complete(
+        n = _run(
             mongo.trips.count_documents(
                 {"tenant_id": "default",
                  "$or": [{"driver_id": None}, {"driver_id": {"$exists": False}}]}))
@@ -486,7 +521,7 @@ class TestK_Conflict:
     def test_conflict_created_and_resolved(self, admin_tok, mongo):
         # Fermer sessions actives Jean/Paul
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = _loop()
         loop.run_until_complete(
             mongo.driver_sessions.update_many(
                 {"driver_id": {"$in": [JEAN_ID, PAUL_ID]}, "status": {"$nin": ["closed"]}},
@@ -587,7 +622,7 @@ class TestQ_ResetPassword:
 
         # Le temp password NE DOIT PAS apparaître dans audit_log
         import asyncio
-        rows = asyncio.get_event_loop().run_until_complete(
+        rows = _run(
             mongo.audit_log.find({"action": "driver.password_reset"}).to_list(50))
         for r_ in rows:
             assert temp not in str(r_), "mot de passe temporaire fuité dans audit_log"

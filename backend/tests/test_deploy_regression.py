@@ -43,7 +43,7 @@ def test_login_admin():
 def test_login_superadmin_and_list_tenants():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "superadmin@logitrak.ch", "password": "superadmin123"},
+               json={"email": "superadmin@logitrak.ch", "password": os.environ["SUPERADMIN_PASSWORD"]},
                timeout=10)
     assert r.status_code == 200, r.text
     data = r.json()

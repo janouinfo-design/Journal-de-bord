@@ -9,7 +9,7 @@ API = f"{BASE}/api"
 
 ADMIN = ("admin@logitrak.ch", "admin123")
 MANAGER = ("manager@logitrak.ch", "manager123")
-SUPERADMIN = ("superadmin@logitrak.ch", "superadmin123")
+SUPERADMIN = ("superadmin@logitrak.ch", os.environ["SUPERADMIN_PASSWORD"])
 ADMIN_B = ("admin-b@test.ch", "testb123")
 PAUL = ("paul.test@client.ch", "paul1234")
 NAVIXY_HASH = "a25480874b7492bd01ff1d926061e491"
@@ -153,8 +153,9 @@ class TestDriversCRUD:
 
     def test_create_edit_toggle_driver(self):
         name = f"TEST Driver {uuid.uuid4().hex[:6]}"
+        matricule = f"T-{uuid.uuid4().hex[:6]}"
         r = self.s.post(f"{API}/livre/team/drivers",
-                        json={"name": name, "internal_number": "T-9", "ibutton_id": "IBTEST01", "active": True})
+                        json={"name": name, "internal_number": matricule, "ibutton_id": "IBTEST01", "active": True})
         assert r.status_code == 200, r.text
         did = r.json()["id"]
 

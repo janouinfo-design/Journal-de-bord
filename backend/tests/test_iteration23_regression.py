@@ -392,9 +392,10 @@ def test_06_deactivate_driver_blocks_login(admin_session, mongo):
 # ============================================================
 def test_07_driver_claim_app(driver_session, tenant_vehicles, mongo):
     v = _pick_free_vehicle(mongo, tenant_vehicles)
-    # close any existing session for Jean
+    # close any existing OPEN session for Jean (sinon le claim réutilise/fusionne)
     mongo.driver_sessions.update_many(
-        {"driver_id": JEAN_DRIVER_ID, "active_driver": True},
+        {"driver_id": JEAN_DRIVER_ID,
+         "status": {"$in": ["open", "automatic", "pending", "manual", "confirmed", "conflict", "ending"]}},
         {"$set": {"active_driver": False, "status": "closed",
                   "ended_at": datetime.now(timezone.utc).isoformat()}})
     # purge les détections BLE récentes de Jean (sinon le claim devient APP+BLE — comportement correct §18-19)

@@ -286,7 +286,8 @@ async def kill_switch(db) -> dict:
             await _audit(db, v["id"], "kill_switch_wake", payload)
             rows.append({"vehicle_id": v["id"], "result": "success", "command": cmd})
             sent += 1
-        except NavixyError as e:
+        except Exception as e:
+            # 403/timeout Navixy ou traceur invalide : résumé par véhicule, jamais de 500
             await _audit(db, v["id"], "kill_switch_error", {**payload, "error": str(e)})
             rows.append({"vehicle_id": v["id"], "result": "error", "error": str(e)})
             errors += 1

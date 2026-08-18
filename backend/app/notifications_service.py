@@ -419,17 +419,31 @@ async def dispatch(
             all_tokens, title, body, data=data, category=category,
         )
 
+    email_delivery = None
     if email_users:
         if meta.get("email_real"):
-            from app.emailer import send_email
-            link = (data or {}).get("link") or "/livre"
-            for t in targets:
-                if t["channels"]["email"] and t.get("user_email"):
-                    await send_email(
-                        t["user_email"], title, body,
-                        f"<p>{body.replace(chr(10), '<br/>')}</p>"
-                        f"<p>Ouvrez Journal de bord ({link}) pour traiter l'alerte.</p>")
+            from app.emailer import is_smtp_configured, send_email
+            if not is_smtp_configured():
+                email_delivery = "not_configured"
+                logger.warning(
+                    "📧 %s : envoi SMTP non vérifié dans cet environnement "
+                    "(SMTP non configuré) — %d destinataire(s)", event, email_users)
+            else:
+                link = (data or {}).get("link") or "/livre"
+                sent = failed = 0
+                for t in targets:
+                    if t["channels"]["email"] and t.get("user_email"):
+                        okk = await send_email(
+                            t["user_email"], title, body,
+                            f"<p>{body.replace(chr(10), '<br/>')}</p>"
+                            f"<p>Ouvrez Journal de bord ({link}) pour traiter l'alerte.</p>")
+                        if okk:
+                            sent += 1
+                        else:
+                            failed += 1
+                email_delivery = {"sent": sent, "failed": failed}
         else:
+            email_delivery = "stub"
             logger.info("📧 [email STUB] %s → %d user(s) — %s", event, email_users, title)
     if sms_users:
         logger.info("✉️  [sms STUB] %s → %d user(s) — %s", event, sms_users, title)
@@ -443,6 +457,7 @@ async def dispatch(
         "push_sent": push_summary.get("sent"),
         "push_failed": push_summary.get("failed"),
         "email_planned": email_users,
+        "email_delivery": email_delivery,
         "sms_planned": sms_users,
     }
     if log_id:

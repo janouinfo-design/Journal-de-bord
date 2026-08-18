@@ -6,7 +6,7 @@ import requests
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") + "/api"
 
-SUPER = {"email": "superadmin@logitrak.ch", "password": "superadmin123"}
+SUPER = {"email": "superadmin@logitrak.ch", "password": os.environ["SUPERADMIN_PASSWORD"]}
 ADMIN_A = {"email": "admin@logitrak.ch", "password": "admin123"}
 ADMIN_B = {"email": "admin-b@test.ch", "password": "testb123"}
 
