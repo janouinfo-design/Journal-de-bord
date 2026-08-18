@@ -65,15 +65,12 @@
         "origin": false
       },
       "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
+        "projectId": "SET_VIA_eas_init"
       }
     },
     "owner": "logitrak",
     "runtimeVersion": {
       "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/00000000-0000-0000-0000-000000000000"
     }
   }
 }
