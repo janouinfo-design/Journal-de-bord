@@ -37,6 +37,7 @@ Settings (db.settings keys):
 from __future__ import annotations
 
 import logging
+import os
 import statistics
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -639,6 +640,53 @@ async def get_current_session(db, driver_id: str) -> Optional[dict]:
     vehicle = await db.vehicles.find_one({"id": sess["vehicle_id"]}, {"_id": 0}) or {}
     return {**sess, "vehicle": {"id": vehicle.get("id"), "plate": vehicle.get("plate"),
                                 "model": vehicle.get("model")}}
+
+
+# ---------- Alerte conflits non résolus (> CONFLICT_ALERT_AFTER_MIN) ----------
+CONFLICT_ALERT_AFTER_MIN = int(os.environ.get("CONFLICT_ALERT_AFTER_MIN", "60"))
+
+
+async def alert_stale_conflicts(db) -> dict:
+    """E-mail + notification aux gestionnaires quand un conflit chauffeur
+    reste non résolu depuis plus d'une heure. Une seule alerte par conflit."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=CONFLICT_ALERT_AFTER_MIN)).isoformat()
+    rows = await db.driver_sessions.find(
+        {"status": "conflict", "conflict_at": {"$lte": cutoff},
+         "conflict_alert_sent": {"$ne": True}}, {"_id": 0}).to_list(200)
+    if not rows:
+        return {"alerted": 0}
+    by_vehicle: dict = {}
+    for s in rows:
+        by_vehicle.setdefault(s["vehicle_id"], []).append(s)
+    alerted = 0
+    for vid, group in by_vehicle.items():
+        vehicle = await db.vehicles.find_one({"id": vid}, {"_id": 0, "plate": 1})
+        names = []
+        for s in group:
+            d = await db.drivers.find_one({"id": s["driver_id"]}, {"_id": 0, "name": 1})
+            names.append((d or {}).get("name") or s["driver_id"])
+        try:
+            from app.notifications_service import dispatch
+            await dispatch("ble.conflict_stale", {
+                "vehicle_id": vid,
+                "vehicle_plate": (vehicle or {}).get("plate"),
+                "driver_names": names,
+                "session_ids": [s["id"] for s in group],
+                "since": min((s.get("conflict_at") or "") for s in group),
+            }, role_filter=["admin", "manager"],
+               dedup_key=f"conflict_stale_{vid}_{group[0]['id']}")
+        except Exception:
+            logger.exception("Alerte conflit non résolu : dispatch échoué (%s)", vid)
+            continue
+        await db.driver_sessions.update_many(
+            {"id": {"$in": [s["id"] for s in group]}},
+            {"$set": {"conflict_alert_sent": True}})
+        await db.audit_log.insert_one({
+            "ts": now_iso(), "scope": "driver_identification",
+            "action": "conflict_stale_alerted", "vehicle_id": vid,
+            "session_ids": [s["id"] for s in group], "drivers_names": names})
+        alerted += 1
+    return {"alerted": alerted}
 
 
 # ---------- « Je m'arrête » — clôture volontaire côté chauffeur (§21-27) ----------

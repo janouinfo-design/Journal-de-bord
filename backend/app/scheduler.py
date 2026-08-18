@@ -118,6 +118,7 @@ async def _run_fuel_fx():
 
 BEACON_JOB_ID = "beacon_poll"
 SWEEP_JOB_ID = "session_sweep"
+CONFLICT_ALERT_JOB_ID = "conflict_alerts"
 
 
 async def _run_beacon_poll():
@@ -144,6 +145,25 @@ async def _run_session_sweep():
                 reset_current_tenant(token)
     except Exception as e:
         logger.error("Session sweep error: %s", e)
+
+
+async def _run_conflict_alerts():
+    """Toutes les 10 min : alerte les gestionnaires des conflits non résolus > 1 h."""
+    try:
+        from app.db import get_db, get_raw_db
+        from app.ble_engine import alert_stale_conflicts
+        from app.tenant_context import reset_current_tenant, set_current_tenant
+        raw = get_raw_db()
+        async for t in raw.tenants.find({"status": "active"}, {"_id": 0, "id": 1}):
+            token = set_current_tenant(t["id"])
+            try:
+                res = await alert_stale_conflicts(get_db())
+                if res.get("alerted"):
+                    logger.info("Alertes conflits (%s): %s", t["id"], res)
+            finally:
+                reset_current_tenant(token)
+    except Exception as e:
+        logger.error("Conflict alert job error: %s", e)
 
 
 async def _persist_next_run(db):
@@ -193,6 +213,11 @@ async def init_scheduler():
     _scheduler.add_job(
         _run_session_sweep, IntervalTrigger(minutes=5),
         id=SWEEP_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # Conflits non résolus > 1 h → e-mail/notification gestionnaires (toutes les 10 min)
+    _scheduler.add_job(
+        _run_conflict_alerts, IntervalTrigger(minutes=10),
+        id=CONFLICT_ALERT_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
     )
     await _persist_next_run(db)
     logger.info("Scheduler initialised (enabled=%s, interval_min=%s)",

@@ -1,11 +1,11 @@
 """Identification chauffeur par tag BLE porté — chaîne Navixy Beacon API.
 
-Chaîne prouvée en réel (Étape 0) :
+Chaîne cible (À VALIDER SUR LE TERRAIN — aucune preuve physique encore) :
     Beacon chauffeur → traceur Teltonika (FMU130/FMC130) → Navixy → ce module.
 
-Endpoints Navixy utilisés (validés sur le parc réel) :
+Endpoints Navixy utilisés :
     POST {api}/beacon/data/read        — historique {tracker_id, hardware_id, rssi, get_time}
-    POST {api}/beacon/data/last_values — dernières valeurs
+    POST {api}/tracker/list            — validation des traceurs (repli code 217)
 
 Règles (§10-15 du cahier des charges) :
 - un tag chauffeur = drivers.ble_id (normalisé dans ble_id_norm), unique par tenant ;
@@ -29,6 +29,70 @@ from app.tenant_context import reset_current_tenant, set_current_tenant
 logger = logging.getLogger(__name__)
 
 NAVIXY_TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+class _NavixyError(Exception):
+    def __init__(self, http: int, code=None):
+        self.http, self.code = http, code
+        super().__init__(f"navixy http={http} code={code}")
+
+
+async def _navixy_tracker_ids(client, api: str, hash_: str) -> set:
+    """IDs de traceurs réellement existants côté Navixy."""
+    r = await client.post(f"{api}/tracker/list", json={"hash": hash_})
+    if r.status_code != 200:
+        return set()
+    data = r.json()
+    if not data.get("success"):
+        return set()
+    return {t.get("id") for t in (data.get("list") or []) if t.get("id") is not None}
+
+
+async def _read_beacons(client, api: str, hash_: str, trackers: list,
+                        frm_s: str, to_s: str) -> tuple[list, str | None]:
+    """Lecture beacon/data/read robuste.
+
+    Navixy renvoie code 217 (« List contains nonexistent entities ») si UN SEUL
+    tracker de la liste n'existe plus → on valide via tracker/list puis, en
+    dernier recours, on interroge traceur par traceur pour qu'un ID obsolète
+    ne bloque jamais les autres. (Constaté en réel sur le parc le 18.08.2026.)"""
+    async def _call(ids: list) -> list:
+        r = await client.post(f"{api}/beacon/data/read", json={
+            "hash": hash_, "trackers": ids, "from": frm_s, "to": to_s})
+        code = None
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        if r.status_code == 200 and body.get("success"):
+            return body.get("list") or []
+        code = (body.get("status") or {}).get("code")
+        raise _NavixyError(r.status_code, code)
+
+    try:
+        return await _call(trackers), None
+    except _NavixyError as e:
+        if e.code != 217:
+            return [], f"navixy_{e.code or e.http}"
+    valid = await _navixy_tracker_ids(client, api, hash_)
+    usable = [t for t in trackers if t in valid]
+    dropped = [t for t in trackers if t not in valid]
+    if dropped:
+        logger.warning("Beacon poll: %d traceur(s) obsolète(s) côté Navixy ignoré(s): %s",
+                       len(dropped), dropped[:10])
+    if not usable:
+        return [], "no_valid_trackers"
+    try:
+        return await _call(usable), None
+    except _NavixyError:
+        pass
+    out: list = []
+    for t in usable:
+        try:
+            out.extend(await _call([t]))
+        except _NavixyError:
+            continue
+    return out, None
 
 
 async def poll_all_tenants() -> dict:
@@ -77,19 +141,12 @@ async def poll_tenant_beacons(tenant: dict, window_min: int | None = None) -> di
         frm = now - timedelta(minutes=15)
 
     api = (tenant.get("navixy_api_url") or "https://api.navixy.com/v2").rstrip("/")
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.post(f"{api}/beacon/data/read", json={
-            "hash": tenant["navixy_hash"],
-            "trackers": list(by_tracker.keys()),
-            "from": frm.strftime(NAVIXY_TS_FMT),
-            "to": now.strftime(NAVIXY_TS_FMT),
-        })
-    if r.status_code != 200:
-        return {"error": f"navixy_http_{r.status_code}"}
-    data = r.json()
-    if not data.get("success"):
-        return {"error": f"navixy_{data.get('status', {}).get('code', 'unknown')}"}
-    records = data.get("list") or []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        records, err = await _read_beacons(
+            client, api, tenant["navixy_hash"], list(by_tracker.keys()),
+            frm.strftime(NAVIXY_TS_FMT), now.strftime(NAVIXY_TS_FMT))
+    if err:
+        return {"error": err}
 
     processed = 0
     token = set_current_tenant(tid)

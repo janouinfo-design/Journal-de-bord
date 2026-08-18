@@ -47,6 +47,23 @@ def _r_ble_conflict(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], 
     )
 
 
+def _r_ble_conflict_stale(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], str | None]:
+    vehicle = payload.get("vehicle_plate") or "Véhicule"
+    names = ", ".join(payload.get("driver_names") or []) or "chauffeurs inconnus"
+    return (
+        "⏰ Conflit chauffeur non résolu depuis plus d'une heure",
+        f"Véhicule : {vehicle}\nChauffeurs en conflit : {names}\n"
+        "Merci de le résoudre dans Journal de bord → Identification → Conflits.",
+        {
+            "type": "ble.conflict_stale",
+            "vehicle_id": payload.get("vehicle_id"),
+            "session_ids": payload.get("session_ids", []),
+            "link": "/livre/identification?status=conflict",
+        },
+        None,
+    )
+
+
 def _r_ble_resolved(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], str | None]:
     return (
         "✅ Conflit résolu",
@@ -103,6 +120,14 @@ EVENT_CATALOG: dict[str, dict[str, Any]] = {
         "default_channels": {"push": True, "email": False, "sms": False},
         "render": _r_ble_resolved,
         "audience": "driver",
+    },
+    "ble.conflict_stale": {
+        "label": "Conflit chauffeur non résolu (> 1 h)",
+        "default_channels": {"push": True, "email": True, "sms": False},
+        "render": _r_ble_conflict_stale,
+        "audience": "admin",
+        "inapp": True,
+        "email_real": True,
     },
     "kill_switch": {
         "label": "Tracking désactivé en urgence",
@@ -397,11 +422,13 @@ async def dispatch(
     if email_users:
         if meta.get("email_real"):
             from app.emailer import send_email
+            link = (data or {}).get("link") or "/livre"
             for t in targets:
                 if t["channels"]["email"] and t.get("user_email"):
                     await send_email(
                         t["user_email"], title, body,
-                        f"<p>{body}</p><p>Ouvrez Journal de bord → Carburant → Anomalies pour traiter l'alerte.</p>")
+                        f"<p>{body.replace(chr(10), '<br/>')}</p>"
+                        f"<p>Ouvrez Journal de bord ({link}) pour traiter l'alerte.</p>")
         else:
             logger.info("📧 [email STUB] %s → %d user(s) — %s", event, email_users, title)
     if sms_users:

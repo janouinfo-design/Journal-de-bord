@@ -69,17 +69,30 @@ async def main(tenant_id: str, minutes: int):
     frm = now - timedelta(minutes=minutes)
     trackers = list(by_tracker.keys())
 
-    async with httpx.AsyncClient(timeout=30.0) as http:
-        print("\n=== 1) beacon/data/last_values ===")
-        r = await http.post(f"{api}/beacon/data/last_values",
-                            json={"hash": tenant["navixy_hash"], "trackers": trackers})
-        _show(r, by_tag, by_tracker)
+    from app.driver_beacons import _navixy_tracker_ids, _read_beacons
 
-        print(f"\n=== 2) beacon/data/read (fenêtre {minutes} min) ===")
-        r = await http.post(f"{api}/beacon/data/read", json={
-            "hash": tenant["navixy_hash"], "trackers": trackers,
-            "from": frm.strftime(TS), "to": now.strftime(TS)})
-        matched = _show(r, by_tag, by_tracker)
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        valid = await _navixy_tracker_ids(http, api, tenant["navixy_hash"])
+        usable = [t for t in trackers if t in valid]
+        stale = [t for t in trackers if t not in valid]
+        print(f"\n— Traceurs valides côté Navixy : {len(usable)}/{len(trackers)}")
+        if stale:
+            print(f"   ⚠ {len(stale)} traceur(s) mappé(s) localement mais INEXISTANT(S) côté Navixy")
+            print(f"     (ignorés — relancez une synchro Navixy pour purger) : {stale[:10]}")
+        if not usable:
+            print("   ✗ Aucun traceur valide — impossible d'interroger l'API Beacon.")
+            client.close()
+            return
+
+        print(f"\n=== beacon/data/read (fenêtre {minutes} min, repli par traceur si besoin) ===")
+        records, err = await _read_beacons(
+            http, api, tenant["navixy_hash"], usable,
+            frm.strftime(TS), now.strftime(TS))
+        if err:
+            print(f"   ✗ Erreur Navixy : {err}")
+            matched = 0
+        else:
+            matched = _show_records(records, by_tag, by_tracker)
 
     print("\n=== VERDICT ===")
     if matched:
@@ -96,15 +109,7 @@ async def main(tenant_id: str, minutes: int):
     client.close()
 
 
-def _show(r: httpx.Response, by_tag: dict, by_tracker: dict) -> int:
-    if r.status_code != 200:
-        print(f"   ✗ HTTP {r.status_code} : {r.text[:300]}")
-        return 0
-    data = r.json()
-    if not data.get("success"):
-        print(f"   ✗ Réponse Navixy : {data.get('status')}")
-        return 0
-    records = data.get("list") or []
+def _show_records(records: list, by_tag: dict, by_tracker: dict) -> int:
     print(f"   {len(records)} enregistrement(s) reçu(s)")
     matched = 0
     for rec in records[:200]:

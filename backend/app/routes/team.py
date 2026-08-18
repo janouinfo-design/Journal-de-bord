@@ -329,6 +329,15 @@ async def team_create_driver(payload: DriverIn, current=Depends(require_roles("a
         raise HTTPException(400, "Nom du chauffeur requis (nom complet ou prénom + nom)")
     doc["name"] = full
     doc["email"] = (doc.get("email") or "").lower() or ""
+    doc["internal_number"] = (doc.get("internal_number") or "").strip() or None
+    if doc["email"]:
+        dup = await db.drivers.find_one({"email": doc["email"]}, {"_id": 1})
+        if dup:
+            raise HTTPException(409, "Un chauffeur avec cet e-mail existe déjà")
+    if doc["internal_number"]:
+        dup = await db.drivers.find_one({"internal_number": doc["internal_number"]}, {"_id": 1})
+        if dup:
+            raise HTTPException(409, "Ce matricule est déjà attribué à un autre chauffeur")
     if doc.get("ble_id"):
         from app.ble_engine import normalize_identifier
         norm = normalize_identifier(doc["ble_id"])
@@ -359,6 +368,20 @@ async def team_update_driver(driver_id: str, payload: DriverUpdate,
         updates["email"] = updates["email"].lower()
     if not updates:
         raise HTTPException(400, "Aucun champ à mettre à jour")
+    if "email" in updates:
+        updates["email"] = (updates.get("email") or "").lower() or ""
+        if updates["email"]:
+            dup = await db.drivers.find_one(
+                {"email": updates["email"], "id": {"$ne": driver_id}}, {"_id": 1})
+            if dup:
+                raise HTTPException(409, "Un chauffeur avec cet e-mail existe déjà")
+    if "internal_number" in updates:
+        updates["internal_number"] = (updates.get("internal_number") or "").strip() or None
+        if updates["internal_number"]:
+            dup = await db.drivers.find_one(
+                {"internal_number": updates["internal_number"], "id": {"$ne": driver_id}}, {"_id": 1})
+            if dup:
+                raise HTTPException(409, "Ce matricule est déjà attribué à un autre chauffeur")
     if "ble_id" in updates:
         from app.ble_engine import normalize_identifier
         norm = normalize_identifier(updates["ble_id"]) if updates.get("ble_id") else None
