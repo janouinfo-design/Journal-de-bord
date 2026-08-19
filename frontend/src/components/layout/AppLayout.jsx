@@ -13,7 +13,7 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
-  LayoutDashboard, Briefcase, ShieldAlert, Bluetooth, Receipt, Fuel,
+  LayoutDashboard, Briefcase, ShieldAlert, Receipt, Fuel,
   Settings, Smartphone, LogOut, Layers, Building2, Users, ScrollText, UserCog,
 } from "lucide-react";
 import ConflictInbox from "@/components/livre/ConflictInbox";
@@ -31,20 +31,21 @@ const ROLE_LABEL = {
 // Horizontal top-nav tabs. Each item can be restricted by role. When null/undefined
 // the item is visible to everyone.
 const TABS = [
-  { to: "/livre/dashboard",       label: "Tableau de bord", icon: LayoutDashboard, testId: "nav-dashboard" },
-  { to: "/livre/history/pro",     label: "Historique",      icon: Briefcase,       testId: "nav-history",       roles: ["admin", "manager", "lecture_seule"],
+  { to: "/livre/dashboard",       label: "Vue d'ensemble",  icon: LayoutDashboard, testId: "nav-dashboard" },
+  { to: "/livre/history/pro",     label: "Journal & trajets", icon: Briefcase,     testId: "nav-history",       roles: ["admin", "manager", "lecture_seule"],
     matchPrefix: "/livre/history" },
+  { to: "/livre/conducteurs/vue-densemble", label: "Conducteurs", icon: Users,     testId: "nav-drivers",       roles: ["admin", "manager"],
+    matchPrefix: "/livre/conducteurs" },
+  { to: "/livre/energie/apercu",  label: "Énergie & carburant", icon: Fuel,        testId: "nav-energy",        roles: ["admin", "manager", "lecture_seule"],
+    matchPrefix: "/livre/energie" },
+  { to: "/livre/energie/approvisionnements/mes-transactions", label: "Mes transactions", icon: Fuel, testId: "nav-my-fuel", roles: ["driver"],
+    matchPrefix: "/livre/energie" },
   { to: "/livre/amendes",         label: "Amendes",         icon: ShieldAlert,     testId: "nav-fines",         roles: ["admin", "manager", "lecture_seule"],
     matchPrefix: "/livre/amendes" },
   { to: "/livre/mes-amendes",     label: "Mes amendes",     icon: ShieldAlert,     testId: "nav-my-fines",      roles: ["driver"] },
-  { to: "/livre/carburant/apercu", label: "Carburant",      icon: Fuel,            testId: "nav-fuel",          roles: ["admin", "manager", "lecture_seule"],
-    matchPrefix: "/livre/carburant" },
-  { to: "/livre/carburant/mes-transactions", label: "Mes transactions", icon: Fuel, testId: "nav-my-fuel",     roles: ["driver"],
-    matchPrefix: "/livre/carburant" },
-  { to: "/livre/identification",  label: "Identification",  icon: Bluetooth,       testId: "nav-identification", roles: ["admin", "manager"] },
-  { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console", roles: ["admin", "manager", "driver"] },
+  { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console", roles: ["driver"] },
   { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager", "lecture_seule"] },
-  { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration", roles: ["admin", "manager"] },
+  { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration", roles: ["admin"] },
   { to: "/livre/settings",        label: "Paramètres",      icon: Settings,        testId: TEST_IDS.layout.navSettings, roles: ["admin", "manager"] },
   { to: "/admin/clients",         label: "Clients",         icon: Building2,       testId: "nav-admin-tenants", roles: ["superadmin"] },
   { to: "/admin/utilisateurs",    label: "Utilisateurs",    icon: Users,           testId: "nav-admin-users",   roles: ["superadmin"] },
