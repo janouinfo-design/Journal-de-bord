@@ -6,6 +6,10 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "backgroundColor": "#0B0F14",
+      "resizeMode": "contain"
+    },
     "assetBundlePatterns": ["**/*"],
     "web": {
       "bundler": "metro"
@@ -29,6 +33,10 @@
     "android": {
       "package": "ch.logitrak.driver",
       "versionCode": 1,
+      "splash": {
+        "backgroundColor": "#0B0F14",
+        "resizeMode": "contain"
+      },
       "permissions": [
         "BLUETOOTH",
         "BLUETOOTH_ADMIN",
