@@ -11,14 +11,17 @@ import { ProfileScreen } from '@/screens/ProfileScreen';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 import { TripDetailScreen } from '@/screens/TripDetailScreen';
 import { ChangePasswordScreen } from '@/screens/ChangePasswordScreen';
+import { VehiclePickerScreen } from '@/screens/VehiclePickerScreen';
 import { useAuthStore } from '@/store/authStore';
 import { colors } from '@/theme/colors';
+import type { Vehicle } from '@/api/ble';
 
 export type RootStackParamList = {
   Login: undefined;
   Main: undefined;
   TripDetail: { tripId: string };
   ChangePassword: undefined;
+  VehiclePicker: { onPick?: (v: Vehicle) => void };
 };
 
 export type TabParamList = {
@@ -137,6 +140,11 @@ export function RootNavigator() {
                 name="ChangePassword"
                 component={ChangePasswordScreen}
                 options={{ title: 'Mot de passe' }}
+              />
+              <Stack.Screen
+                name="VehiclePicker"
+                component={VehiclePickerScreen}
+                options={{ title: 'Choisir un véhicule' }}
               />
             </>
           )
