@@ -125,7 +125,8 @@ class TestPreviewE2E:
         assert preview["preview"] is True
         assert preview["alerting"] == "disabled"
         assert preview["thresholds"]["configured"] is False
-        assert preview["thresholds"]["gap_alert_pct"] is None
+        assert preview["thresholds"]["percent"] is None
+        assert preview["thresholds"]["liters"] is None
         assert len(preview["rows"]) == 18
 
     def test_all_impossible_when_disconnected(self, preview):

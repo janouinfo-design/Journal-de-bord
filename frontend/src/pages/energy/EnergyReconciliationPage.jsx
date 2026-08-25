@@ -14,8 +14,9 @@ import { EnergyBadge } from "@/components/energy/EnergyBadge";
 import { POWERTRAIN_LABEL } from "@/components/energy/TripEnergyBlock";
 import {
   Scale, AlertTriangle, Loader2, Info, Fuel, Zap, Car, CheckCircle2,
-  SearchCheck, HelpCircle, XCircle,
+  SearchCheck, HelpCircle, XCircle, FileSpreadsheet,
 } from "lucide-react";
+import { toast } from "sonner";
 
 const STATUS_META = {
   OK: { label: "OK", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -92,6 +93,42 @@ export default function EnergyReconciliationPage() {
   const [detail, setDetail] = useState(null);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const setFilter = (k, v) => setFilters(f => ({ ...f, [k]: v }));
+  const [exporting, setExporting] = useState(false);
+
+  function activeFilterParams() {
+    const params = { date_from: range.from, date_to: range.to };
+    if (filters.vehicle !== ALL) params.vehicle_id = filters.vehicle;
+    if (filters.group !== ALL) params.group = filters.group;
+    if (filters.powertrain !== ALL) params.powertrain = filters.powertrain;
+    if (filters.measurement !== ALL) params.measurement = filters.measurement;
+    if (filters.reliability !== ALL) params.reliability = filters.reliability;
+    if (filters.status !== ALL) params.status = filters.status;
+    return params;
+  }
+
+  async function exportExcel() {
+    setExporting(true);
+    try {
+      const res = await api.get("/livre/energy/reconciliation/export.xlsx",
+        { params: activeFilterParams(), responseType: "blob" });
+      if (!(res.headers["content-type"] || "").includes("spreadsheetml")) {
+        throw new Error("réponse inattendue");
+      }
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rapprochement_carburant_${range.from}_${range.to}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Export Excel généré");
+    } catch {
+      toast.error("Erreur lors de l'export Excel");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     if (!range?.from || !range?.to) return;
@@ -130,10 +167,12 @@ export default function EnergyReconciliationPage() {
 
   return (
     <div data-testid="recon-page" className="space-y-5">
-      <p className="text-sm text-slate-500 flex items-center gap-2">
-        <Scale className="w-4 h-4 text-[#2196F3]" />
-        Comparaison achats (cartes carburant) vs consommation (module Énergie) — écran
-        <strong className="text-slate-600">diagnostic / preview</strong> : alertes automatiques désactivées.
+      <p className="text-sm text-slate-500 flex items-start gap-2">
+        <Scale className="w-4 h-4 text-[#2196F3] shrink-0 mt-0.5" />
+        <span>
+          Comparaison achats (cartes carburant) vs consommation (module Énergie).
+          Écran diagnostic / preview — alertes automatiques désactivées.
+        </span>
       </p>
 
       {fixture && (
@@ -209,12 +248,30 @@ export default function EnergyReconciliationPage() {
                         value={filters.status} onChange={setFilter}
                         options={Object.keys(STATUS_META).map(s => ({ value: s, label: STATUS_META[s].label }))} />
         </div>
-        <div className="flex justify-end">
-          <Button size="sm" variant="outline" data-testid="recon-filter-reset"
-                  className="text-xs h-7"
-                  onClick={() => setFilters(DEFAULT_FILTERS)}>
-            Réinitialiser les filtres
-          </Button>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-xs text-slate-500" data-testid="recon-threshold-info">
+            {data?.thresholds?.configured ? (
+              <>Seuil configuré : {[
+                data.thresholds.percent != null ? `${data.thresholds.percent} %` : null,
+                data.thresholds.liters != null ? `${data.thresholds.liters} L` : null,
+              ].filter(Boolean).join(" · ")} — alertes automatiques désactivées.</>
+            ) : (
+              "Aucun seuil configuré — rapprochement en mode diagnostic."
+            )}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" data-testid="recon-export-btn"
+                    className="text-xs h-7"
+                    onClick={exportExcel} disabled={exporting || loading}>
+              {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />}
+              Exporter Excel
+            </Button>
+            <Button size="sm" variant="outline" data-testid="recon-filter-reset"
+                    className="text-xs h-7"
+                    onClick={() => setFilters(DEFAULT_FILTERS)}>
+              Réinitialiser les filtres
+            </Button>
+          </div>
         </div>
       </Card>
 

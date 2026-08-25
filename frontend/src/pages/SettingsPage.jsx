@@ -22,6 +22,7 @@ import ScheduleEditor from "@/components/livre/ScheduleEditor";
 import PrivacyCompatCard from "@/components/livre/PrivacyCompatCard";
 import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
 import NotificationsPreferencesCard from "@/components/livre/NotificationsPreferencesCard";
+import ReconciliationSettingsCard from "@/components/livre/ReconciliationSettingsCard";
 import SmtpTestCard from "@/components/livre/SmtpTestCard";
 
 const MODE_OPTIONS = [
@@ -456,6 +457,8 @@ export default function SettingsPage() {
 
       {/* SECTION 5 — NOTIFICATION PREFERENCES */}
       <NotificationsPreferencesCard />
+
+      <ReconciliationSettingsCard />
     </div>
   );
 }

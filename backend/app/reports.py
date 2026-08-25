@@ -99,6 +99,107 @@ def trips_to_xlsx(trips, classification_label: str, title: str) -> bytes:
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Export Excel du rapprochement achats ↔ consommation — jamais 0 pour une
+# absence de donnée (cellule vide), estimations toujours étiquetées.
+# ---------------------------------------------------------------------------
+RECON_MEASUREMENT_LABEL = {"MEASURED": "Mesuré", "ESTIMATED": "Estimé",
+                           "REFERENCE": "Référence", "NONE": "Aucun"}
+RECON_STATUS_LABEL = {"OK": "OK", "A_CONTROLER": "À contrôler",
+                      "INDICATIF": "Indicatif", "IMPOSSIBLE": "Impossible"}
+RECON_RELIABILITY_LABEL = {"EXPLOITABLE": "Exploitable", "INDICATIF": "Indicatif",
+                           "IMPOSSIBLE": "Impossible"}
+RECON_POWERTRAIN_LABEL = {"ICE": "Thermique", "HEV": "Hybride",
+                          "PHEV": "Hybride rechargeable", "BEV": "Électrique",
+                          "UNKNOWN": "Inconnue"}
+
+
+def _metric_cell(m):
+    if not m or m.get("value") is None:
+        return ""
+    return round(float(m["value"]), 2)
+
+
+def reconciliation_to_xlsx(rows, meta: dict) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Rapprochement"
+
+    headers = [
+        "Véhicule", "Plaque", "Période", "Motorisation", "Tracker ID",
+        "Achats carburant (L)", "Achats recharge (kWh)", "Transactions", "Montant (CHF)",
+        "Consommation (L)", "Type de mesure", "Source consommation",
+        "Consommation électrique (kWh)", "Type mesure électrique", "Source électrique",
+        "Écart (L)", "Écart (%)", "Fiabilité", "Statut", "Raison du statut",
+    ]
+    ws.append([f"Rapprochement achats ↔ consommation — {meta.get('tenant', '')}"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+    ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="1F2937")
+    ws.append([f"Période : {meta.get('period_from')} → {meta.get('period_to')}"])
+    ws.append([f"Généré le : {meta.get('generated_at')}"])
+    filters = meta.get("filters") or []
+    ws.append([f"Filtres appliqués : {' ; '.join(filters) if filters else 'aucun'}"])
+    th = meta.get("thresholds") or {}
+    ws.append([("Seuil configuré : "
+                + " · ".join(([f"{th.get('percent')} %"] if th.get("percent") is not None else [])
+                             + ([f"{th.get('liters')} L"] if th.get("liters") is not None else [])))
+               if th.get("configured")
+               else "Aucun seuil configuré — rapprochement en mode diagnostic"])
+    ws.append(["Alertes automatiques : désactivées"])
+    if meta.get("mode") == "fixture":
+        ws.append(["Données de démonstration contractuelles (FIXTURE) — PAS le module Énergie réel"])
+    elif not meta.get("connected"):
+        ws.append(["Module Énergie non connecté — consommations indisponibles"])
+    ws.append([])
+
+    ws.append(headers)
+    header_row = ws.max_row
+    for col_idx in range(1, len(headers) + 1):
+        c = ws.cell(row=header_row, column=col_idx)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="2196F3")
+        c.alignment = Alignment(horizontal="left", vertical="center")
+
+    period_str = f"{meta.get('period_from')} → {meta.get('period_to')}"
+    for r in rows:
+        buy = r.get("purchased") or {}
+        has_buy = (buy.get("tx_count") or 0) > 0
+        cf = r.get("consumed_fuel")
+        ce = r.get("consumed_electric")
+        ce_present = bool(ce and ce.get("value") is not None)
+        ws.append([
+            r.get("model") or "",
+            r.get("plate") or "",
+            period_str,
+            RECON_POWERTRAIN_LABEL.get(r.get("powertrain"), r.get("powertrain") or ""),
+            r.get("navixy_tracker_id") or "",
+            round(buy.get("liters", 0), 2) if has_buy else "",
+            round(buy.get("kwh", 0), 2) if has_buy else "",
+            buy.get("tx_count") if has_buy else "",
+            round(buy.get("amount_chf", 0), 2) if has_buy else "",
+            _metric_cell(cf),
+            RECON_MEASUREMENT_LABEL.get(r.get("consumption_measurement_type"), "Aucun"),
+            (cf or {}).get("source") or "",
+            _metric_cell(ce),
+            RECON_MEASUREMENT_LABEL.get((ce or {}).get("measurement_type"), "") if ce_present else "",
+            ((ce or {}).get("source") or "") if ce_present else "",
+            r.get("gap_l") if r.get("gap_l") is not None else "",
+            r.get("gap_pct") if r.get("gap_pct") is not None else "",
+            RECON_RELIABILITY_LABEL.get(r.get("reliability"), r.get("reliability") or ""),
+            RECON_STATUS_LABEL.get(r.get("status"), r.get("status") or ""),
+            r.get("status_reason") or "",
+        ])
+
+    from openpyxl.utils import get_column_letter
+    widths = [20, 16, 24, 18, 12, 16, 16, 12, 14, 16, 14, 16, 18, 16, 16, 12, 12, 12, 12, 60]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "") -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
