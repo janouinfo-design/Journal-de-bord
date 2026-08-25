@@ -200,6 +200,136 @@ def reconciliation_to_xlsx(rows, meta: dict) -> bytes:
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Export PDF du rapprochement — même source de données que l'écran et l'Excel
+# (_build_reconciliation). null → « — », JAMAIS 0. L et kWh toujours séparés.
+# Polices standard PDF (cp1252) : pas de caractères ↔ ou → dans ce document.
+# ---------------------------------------------------------------------------
+def _pdf_num(v, decimals=2):
+    if v is None or v == "":
+        return "—"
+    return f"{float(v):.{decimals}f}"
+
+
+def reconciliation_to_pdf(rows, meta: dict) -> bytes:
+    buf = io.BytesIO()
+    page_size = landscape(A4)
+    doc = SimpleDocTemplate(
+        buf, pagesize=page_size,
+        leftMargin=1.0 * cm, rightMargin=1.0 * cm,
+        topMargin=1.0 * cm, bottomMargin=1.5 * cm,
+        title="Rapprochement achats-consommation")
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("rt", parent=styles["Title"], fontSize=15, alignment=0,
+                                 textColor=colors.HexColor("#0F172A"), spaceAfter=2)
+    sub = ParagraphStyle("rs", parent=styles["Normal"], fontSize=8.5,
+                         textColor=colors.HexColor("#64748B"), leading=11)
+    warn = ParagraphStyle("rw", parent=sub, textColor=colors.HexColor("#B45309"))
+    cell = ParagraphStyle("rc", parent=styles["Normal"], fontSize=7.6,
+                          textColor=colors.HexColor("#0F172A"), leading=9.4)
+    small = ParagraphStyle("rsm", parent=cell, fontSize=7.0,
+                           textColor=colors.HexColor("#475569"), leading=8.8)
+    head = ParagraphStyle("rh", parent=styles["Normal"], fontSize=7.6,
+                          textColor=colors.white, fontName="Helvetica-Bold", leading=9.2)
+
+    def P(text, style=cell):
+        return Paragraph("" if text is None else str(text).replace("&", "&amp;"), style)
+
+    flow = [Paragraph(f"Rapprochement achats / consommation — {meta.get('tenant', '')}", title_style)]
+    flow.append(Paragraph(
+        f"Période : {meta.get('period_from')} au {meta.get('period_to')} · "
+        f"Généré le : {meta.get('generated_at')}", sub))
+    filters = meta.get("filters") or []
+    flow.append(Paragraph(f"Filtres appliqués : {' ; '.join(filters) if filters else 'aucun'}", sub))
+    th = meta.get("thresholds") or {}
+    if th.get("configured"):
+        parts = (([f"{th.get('percent')} %"] if th.get("percent") is not None else [])
+                 + ([f"{th.get('liters')} L"] if th.get("liters") is not None else []))
+        flow.append(Paragraph(f"Seuil configuré : {' · '.join(parts)}", sub))
+    else:
+        flow.append(Paragraph("Aucun seuil configuré — rapprochement en mode diagnostic", sub))
+    flow.append(Paragraph("Alertes automatiques : désactivées — aucun message envoyé", sub))
+    if meta.get("mode") == "fixture":
+        flow.append(Paragraph(
+            "Données de démonstration contractuelles (FIXTURE) — PAS le module Énergie réel", warn))
+    elif not meta.get("connected"):
+        flow.append(Paragraph("Module Énergie non connecté — consommations indisponibles", warn))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    if not rows:
+        flow.append(Paragraph("Aucun véhicule ne correspond aux filtres.", sub))
+    else:
+        data = [[P(h, head) for h in (
+            "Véhicule", "Motorisation", "Achats (L)", "Recharges (kWh)", "Tx",
+            "Montant (CHF)", "Conso (L)", "Type de mesure", "Conso élec (kWh)",
+            "Écart (L)", "Écart (%)", "Fiabilité", "Statut", "Raison du statut")]]
+        check_rows = []
+        for i, r in enumerate(rows, start=1):
+            buy = r.get("purchased") or {}
+            has_buy = (buy.get("tx_count") or 0) > 0
+            cf = r.get("consumed_fuel") or {}
+            ce = r.get("consumed_electric") or {}
+            veh = r.get("plate") or r.get("model") or "—"
+            veh_extra = r.get("model") if r.get("plate") else ""
+            if not r.get("mapped"):
+                veh_extra = (f"{veh_extra} · " if veh_extra else "") + "Non mappé"
+            if r.get("status") == "A_CONTROLER":
+                check_rows.append(i)
+            data.append([
+                P(f"<b>{veh}</b>" + (f"<br/>{veh_extra}" if veh_extra else "")),
+                P(RECON_POWERTRAIN_LABEL.get(r.get("powertrain"), r.get("powertrain") or "—")),
+                P(_pdf_num(buy.get("liters")) if has_buy else "—"),
+                P(_pdf_num(buy.get("kwh")) if has_buy else "—"),
+                P(buy.get("tx_count") if has_buy else "—"),
+                P(_pdf_num(buy.get("amount_chf")) if has_buy else "—"),
+                P(_pdf_num(cf.get("value"))),
+                P(RECON_MEASUREMENT_LABEL.get(r.get("consumption_measurement_type"), "Aucun")),
+                P(_pdf_num(ce.get("value"))),
+                P(_pdf_num(r.get("gap_l"))),
+                P(_pdf_num(r.get("gap_pct"), 1)),
+                P(RECON_RELIABILITY_LABEL.get(r.get("reliability"), r.get("reliability") or "—")),
+                P(RECON_STATUS_LABEL.get(r.get("status"), r.get("status") or "—")),
+                P(r.get("status_reason") or "", small),
+            ])
+        col_widths = [3.3, 2.0, 1.7, 1.8, 0.9, 1.8, 1.6, 1.8, 1.8, 1.5, 1.5, 1.7, 1.7, 4.6]
+        table = Table(data, colWidths=[w * cm for w in col_widths], repeatRows=1)
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2196F3")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E2E8F0")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("ALIGN", (2, 1), (10, -1), "RIGHT"),
+        ]
+        for i in check_rows:
+            style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FEF3C7")))
+        table.setStyle(TableStyle(style))
+        flow.append(table)
+
+    flow.append(Spacer(1, 0.25 * cm))
+    flow.append(Paragraph(
+        "« — » = donnée non disponible (jamais assimilée à zéro). Les consommations proviennent "
+        "exclusivement du module Énergie ; les achats proviennent des transactions cartes. "
+        "Litres et kWh ne sont jamais fusionnés (PHEV/HEV : énergies séparées).",
+        ParagraphStyle("rlegend", parent=sub, fontSize=7.5)))
+
+    def _footer(canvas, d):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#94A3B8"))
+        canvas.drawString(1.0 * cm, 0.65 * cm,
+                          "Logitrak — Livre de bord · Rapprochement achats / consommation · "
+                          "Alertes automatiques : désactivées")
+        canvas.drawRightString(page_size[0] - 1.0 * cm, 0.65 * cm, f"Page {d.page}")
+        canvas.restoreState()
+
+    doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+    return buf.getvalue()
+
+
 def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "") -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(

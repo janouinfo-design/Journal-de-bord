@@ -14,9 +14,11 @@ import { EnergyBadge } from "@/components/energy/EnergyBadge";
 import { POWERTRAIN_LABEL } from "@/components/energy/TripEnergyBlock";
 import {
   Scale, AlertTriangle, Loader2, Info, Fuel, Zap, Car, CheckCircle2,
-  SearchCheck, HelpCircle, XCircle, FileSpreadsheet,
+  SearchCheck, HelpCircle, XCircle, FileSpreadsheet, FileText, BellOff, Settings2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 
 const STATUS_META = {
   OK: { label: "OK", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -85,7 +87,91 @@ function FilterSelect({ k, label, options, value, onChange, testId }) {
   );
 }
 
+/* Préparation des alertes « À contrôler » — APERÇU uniquement, aucun envoi.
+   L'envoi reste verrouillé backend tant que REAL ENERGY n'est pas validé. */
+function AlertsPreparationPanel({ range, canGenerate }) {
+  const [data, setData] = useState(null);
+  const [generating, setGenerating] = useState(false);
+
+  const load = () =>
+    api.get("/livre/energy/reconciliation/alerts/candidates")
+      .then(r => setData(r.data)).catch(() => setData(null));
+  useEffect(() => { load(); }, []);
+
+  async function generate() {
+    setGenerating(true);
+    try {
+      const { data: res } = await api.post(
+        "/livre/energy/reconciliation/alerts/candidates/generate", null,
+        { params: { date_from: range.from, date_to: range.to } });
+      toast.success(`${res.created} candidat(s) créé(s) · ${res.duplicates} doublon(s) ignoré(s) — aucun message envoyé`);
+      load();
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Erreur lors de la génération de l'aperçu");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  const items = data?.items || [];
+  return (
+    <Card className="bg-white border-slate-200 shadow-sm rounded-md p-4 space-y-3" data-testid="recon-alerts-panel">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+            <BellOff className="w-4 h-4 text-slate-400" /> Alertes « À contrôler » — préparation
+          </h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Envoi verrouillé tant que la campagne REAL ENERGY n&apos;est pas validée pour ce client.
+            Seuls les écarts <strong>mesurés</strong> au statut « À contrôler » peuvent devenir candidats.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {canGenerate && (
+            <Button size="sm" variant="outline" className="text-xs h-7"
+                    onClick={generate} disabled={generating}
+                    data-testid="recon-alerts-generate-btn">
+              {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <BellOff className="w-3.5 h-3.5 mr-1" />}
+              Générer l&apos;aperçu des candidats
+            </Button>
+          )}
+          <Link to="/livre/settings" data-testid="recon-alerts-settings-link"
+                className="text-xs text-[#2196F3] hover:underline flex items-center gap-1">
+            <Settings2 className="w-3.5 h-3.5" /> Configurer
+          </Link>
+        </div>
+      </div>
+      <div data-testid="recon-alerts-preview-banner"
+           className="bg-slate-100 border border-slate-200 text-slate-700 rounded-md px-3 py-2 text-xs font-semibold">
+        APERÇU — AUCUN MESSAGE ENVOYÉ (e-mail, SMS et push désactivés)
+      </div>
+      <p className="text-xs text-slate-500" data-testid="recon-alerts-count">
+        {items.length === 0
+          ? "Aucun candidat d'alerte enregistré."
+          : `${items.length} candidat(s) d'alerte enregistré(s) — anti-doublonnage par véhicule + période.`}
+      </p>
+      {items.length > 0 && (
+        <ul className="space-y-1" data-testid="recon-alerts-candidates">
+          {items.slice(0, 5).map(c => (
+            <li key={c.id} className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+              <span className="font-mono">{c.plate || c.vehicle_id}</span>
+              <span className="text-slate-400">{c.period_from} au {c.period_to}</span>
+              {c.gap_l != null && <span className="text-amber-700">écart {c.gap_l > 0 ? "+" : ""}{c.gap_l} L</span>}
+              <Badge variant="outline" className="bg-slate-50 text-slate-500 border-slate-200 text-[10px] px-1.5 py-0">
+                Non envoyé
+              </Badge>
+            </li>
+          ))}
+          {items.length > 5 && <li className="text-xs text-slate-400">… et {items.length - 5} autre(s)</li>}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 export default function EnergyReconciliationPage() {
+  const { user } = useAuth();
   const [preset, setPreset] = useState("year");
   const [range, setRange] = useState(presetRange("year"));
   const [data, setData] = useState(null);
@@ -93,7 +179,7 @@ export default function EnergyReconciliationPage() {
   const [detail, setDetail] = useState(null);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const setFilter = (k, v) => setFilters(f => ({ ...f, [k]: v }));
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState(null);
 
   function activeFilterParams() {
     const params = { date_from: range.from, date_to: range.to };
@@ -106,27 +192,31 @@ export default function EnergyReconciliationPage() {
     return params;
   }
 
-  async function exportExcel() {
-    setExporting(true);
+  async function doExport(kind) {
+    setExporting(kind);
+    const isPdf = kind === "pdf";
     try {
-      const res = await api.get("/livre/energy/reconciliation/export.xlsx",
+      const res = await api.get(`/livre/energy/reconciliation/export.${isPdf ? "pdf" : "xlsx"}`,
         { params: activeFilterParams(), responseType: "blob" });
-      if (!(res.headers["content-type"] || "").includes("spreadsheetml")) {
+      const ct = res.headers["content-type"] || "";
+      if (!(isPdf ? ct.includes("pdf") : ct.includes("spreadsheetml"))) {
         throw new Error("réponse inattendue");
       }
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `rapprochement_carburant_${range.from}_${range.to}.xlsx`;
+      a.download = `rapprochement_carburant_${range.from}_${range.to}.${isPdf ? "pdf" : "xlsx"}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast.success("Export Excel généré");
-    } catch {
-      toast.error("Erreur lors de l'export Excel");
+      toast.success(isPdf ? "Export PDF généré" : "Export Excel généré");
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d
+        : (isPdf ? "Erreur lors de l'export PDF" : "Erreur lors de l'export Excel"));
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   }
 
@@ -262,9 +352,15 @@ export default function EnergyReconciliationPage() {
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" data-testid="recon-export-btn"
                     className="text-xs h-7"
-                    onClick={exportExcel} disabled={exporting || loading}>
-              {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />}
+                    onClick={() => doExport("xlsx")} disabled={!!exporting || loading}>
+              {exporting === "xlsx" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />}
               Exporter Excel
+            </Button>
+            <Button size="sm" variant="outline" data-testid="recon-export-pdf-btn"
+                    className="text-xs h-7"
+                    onClick={() => doExport("pdf")} disabled={!!exporting || loading}>
+              {exporting === "pdf" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FileText className="w-3.5 h-3.5 mr-1" />}
+              Exporter PDF
             </Button>
             <Button size="sm" variant="outline" data-testid="recon-filter-reset"
                     className="text-xs h-7"
@@ -362,6 +458,10 @@ export default function EnergyReconciliationPage() {
           </table>
         )}
       </Card>
+
+      {/* Préparation des alertes — aperçu uniquement, aucun envoi */}
+      <AlertsPreparationPanel range={range}
+                              canGenerate={user?.role === "admin" || user?.role === "manager"} />
 
       {/* Drawer détail */}
       <Sheet open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>

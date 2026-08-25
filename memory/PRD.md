@@ -786,3 +786,27 @@ affectation manuelle, droits par rôle.
 - VPS : docker compose -p journal_logitrak exec journal_backend python seed_fuel_demo.py [--clean]
 - AVERTISSEMENT donnees completes : POST /api/livre/bootstrap sans force ne fait rien si des trajets existent ; avec force=true il EFFACE drivers/vehicles/trips/geofences (interdit en prod avec donnees Navixy reelles)
 - Backlog conserve par decision utilisateur (NE PAS developper sans demande explicite) : rappel de cloture, tendance carburant 6 mois, taux fournisseur/correction manuelle FX, connecteurs fournisseurs Phase 3, e-mail anomalies reste optionnel/off
+
+
+---
+
+## Phase : Préparation alertes « À contrôler » + Export PDF rapprochement (25/08/2026)
+
+### Livré
+- **Verrou alertes par tenant** : `real_energy_validated=false` dans le document `settings` (tenant-isolé). AUCUN endpoint ne permet de le passer à true (ni `PUT /livre/settings` strictement typé, ni le PUT alertes — champ hors modèle Pydantic ignoré). Seule une future campagne REAL ENERGY validée pourra le faire.
+- `GET/PUT /api/livre/energy/reconciliation/alerts/config` : `enabled=true` → **409** tant que non validé ; destinataires futurs stockés (validés, max 20, normalisés, AUCUN envoi) ; audit `energy.reconciliation_alerts.config_update` (dispatch=disabled).
+- **Candidats d'alerte** : `POST /alerts/candidates/generate` + `GET /alerts/candidates`. Builder pur `_alert_candidates` : UNIQUEMENT statut A_CONTROLER + MEASURED + mappé (ESTIMATED/REFERENCE/STALE/NONE/non mappé jamais candidats). Anti-doublonnage par index unique Mongo `(tenant_id, dedup_key)` avec `dedup_key=recon-alert:{vehicle_id}:{from}:{to}`. Docs `preview_only=true, dispatched=false, dispatch=disabled`. JAMAIS transmis à notifications_service/SMTP (vérifié par test sur notifications_log).
+- **Export PDF** : `GET /api/livre/energy/reconciliation/export.pdf` — même source `_build_reconciliation` que l'écran/Excel via helper commun `_export_dataset`, mêmes 7 filtres, RBAC (admin/manager/lecture_seule, driver 403), isolation tenant, audit `energy.reconciliation.export` avec `format=pdf` (xlsx désormais audité avec `format=xlsx`). ReportLab existant (`reconciliation_to_pdf` dans reports.py), paysage A4 paginé (repeatRows), null → « — » jamais 0, L/kWh séparés (PHEV), lignes A_CONTROLER surlignées, mentions « Alertes automatiques : désactivées » + « Module Énergie non connecté ». Pas de caractères hors cp1252 (↔/→ interdits dans ce PDF).
+- **Frontend** : bouton « Exporter PDF » (recon-export-pdf-btn) à côté d'Excel ; panneau AlertsPreparationPanel dans l'écran Rapprochement (bannière « APERÇU — AUCUN MESSAGE ENVOYÉ », génération admin/manager, lien Paramètres) ; carte ReconciliationAlertsCard dans Paramètres (interrupteur désactivé + badge verrou, destinataires futurs, compteur candidats).
+
+### Tests (25/08/2026)
+- `tests/test_energy_alerts_pdf.py` : **43/43 PASS** (verrou 409, real_energy_validated inaccessible en écriture, RBAC, isolation tenant config+candidats, index unique dédup, zéro dispatch notifications, PDF lu via PyMuPDF : 18 véhicules dont non mappés, filtres, null→—, PHEV L/kWh séparés, pagination multi-pages avec entête répétée, audit).
+- Régression backend complète : **567 PASS / 0 FAIL / 1 SKIP** (5 tests BLE flaky au 1er run, tous PASS isolément et au 2e run complet).
+- Testing agent frontend iteration_28 : **11/11 PASS**, nettoyage effectué (destinataires vides).
+- État final vérifié : Energy `not_connected`, seuils `null`, recipients `[]`, 0 candidat, verrou actif.
+- **ENERGY RÉEL : NON TESTÉ** (ENERGY_API_BASE_URL manquante). MAPPING : 12/18 fiable (6 véhicules sans tracker, non auto-associés).
+
+### Backlog (inchangé + suite)
+- P0 : campagne REAL ENERGY dès URL fournie (validation réelle → seul chemin futur pour real_energy_validated=true, à implémenter à ce moment-là).
+- P1 : activation effective des alertes post-validation (dispatch via notifications_service existant, destinataires déjà stockés).
+- P2 : compléter le mapping des 6 véhicules sans tracker (action utilisateur/Navixy) ; renseigner fuel_type/VIN.
