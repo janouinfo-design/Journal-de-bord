@@ -810,3 +810,15 @@ affectation manuelle, droits par rôle.
 - P0 : campagne REAL ENERGY dès URL fournie (validation réelle → seul chemin futur pour real_energy_validated=true, à implémenter à ce moment-là).
 - P1 : activation effective des alertes post-validation (dispatch via notifications_service existant, destinataires déjà stockés).
 - P2 : compléter le mapping des 6 véhicules sans tracker (action utilisateur/Navixy) ; renseigner fuel_type/VIN.
+
+
+---
+
+## Campagne REAL ENERGY — tentative du 25/08/2026 : BLOQUÉE (aucune modification de code)
+
+- Demande utilisateur : campagne REAL ENERGY de bout en bout. Prérequis absolu : `ENERGY_API_BASE_URL` réelle.
+- Audit de configuration (lecture seule) : variables lues exclusivement via `os.environ` backend, aucune URL codée en dur dans `energy_client.py`, timeout httpx présent, aucune exposition URL/token frontend. CONFORME.
+- Utilisateur confirme : URL réelle NON disponible, authentification inconnue, routes contrat v1 non documentées. Instruction explicite : ne rien supposer, aucun mock pour valider REAL ENERGY, conclure BLOQUÉ.
+- Preuves d'état (lecture seule) : `GET /livre/energy/status` → connected=false, mode=not_connected, base_url_configured=false ; verrou alertes enabled=false / real_energy_validated=false / dispatch=disabled ; 18 véhicules, 12 mappés tracker, 0 VIN, 0 fuel_type, 0 candidat d'alerte ; aucune variable ENERGY_ en environnement.
+- **Conclusion : REAL ENERGY : BLOQUÉ — ENERGY_API_BASE_URL MANQUANTE. CONTRAT V1 RÉEL : NON TESTÉ. 0/12 véhicules testés. real_energy_validated=false conservé. Alertes désactivées. Mapping 12/18 inchangé.**
+- Relance de la campagne uniquement lorsque l'utilisateur fournira : URL réelle + mécanisme d'authentification vérifié + routes du contrat v1 vérifiées.
