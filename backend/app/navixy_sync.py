@@ -35,8 +35,16 @@ PRO_KEYWORDS = ("dépôt", "depot", "entrepôt", "entrepot", "chantier",
                 "atelier", "garage", "client", "bureau", "depôt", "site")
 PERSO_KEYWORDS = ("domicile", "home", "maison", "perso", "privé", "prive")
 
-# Heuristic fuel estimate: 8.5 L / 100 km
+# Heuristic fuel estimate: 8.5 L / 100 km — LEGACY, jamais une mesure.
 FUEL_L_PER_KM = 0.085
+# Métadonnées obligatoires pour toute valeur issue de ce calcul fixe :
+# elle doit TOUJOURS être identifiable comme ESTIMATED (jamais mesurée).
+LEGACY_FUEL_META = {
+    "measurement_type": "ESTIMATED",
+    "source": "LOGITRAK_HISTORICAL",
+    "method": "distance_km × 0.085 L/km (8,5 L/100 km)",
+    "unit": "L",
+}
 
 # Navixy track/list span limit
 TRACK_CHUNK_DAYS = 7

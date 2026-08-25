@@ -148,11 +148,11 @@ def _ids_covering_all_scenarios():
     from app import energy_client
     found: dict[int, str] = {}
     i = 0
-    while len(found) < 8 and i < 5000:
+    while len(found) < 10 and i < 20000:
         tid = f"fixture-trip-{i}"
         found.setdefault(energy_client.fixture_scenario_index(tid), tid)
         i += 1
-    assert len(found) == 8
+    assert len(found) == 10
     return found
 
 
@@ -214,6 +214,16 @@ def test_fixture_covers_all_contract_cases(monkeypatch):
     assert nul["availability"] == "AVAILABLE"
     assert nul["fuel"]["fuel_liters"]["value"] is None
     assert nul["fuel"]["fuel_liters"]["availability"] == "UNAVAILABLE"
+    # 8 : HEV — deux énergies mesurées SÉPARÉES (jamais fusionnées)
+    hev = by_scenario[8]
+    assert hev["powertrain"] == "HEV"
+    assert hev["electric"]["energy_kwh"]["measurement_type"] == "MEASURED"
+    assert hev["fuel"]["fuel_liters"]["measurement_type"] == "MEASURED"
+    assert hev["electric"]["soc_start_pct"]["value"] is None
+    # 9 : motorisation inconnue — rien d'inventé
+    unk = by_scenario[9]
+    assert unk["powertrain"] == "UNKNOWN"
+    assert unk["electric"] is None and unk["fuel"] is None
 
 
 def test_fixture_fleet_summary_contract(monkeypatch):

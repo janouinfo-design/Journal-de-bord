@@ -67,7 +67,7 @@ def _unavailable_trip(trip_id: str, reason: str) -> dict:
 # Fixtures contractuelles (tests d'affichage uniquement — jamais du réel)
 # ---------------------------------------------------------------------------
 def fixture_scenario_index(trip_id: str) -> int:
-    return int(hashlib.sha256((trip_id or "").encode()).hexdigest(), 16) % 8
+    return int(hashlib.sha256((trip_id or "").encode()).hexdigest(), 16) % 10
 
 
 def _fixture_trip(item: dict) -> dict:
@@ -115,10 +115,21 @@ def _fixture_trip(item: dict) -> dict:
             "consumption_kwh_100km": metric(17.0, "kWh/100km", "STALE", "MEASURED", "OBD", stale_ts)}}
     if idx == 6:  # Aucune donnée
         return _unavailable_trip(trip_id, "no_data")
-    # idx == 7 — valeur null explicite (inconnu ≠ 0)
-    return {**base, "powertrain": "ICE", "electric": None, "fuel": {
-        "fuel_liters": metric(None, "L", "UNAVAILABLE"),
-        "consumption_l_100km": metric(None, "L/100km", "UNAVAILABLE")}}
+    if idx == 7:  # valeur null explicite (inconnu ≠ 0)
+        return {**base, "powertrain": "ICE", "electric": None, "fuel": {
+            "fuel_liters": metric(None, "L", "UNAVAILABLE"),
+            "consumption_l_100km": metric(None, "L/100km", "UNAVAILABLE")}}
+    if idx == 8:  # Hybride (HEV) MESURÉ — deux énergies SÉPARÉES, jamais fusionnées
+        return {**base, "powertrain": "HEV", "electric": {
+            "soc_start_pct": unavailable_metric("%"),
+            "soc_end_pct": unavailable_metric("%"),
+            "energy_kwh": metric(round(dist * 0.04, 1), "kWh", "AVAILABLE", "MEASURED", "OBD", now),
+            "consumption_kwh_100km": metric(4.0, "kWh/100km", "AVAILABLE", "MEASURED", "OBD", now)},
+            "fuel": {
+                "fuel_liters": metric(round(dist * 0.052, 1), "L", "AVAILABLE", "MEASURED", "OBD", now),
+                "consumption_l_100km": metric(5.2, "L/100km", "AVAILABLE", "MEASURED", "OBD", now)}}
+    # idx == 9 — motorisation inconnue : aucune capability déduite, rien d'inventé
+    return {**base, "powertrain": "UNKNOWN", "electric": None, "fuel": None}
 
 
 def _fixture_fleet_summary() -> dict:
@@ -158,15 +169,26 @@ async def get_status() -> dict:
                 "contract_version": CONTRACT_VERSION}
 
 
-def _headers() -> dict:
+def _headers(tenant_id: str | None = None) -> dict:
     h = {"Content-Type": "application/json"}
     if _token():
         h["Authorization"] = f"Bearer {_token()}"
+    if tenant_id:
+        h["X-Tenant-Id"] = tenant_id
     return h
 
 
-async def trip_energy_batch(items: list[dict]) -> dict:
-    """items: [{trip_id, vehicle_id, vehicle_plate, navixy_tracker_id,
+def _sanitize_envelope(env) -> dict | None:
+    """Réponse Energy réelle : ne jamais laisser passer une enveloppe hors contrat."""
+    if not isinstance(env, dict) or not env.get("trip_id"):
+        return None
+    if env.get("availability") not in AVAILABILITY:
+        return _unavailable_trip(env["trip_id"], "energy_invalid_response")
+    return env
+
+
+async def trip_energy_batch(items: list[dict], tenant_id: str | None = None) -> dict:
+    """items: [{trip_id, vehicle_id, vehicle_plate, navixy_tracker_id, vin,
     start_time, end_time, distance_km}] → réponses contractuelles par trajet."""
     m = mode()
     if m == "fixture":
@@ -181,22 +203,37 @@ async def trip_energy_batch(items: list[dict]) -> dict:
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             r = await client.post(f"{_base_url()}/api/energy/v1/trips/energy:batch",
-                                  json={"contract_version": CONTRACT_VERSION, "trips": items},
-                                  headers=_headers())
+                                  json={"contract_version": CONTRACT_VERSION,
+                                        "tenant_id": tenant_id, "trips": items},
+                                  headers=_headers(tenant_id))
             r.raise_for_status()
             body = r.json()
-            results = [{**env, "mode": "real"} for env in (body.get("results") or [])]
-            return {"connected": True, "mode": "real",
-                    "contract_version": body.get("contract_version") or CONTRACT_VERSION,
-                    "results": results}
     except Exception:  # noqa: BLE001 — Energy injoignable ≠ erreur Journal
         results = [{**_unavailable_trip(it.get("trip_id"), "energy_unreachable"), "mode": "real"}
                    for it in items]
         return {"connected": False, "mode": "real",
                 "contract_version": CONTRACT_VERSION, "results": results}
+    # Payload invalide : Energy a répondu mais hors contrat → aucune donnée inventée
+    if not isinstance(body, dict) or not isinstance(body.get("results"), list):
+        results = [{**_unavailable_trip(it.get("trip_id"), "energy_invalid_response"), "mode": "real"}
+                   for it in items]
+        return {"connected": True, "mode": "real",
+                "contract_version": CONTRACT_VERSION, "results": results}
+    by_id = {}
+    for env in body["results"]:
+        s = _sanitize_envelope(env)
+        if s:
+            by_id[s["trip_id"]] = {**s, "mode": "real"}
+    # Réponse partielle : trajet absent → UNAVAILABLE explicite, jamais un 0
+    results = [by_id.get(it.get("trip_id"))
+               or {**_unavailable_trip(it.get("trip_id"), "missing_in_energy_response"), "mode": "real"}
+               for it in items]
+    return {"connected": True, "mode": "real",
+            "contract_version": body.get("contract_version") or CONTRACT_VERSION,
+            "results": results}
 
 
-async def fleet_summary(date_from: str, date_to: str) -> dict:
+async def fleet_summary(date_from: str, date_to: str, tenant_id: str | None = None) -> dict:
     m = mode()
     if m == "fixture":
         return _fixture_fleet_summary()
@@ -206,9 +243,68 @@ async def fleet_summary(date_from: str, date_to: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             r = await client.get(f"{_base_url()}/api/energy/v1/fleet/summary",
-                                 params={"from": date_from, "to": date_to}, headers=_headers())
+                                 params={"from": date_from, "to": date_to, "tenant_id": tenant_id},
+                                 headers=_headers(tenant_id))
             r.raise_for_status()
             return {**r.json(), "mode": "real"}
     except Exception:  # noqa: BLE001
         return {"availability": "UNAVAILABLE", "reason": "energy_unreachable",
                 "mode": "real", "contract_version": CONTRACT_VERSION, "metrics": None}
+
+
+async def vehicle_energy_summary(vehicle: dict, date_from: str, date_to: str,
+                                 tenant_id: str | None = None) -> dict:
+    """Résumé énergie d'UN véhicule sur une période (contrat proposé
+    GET /api/energy/v1/vehicles/{ref}/summary). L'identifiant de référence
+    définitif (vehicle_id / tracker_id / VIN) reste à convenir avec Energy."""
+    m = mode()
+    vid = vehicle.get("id") or vehicle.get("vehicle_id") or ""
+    if m == "fixture":
+        now = datetime.now(timezone.utc).isoformat()
+        idx = int(hashlib.sha256(vid.encode()).hexdigest(), 16) % 3
+        if idx == 0:
+            metrics = {"fuel_liters_total": metric(118.4, "L", "AVAILABLE", "MEASURED", "OBD", now),
+                       "energy_kwh_total": metric(None, "kWh", "UNAVAILABLE")}
+        elif idx == 1:
+            metrics = {"fuel_liters_total": metric(96.1, "L", "AVAILABLE", "ESTIMATED", "ENERGY_MODEL", now),
+                       "energy_kwh_total": metric(None, "kWh", "UNAVAILABLE")}
+        else:
+            metrics = {"fuel_liters_total": metric(None, "L", "UNAVAILABLE"),
+                       "energy_kwh_total": metric(None, "kWh", "UNAVAILABLE")}
+        return {"availability": "AVAILABLE", "mode": "fixture",
+                "contract_version": CONTRACT_VERSION, "metrics": metrics}
+    if m == "not_connected":
+        return {"availability": "UNAVAILABLE", "reason": "energy_not_connected",
+                "mode": "not_connected", "contract_version": CONTRACT_VERSION, "metrics": None}
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            r = await client.get(
+                f"{_base_url()}/api/energy/v1/vehicles/{vid}/summary",
+                params={"from": date_from, "to": date_to, "tenant_id": tenant_id,
+                        "navixy_tracker_id": vehicle.get("navixy_tracker_id"),
+                        "vin": vehicle.get("vin")},
+                headers=_headers(tenant_id))
+            r.raise_for_status()
+            return {**r.json(), "mode": "real"}
+    except Exception:  # noqa: BLE001
+        return {"availability": "UNAVAILABLE", "reason": "energy_unreachable",
+                "mode": "real", "contract_version": CONTRACT_VERSION, "metrics": None}
+
+
+# ---------------------------------------------------------------------------
+# Priorité centralisée des consommations (section 5 du cahier des charges)
+# ---------------------------------------------------------------------------
+CONSUMPTION_PRIORITY = ("MEASURED", "ESTIMATED", "REFERENCE")
+
+
+def best_metric(*candidates):
+    """Sélectionne la meilleure métrique de consommation disponible :
+    MEASURED > ESTIMATED > REFERENCE. Sinon None (NONE) — JAMAIS remplacé par 0."""
+    usable = [m for m in candidates
+              if m and m.get("value") is not None
+              and m.get("availability") in ("AVAILABLE", "STALE")]
+    for mt in CONSUMPTION_PRIORITY:
+        for m in usable:
+            if m.get("measurement_type") == mt:
+                return m
+    return None

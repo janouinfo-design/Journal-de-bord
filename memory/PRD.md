@@ -20,6 +20,18 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 42 — PRÉPARATION REAL ENERGY + SÉCURISATION FISCALE (19/08/2026)
+- **Client Energy durci** (energy_client.py) : bascule réel par config seule (ENERGY_API_BASE_URL + ENERGY_API_TOKEN optionnel), timeout 10 s, tenant_id transmis (payload + header X-Tenant-Id), vin/navixy_tracker_id/plate par trajet. Robustesse réel : HTTP 5xx/réseau → energy_unreachable ; payload hors contrat → energy_invalid_response ; réponse partielle → missing_in_energy_response ; enveloppes malformées assainies (_sanitize_envelope). Jamais de 0 inventé.
+- **Priorité centralisée** : CONSUMPTION_PRIORITY + best_metric() = MEASURED > ESTIMATED > REFERENCE, sinon None (NONE ≠ 0) ; STALE utilisable mais marqué.
+- **Fiscalité étiquetée ESTIMATED partout (valeurs conservées)** : LEGACY_FUEL_META (navixy_sync.py) exposé par /livre/dashboard (fuel_meta) et /livre/trips (fuel_l_meta) ; PDF fiscal suisse « Carburant pro/perso (L) — Estimé* » + note FUEL_ESTIMATED_NOTE (app/reports.py) ; exports CSV/XLSX « Carburant estimé (L) » ; PDF trajets « Carb. est. L » + total « (est.) ».
+- **Rapprochement préparatoire** GET /api/livre/energy/reconciliation/preview (admin/manager, alerting:disabled) : achats (fuel_transactions par véhicule/période) vs consommé (energy_client.vehicle_energy_summary) vs gap_l/gap_pct ; fiabilité MEASURED→EXPLOITABLE, ESTIMATED/REFERENCE→INDICATIF, NONE→IMPOSSIBLE. Aucune alerte réelle.
+- **Fixtures étendues à 10 scénarios** (% 10) : +HEV mesuré (deux énergies séparées), +powertrain UNKNOWN (rien d'inventé). vehicle_energy_summary fixture 3 variantes.
+- **Frontend** : REASON_LABEL += energy_invalid_response, missing_in_energy_response (TripEnergyBlock). Aucun autre changement UI (pas de refonte nav — interdit).
+- **Tests** : test_energy_real_prep.py (pannes simulées par doubles techniques locaux, priorité, fiscalité e2e, reconciliation e2e, fixtures étendues) + test_energy_contract.py mis à jour (10 scénarios) + test_iteration25_energy_fixture.py auto-skip si mode ≠ fixture → 32 PASS/1 skip ; **RÉGRESSION COMPLÈTE backend 474 PASS / 1 skip**.
+- **Mapping véhicule Journal↔Energy (prouvé DB)** : tenant_id UNKNOWN côté Energy ; vehicle_id UUID 18/18 UNKNOWN côté Energy ; navixy_tracker_id 12/18 PARTIAL (meilleur candidat clé) ; VIN 0/18 MISMATCH ; powertrain 0/18 UNKNOWN ; plaque jamais utilisée comme clé.
+- **CONCLUSION** : CONTRACT ENERGY PASS ; ENERGY RÉEL NON TESTÉ — URL MANQUANTE ; FISCALITÉ SAFE (étiquetée) ; RAPPROCHEMENT PRÊT (préparatoire). Bloquants REAL ENERGY : URL+token, validation contrat par projet Energy, clé véhicule commune (6 véhicules sans tracker), convention trip_ref, auth inter-services.
+- État env : aucune variable ENERGY_* dans backend/.env → défaut non connecté (honnête).
+
 ### Iteration 41 — INTÉGRATION ÉNERGIE (consommateur) + NAVIGATION MÉTIER (19/08/2026)
 - **Navigation** : Vue d'ensemble / Journal & trajets / Conducteurs / Énergie & carburant / Amendes / Rapports / Administration (admin seul) / Paramètres. Console PWA retirée du menu sauf rôle driver. AppLayout TABS réécrits (nav-drivers, nav-energy).
 - **Domaine Conducteurs** (`/livre/conducteurs`, admin+manager) : DriversLayout + Vue d'ensemble (DriversOverviewPage, KPI team+ble/dashboard), Chauffeurs (TeamDriversPage déplacée), Identification (IdentificationPage), Sessions (IdentificationPage view="sessions" — KPI masqués, zéro duplication), Éco-conduite (placeholder honnête, dépendance Energy).

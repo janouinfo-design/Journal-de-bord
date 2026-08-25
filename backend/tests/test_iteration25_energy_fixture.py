@@ -31,6 +31,19 @@ def _login(creds) -> dict:
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+def _current_energy_mode():
+    try:
+        h = _login(ADMIN)
+        return requests.get(f"{API}/livre/energy/status", headers=h, timeout=15).json().get("mode")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+if _current_energy_mode() != "fixture":
+    pytest.skip("Campagne fixture — nécessite ENERGY_API_MODE=fixture dans backend/.env",
+                allow_module_level=True)
+
+
 @pytest.fixture(scope="module")
 def admin_h():
     return _login(ADMIN)

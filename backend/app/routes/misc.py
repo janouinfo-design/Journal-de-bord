@@ -32,7 +32,7 @@ from app.navixy_client import (
     is_configured as navixy_configured,
     read_track_points as navixy_read_track,
 )
-from app.navixy_sync import sync_navixy
+from app.navixy_sync import sync_navixy, LEGACY_FUEL_META
 from app.rules import apply_rules_to_all
 from app.scheduler import (
     get_state as get_sched_state,
@@ -257,7 +257,8 @@ async def list_trips(
     )
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(limit)
     trips = [apply_privacy(t, settings, user["role"]) for t in trips]
-    return {"trips": trips, "settings_mode": settings.get("mode")}
+    return {"trips": trips, "settings_mode": settings.get("mode"),
+            "fuel_l_meta": LEGACY_FUEL_META}
 
 
 class ClassifyIn(BaseModel):

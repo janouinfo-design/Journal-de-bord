@@ -12,6 +12,13 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+# Mention obligatoire : le carburant des trajets est un calcul LEGACY (8,5 L/100 km),
+# JAMAIS une mesure télématique. Toute sortie fiscale doit porter cette étiquette.
+FUEL_ESTIMATED_NOTE = (
+    "* Carburant : Estimé — calcul historique LOGITRAK (8,5 L/100 km). "
+    "Valeur non mesurée : ne provient ni d'une mesure télématique (OBD/CAN) ni du module Énergie."
+)
+
 
 def _fmt_dt(s: str) -> str:
     try:
@@ -26,7 +33,7 @@ def trips_to_csv(trips, classification_label: str) -> bytes:
     w.writerow([
         "Date départ", "Date arrivée", "Conducteur", "Véhicule",
         "Départ", "Arrivée", "Distance (km)", "Durée (min)",
-        "Carburant (L)", "Vitesse moyenne", "Vitesse max", "Type",
+        "Carburant estimé (L)", "Vitesse moyenne", "Vitesse max", "Type",
     ])
     for t in trips:
         w.writerow([
@@ -48,7 +55,7 @@ def trips_to_xlsx(trips, classification_label: str, title: str) -> bytes:
     headers = [
         "Date départ", "Date arrivée", "Conducteur", "Véhicule",
         "Départ", "Arrivée", "Distance (km)", "Durée (min)",
-        "Carburant (L)", "Vit. moyenne", "Vit. max", "Type",
+        "Carburant estimé (L)", "Vit. moyenne", "Vit. max", "Type",
     ]
     ws.append([title])
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -138,7 +145,7 @@ def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "
     meta_parts.append(f"{len(trips)} trajet{'s' if len(trips) > 1 else ''}")
     meta_parts.append(f"{total_km:,.1f} km".replace(",", "'"))
     meta_parts.append(f"{hours}h {mins:02d}min")
-    meta_parts.append(f"{total_fuel:,.2f} L".replace(",", "'"))
+    meta_parts.append(f"{total_fuel:,.2f} L (est.)".replace(",", "'"))
     flow.append(Paragraph(" · ".join(meta_parts), sub_style))
     flow.append(Spacer(1, 0.35 * cm))
 
@@ -151,7 +158,7 @@ def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "
         P("Arrivée", head_style),
         P("Km", head_style),
         P("Durée", head_style),
-        P("Carb. L", head_style),
+        P("Carb. est. L", head_style),
         P("Type", head_style),
     ]
 
@@ -253,8 +260,8 @@ def swiss_tax_report_pdf(stats: dict, year: int, owner: str = "") -> bytes:
         ["Kilomètres totaux", f"{stats['total_km']:,.1f} km".replace(",", "'")],
         ["Pourcentage professionnel", f"{stats['pct_pro']:.1f} %"],
         ["Pourcentage personnel", f"{stats['pct_perso']:.1f} %"],
-        ["Carburant professionnel (L)", f"{stats['pro_fuel']:.2f}"],
-        ["Carburant personnel (L)", f"{stats['perso_fuel']:.2f}"],
+        ["Carburant professionnel (L) — Estimé*", f"{stats['pro_fuel']:.2f}"],
+        ["Carburant personnel (L) — Estimé*", f"{stats['perso_fuel']:.2f}"],
     ]
     t = Table(data, colWidths=[9 * cm, 7 * cm])
     t.setStyle(TableStyle([
@@ -271,6 +278,11 @@ def swiss_tax_report_pdf(stats: dict, year: int, owner: str = "") -> bytes:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     flow.append(t)
+    flow.append(Spacer(1, 0.4 * cm))
+    flow.append(Paragraph(
+        FUEL_ESTIMATED_NOTE,
+        ParagraphStyle("fuelnote", parent=body, fontSize=9, textColor=colors.HexColor("#B45309")),
+    ))
     flow.append(Spacer(1, 0.8 * cm))
     flow.append(Paragraph(
         "Ce document est généré automatiquement par Logitrak — Livre de Bord, "

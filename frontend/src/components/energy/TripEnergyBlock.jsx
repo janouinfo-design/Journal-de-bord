@@ -15,6 +15,8 @@ const SOURCE_LABEL = {
 export const REASON_LABEL = {
   energy_not_connected: "Module Énergie non connecté",
   energy_unreachable: "Module Énergie injoignable",
+  energy_invalid_response: "Réponse du module Énergie invalide",
+  missing_in_energy_response: "Trajet absent de la réponse du module Énergie",
   no_data: "Aucune donnée transmise par le module Énergie",
   trip_not_found: "Trajet inaccessible",
 };
