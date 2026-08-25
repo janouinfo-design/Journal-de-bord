@@ -822,3 +822,15 @@ affectation manuelle, droits par rôle.
 - Preuves d'état (lecture seule) : `GET /livre/energy/status` → connected=false, mode=not_connected, base_url_configured=false ; verrou alertes enabled=false / real_energy_validated=false / dispatch=disabled ; 18 véhicules, 12 mappés tracker, 0 VIN, 0 fuel_type, 0 candidat d'alerte ; aucune variable ENERGY_ en environnement.
 - **Conclusion : REAL ENERGY : BLOQUÉ — ENERGY_API_BASE_URL MANQUANTE. CONTRAT V1 RÉEL : NON TESTÉ. 0/12 véhicules testés. real_energy_validated=false conservé. Alertes désactivées. Mapping 12/18 inchangé.**
 - Relance de la campagne uniquement lorsque l'utilisateur fournira : URL réelle + mécanisme d'authentification vérifié + routes du contrat v1 vérifiées.
+
+
+---
+
+## Campagne REAL ENERGY — 2e tentative du 25/08/2026 : NON CONNECTÉ par décision utilisateur
+
+- Réponse du projet ÉNERGIE rapportée : backend preview joignable (`energy-telemetry-1.preview.emergentagent.com`), AUCUNE auth, routes socle seulement (`/api/energy/health|mapping|trackers/{id}/metrics|capabilities`), endpoints métier v1 A–E NON développés, contrat v1 PARTIEL, PRÊT À CONNECTER : NON (verdict Energy lui-même).
+- Vérifications Journal (lecture seule) : mapping tracker_id **12/12 MATCH exact** entre `vehicles.navixy_tracker_id` (Journal) et les 12 trackers reconnus côté Energy. Routes du client Journal (`/api/energy/v1/health`, `POST /v1/trips/energy:batch`, `/v1/fleet/summary`, `/v1/vehicles/{ref}/summary`) ≠ routes exposées par Energy → 404 garanti si branché tel quel.
+- Décision utilisateur (option d) : NE PAS connecter, NE PAS adapter le client Journal aux routes socle temporaires (contrat v1 reste la cible), EXIGER l'auth d'abord, URL preview reconnue mais NON autorisée comme ENERGY_API_BASE_URL. Prompt de spécification préparé pour le projet ÉNERGIE (archivé : /app/memory/energy_v1_spec_prompt.md) : 4 routes v1 exactes, enveloppe métrique, auth Bearer (`ENERGY_API_TOKEN` déjà supporté par le client Journal + `X-Tenant-Id`), résolution par navixy_tracker_id uniquement.
+- Aucune modification de code Journal. Verrou intact : real_energy_validated=false, alertes désactivées, 0 candidat. Régression 567 PASS / 0 FAIL / 1 SKIP toujours valide.
+- **Conclusion : ENERGY BACKEND RÉEL : NON CONNECTÉ · CONTRAT V1 RÉEL : NON TESTÉ (aucun appel réel émis par le Journal ; d'après ÉNERGIE, routes métier absentes) · 0/12 véhicules testés · MAPPING 12/18 fiable (tracker_id 12/12 corroborés sur pièces).**
+- Relance : lorsque ÉNERGIE aura livré les 4 routes v1 + auth Bearer et fourni l'URL + le token.
