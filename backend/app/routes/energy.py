@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app import energy_client
 from app.auth import require_roles
 from app.db import get_db
-from app.routes._helpers import filter_trips_query
+from app.routes._helpers import filter_trips_query, get_settings_doc
 from app.tenant_context import get_effective_tenant_id
 
 router = APIRouter(prefix="/energy", tags=["energy"])
@@ -22,6 +22,48 @@ router = APIRouter(prefix="/energy", tags=["energy"])
 READ_ROLES = ("admin", "manager", "lecture_seule")
 TRIP_ROLES = ("admin", "manager", "lecture_seule", "driver")
 MAX_BATCH = 100
+
+# Motorisation : uniquement depuis la donnée prouvée vehicles.fuel_type —
+# JAMAIS déduite du nom/modèle. Non prouvée → UNKNOWN.
+_POWERTRAIN_FROM_FUEL_TYPE = {
+    "diesel": "ICE", "essence": "ICE", "petrol": "ICE",
+    "hybrid": "HEV", "hev": "HEV", "phev": "PHEV",
+    "electric": "BEV", "bev": "BEV",
+}
+
+
+def _powertrain(fuel_type) -> str:
+    return _POWERTRAIN_FROM_FUEL_TYPE.get((fuel_type or "").lower(), "UNKNOWN")
+
+
+def _reconciliation_status(mapped: bool, tx_count: int, consumed,
+                           gap_l, gap_pct, threshold_pct):
+    """Statuts métier centralisés — OK / A_CONTROLER / INDICATIF / IMPOSSIBLE.
+    IMPOSSIBLE n'est JAMAIS assimilé à un écart zéro."""
+    if not mapped:
+        return "IMPOSSIBLE", "Véhicule sans tracker Navixy associé. Rapprochement impossible."
+    if consumed is None:
+        return "IMPOSSIBLE", "Consommation indisponible pour cette période. Rapprochement impossible."
+    if tx_count == 0:
+        return "IMPOSSIBLE", "Aucun achat de carburant sur la période. Rapprochement impossible."
+    mt = consumed.get("measurement_type")
+    if consumed.get("availability") == "STALE":
+        return "INDICATIF", "Consommation mesurée mais périmée (STALE). Écart affiché à titre indicatif uniquement."
+    if mt == "ESTIMATED":
+        return "INDICATIF", "Consommation estimée. Écart affiché à titre indicatif uniquement."
+    if mt == "REFERENCE":
+        return "INDICATIF", "Consommation de référence. Rapprochement informatif uniquement."
+    if mt == "MEASURED":
+        if gap_l is None:
+            return "IMPOSSIBLE", "Écart non calculable (données incompatibles). Rapprochement impossible."
+        base = f"Consommation mesurée. Écart de {gap_l:+.1f} L entre achats et consommation."
+        if threshold_pct is not None and gap_pct is not None and abs(gap_pct) > threshold_pct:
+            return "A_CONTROLER", (f"{base} ({gap_pct:+.1f} %) — au-delà du seuil configuré "
+                                   f"({threshold_pct} %). Aucune alerte automatique émise.")
+        if threshold_pct is None:
+            return "OK", f"{base} Aucun seuil configuré — aucune alerte automatique."
+        return "OK", f"{base} Écart dans les limites configurées ({threshold_pct} %)."
+    return "IMPOSSIBLE", "Type de mesure inconnu. Rapprochement impossible."
 
 
 def _tenant_or_400() -> str:
@@ -120,28 +162,35 @@ async def energy_overview(user=Depends(require_roles(*READ_ROLES))):
 async def reconciliation_preview(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    user=Depends(require_roles("admin", "manager")),
+    vehicle_id: Optional[str] = None,
+    user=Depends(require_roles("admin", "manager", "lecture_seule")),
 ):
-    """MODÈLE PRÉPARATOIRE achats vs consommation — AUCUNE alerte émise.
-    Litres achetés = transactions cartes (commercial). Consommation = module
-    Énergie uniquement (priorité MEASURED > ESTIMATED > REFERENCE, sinon NONE).
-    Fiabilité : MEASURED→EXPLOITABLE, ESTIMATED/REFERENCE→INDICATIF, NONE→IMPOSSIBLE."""
+    """Rapprochement achats vs consommation — DIAGNOSTIC/PREVIEW, AUCUNE alerte.
+    Achats = transactions cartes (commercial). Consommation = module Énergie
+    uniquement (priorité MEASURED > ESTIMATED > REFERENCE, sinon NONE).
+    Statuts centralisés : OK / A_CONTROLER / INDICATIF / IMPOSSIBLE."""
     tid = _tenant_or_400()
     db = get_db()
     today = datetime.now(timezone.utc).date()
     dfrom = date_from or today.replace(day=1).isoformat()
     dto = date_to or today.isoformat()
+    vq = {"id": vehicle_id} if vehicle_id else {}
     vehicles = await db.vehicles.find(
-        {}, {"_id": 0, "id": 1, "plate": 1, "navixy_tracker_id": 1, "vin": 1}).to_list(1000)
+        vq, {"_id": 0, "id": 1, "plate": 1, "model": 1,
+             "navixy_tracker_id": 1, "vin": 1, "fuel_type": 1}).to_list(1000)
+    txq = {"tx_datetime": {"$gte": dfrom, "$lte": dto + "T23:59:59"}}
+    if vehicle_id:
+        txq["vehicle_id"] = vehicle_id
     txs = await db.fuel_transactions.find(
-        {"tx_datetime": {"$gte": dfrom, "$lte": dto + "T23:59:59"}},
-        {"_id": 0, "vehicle_id": 1, "quantity": 1, "unit": 1, "amount_chf": 1}).to_list(100000)
+        txq, {"_id": 0, "vehicle_id": 1, "quantity": 1, "unit": 1,
+              "amount_chf": 1, "source": 1}).to_list(100000)
     purchased: dict = {}
     for tx in txs:
         vid = tx.get("vehicle_id")
         if not vid:
             continue
-        p = purchased.setdefault(vid, {"liters": 0.0, "kwh": 0.0, "amount_chf": 0.0, "tx_count": 0})
+        p = purchased.setdefault(vid, {"liters": 0.0, "kwh": 0.0, "amount_chf": 0.0,
+                                       "tx_count": 0, "sources": {}})
         qty = tx.get("quantity") or 0
         if tx.get("unit") == "L":
             p["liters"] += qty
@@ -149,33 +198,54 @@ async def reconciliation_preview(
             p["kwh"] += qty
         p["amount_chf"] += tx.get("amount_chf") or 0
         p["tx_count"] += 1
-    status = await energy_client.get_status()
+        src = tx.get("source") or "inconnu"
+        p["sources"][src] = p["sources"].get(src, 0) + 1
+    settings = await get_settings_doc(db)
+    threshold_pct = settings.get("reconciliation_gap_alert_pct")  # non configuré → None
+    status_svc = await energy_client.get_status()
     rows = []
     for v in vehicles:
+        mapped = bool(v.get("navixy_tracker_id"))
         summ = await energy_client.vehicle_energy_summary(v, dfrom, dto, tenant_id=tid)
         metrics = summ.get("metrics") or {}
         consumed = energy_client.best_metric(metrics.get("fuel_liters_total"))
-        buy = purchased.get(v["id"], {"liters": 0.0, "kwh": 0.0, "amount_chf": 0.0, "tx_count": 0})
+        consumed_electric = energy_client.best_metric(metrics.get("energy_kwh_total"))
+        buy = purchased.get(v["id"], {"liters": 0.0, "kwh": 0.0, "amount_chf": 0.0,
+                                      "tx_count": 0, "sources": {}})
         gap_l = gap_pct = None
-        if consumed is not None:
+        if consumed is not None and buy["tx_count"] > 0:
             gap_l = round(buy["liters"] - consumed["value"], 2)
             if buy["liters"] > 0:
                 gap_pct = round(gap_l / buy["liters"] * 100, 1)
         mt = consumed.get("measurement_type") if consumed else None
+        status, reason = _reconciliation_status(
+            mapped, buy["tx_count"], consumed, gap_l, gap_pct, threshold_pct)
         reliability = ("EXPLOITABLE" if mt == "MEASURED"
                        else "INDICATIF" if mt in ("ESTIMATED", "REFERENCE")
                        else "IMPOSSIBLE")
         rows.append({
             "vehicle_id": v["id"],
             "plate": v.get("plate"),
+            "model": v.get("model"),
+            "navixy_tracker_id": v.get("navixy_tracker_id"),
+            "mapped": mapped,
+            "powertrain": _powertrain(v.get("fuel_type")),
             "purchased": {"liters": round(buy["liters"], 2), "kwh": round(buy["kwh"], 2),
-                          "amount_chf": round(buy["amount_chf"], 2), "tx_count": buy["tx_count"]},
+                          "amount_chf": round(buy["amount_chf"], 2),
+                          "tx_count": buy["tx_count"], "sources": buy["sources"]},
             "consumed_fuel": consumed,
+            "consumed_electric": consumed_electric,
             "consumption_measurement_type": mt or "NONE",
             "gap_l": gap_l,
             "gap_pct": gap_pct,
             "reliability": reliability,
+            "status": status,
+            "status_reason": reason,
         })
     return {"preview": True, "alerting": "disabled",
-            "connected": status.get("connected", False), "mode": status.get("mode"),
-            "period": {"from": dfrom, "to": dto}, "rows": rows}
+            "connected": status_svc.get("connected", False), "mode": status_svc.get("mode"),
+            "period": {"from": dfrom, "to": dto},
+            "thresholds": {"gap_alert_pct": threshold_pct,
+                           "configured": threshold_pct is not None,
+                           "note": "Écran diagnostic/preview — alertes automatiques désactivées"},
+            "rows": rows}

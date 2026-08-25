@@ -1,7 +1,7 @@
 import { Outlet } from "react-router-dom";
 import SubTabs from "@/components/layout/SubTabs";
 import { useAuth } from "@/contexts/AuthContext";
-import { Gauge, Zap, Fuel, AlertTriangle } from "lucide-react";
+import { Gauge, Zap, Fuel, AlertTriangle, Scale } from "lucide-react";
 
 export default function EnergyLayout() {
   const { user } = useAuth();
@@ -12,6 +12,7 @@ export default function EnergyLayout() {
     { to: "/livre/energie/consommations", label: "Consommations", icon: Zap, testId: "subtab-energy-consumption" },
     { to: "/livre/energie/approvisionnements", label: "Approvisionnements", icon: Fuel,
       testId: "subtab-energy-supply", matchPrefix: "/livre/energie/approvisionnements" },
+    { to: "/livre/energie/rapprochement", label: "Rapprochement", icon: Scale, testId: "subtab-energy-reconciliation" },
     { to: "/livre/energie/anomalies", label: "Anomalies", icon: AlertTriangle, testId: "subtab-energy-anomalies" },
   ];
 

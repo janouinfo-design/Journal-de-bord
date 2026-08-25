@@ -36,6 +36,7 @@ import FuelAnomaliesPage from "@/pages/fuel/FuelAnomaliesPage";
 import EnergyLayout from "@/pages/energy/EnergyLayout";
 import EnergyOverviewPage from "@/pages/energy/EnergyOverviewPage";
 import EnergyConsumptionPage from "@/pages/energy/EnergyConsumptionPage";
+import EnergyReconciliationPage from "@/pages/energy/EnergyReconciliationPage";
 import DriversLayout from "@/pages/drivers/DriversLayout";
 import DriversOverviewPage from "@/pages/drivers/DriversOverviewPage";
 import EcoDrivingPage from "@/pages/drivers/EcoDrivingPage";
@@ -135,6 +136,8 @@ function App() {
                 <ProtectedRoute roles={AML}><EnergyOverviewPage /></ProtectedRoute>} />
               <Route path="consommations" element={
                 <ProtectedRoute roles={AML}><EnergyConsumptionPage /></ProtectedRoute>} />
+              <Route path="rapprochement" element={
+                <ProtectedRoute roles={AML}><EnergyReconciliationPage /></ProtectedRoute>} />
               <Route path="anomalies" element={
                 <ProtectedRoute roles={AML}><FuelAnomaliesPage /></ProtectedRoute>} />
               <Route path="approvisionnements" element={<FuelLayout />}>
