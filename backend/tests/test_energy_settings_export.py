@@ -253,7 +253,9 @@ class TestExport:
     def test_french_labels(self, admin_h):
         rows = _data_rows(_load_ws(_export(admin_h)))
         for r in rows:
-            assert r.get("Type de mesure") in ("Mesuré", "Estimé", "Référence", "Aucun")
+            assert r.get("Type de mesure") in ("Mesuré", "Estimé", "Référence", "Aucun",
+                                               "Mesuré (périmé)", "Estimé (périmé)",
+                                               "Référence (périmé)")
             assert r.get("Statut") in ("OK", "À contrôler", "Indicatif", "Impossible")
             assert r.get("Fiabilité") in ("Exploitable", "Indicatif", "Impossible")
 

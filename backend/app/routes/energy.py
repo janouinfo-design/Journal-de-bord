@@ -83,11 +83,54 @@ def _tenant_or_400() -> str:
     return tid
 
 
+async def _resolve_energy_tenant(db) -> Optional[str]:
+    """Correspondance tenant Journal → tenant Energy (settings, FAIL-CLOSED).
+    Aucune valeur configurée → AUCUN appel Energy. Jamais de fallback global,
+    jamais le tenant par défaut d'Energy, jamais hérité d'un autre tenant."""
+    settings = await get_settings_doc(db)
+    et = settings.get("energy_tenant_id")
+    return et.strip() if isinstance(et, str) and et.strip() else None
+
+
 @router.get("/status")
 async def energy_status(user=Depends(require_roles(*TRIP_ROLES))):
     _tenant_or_400()
     status = await energy_client.get_status()
-    return {**status, "base_url_configured": energy_client.is_configured()}
+    et = await _resolve_energy_tenant(get_db())
+    return {**status, "base_url_configured": energy_client.is_configured(),
+            "energy_tenant_configured": et is not None}
+
+
+class EnergyTenantMappingIn(BaseModel):
+    energy_tenant_id: Optional[str] = None
+
+
+@router.get("/tenant-mapping")
+async def get_energy_tenant_mapping(user=Depends(require_roles("admin", "manager"))):
+    _tenant_or_400()
+    et = await _resolve_energy_tenant(get_db())
+    return {"energy_tenant_id": et, "configured": et is not None, "fail_closed": True}
+
+
+@router.put("/tenant-mapping")
+async def put_energy_tenant_mapping(payload: EnergyTenantMappingIn,
+                                    user=Depends(require_roles("admin"))):
+    """Correspondance tenant Journal → tenant Energy. Admin uniquement, audité.
+    null/vide = mapping supprimé → fail-closed (aucun appel Energy)."""
+    tid = _tenant_or_400()
+    db = get_db()
+    old = await _resolve_energy_tenant(db)
+    new = payload.energy_tenant_id
+    if new is not None:
+        new = new.strip() or None
+    if new is not None and (len(new) > 100 or not re.match(r"^[A-Za-z0-9_.:-]+$", new)):
+        raise HTTPException(400, "Identifiant tenant Energy invalide")
+    await db.settings.update_one({"id": "default"},
+                                 {"$set": {"energy_tenant_id": new}}, upsert=True)
+    from app.audit import log_audit
+    await log_audit("energy.tenant_mapping_updated", user, {
+        "journal_tenant_id": tid, "before": old, "after": new, "result": "ok"})
+    return {"energy_tenant_id": new, "configured": new is not None, "fail_closed": True}
 
 
 class TripEnergyIn(BaseModel):
@@ -124,7 +167,16 @@ async def trips_energy(payload: TripEnergyIn, user=Depends(require_roles(*TRIP_R
         "end_time": t.get("end_time"),
         "distance_km": t.get("distance_km"),
     } for t in trips]
-    resp = await energy_client.trip_energy_batch(items, tenant_id=tid)
+    et = await _resolve_energy_tenant(db)
+    if et is None:
+        mode = "real" if energy_client.is_configured() else "not_connected"
+        return {"connected": False, "mode": mode,
+                "tenant_mapping": "NOT_CONFIGURED",
+                "reason": "energy_tenant_not_configured",
+                "contract_version": energy_client.CONTRACT_VERSION,
+                "results": [energy_client._unavailable_trip(i, "energy_tenant_not_configured")
+                            for i in ids]}
+    resp = await energy_client.trip_energy_batch(items, tenant_id=et)
     found = {r.get("trip_id") for r in resp["results"]}
     for tid in ids:
         if tid not in found:
@@ -147,7 +199,12 @@ async def energy_overview(user=Depends(require_roles(*READ_ROLES))):
     db = get_db()
     today = datetime.now(timezone.utc).date()
     month_start = today.replace(day=1).isoformat()
-    energy = await energy_client.fleet_summary(month_start, today.isoformat(), tenant_id=tid)
+    et = await _resolve_energy_tenant(db)
+    if et is None:
+        energy = {"availability": "UNAVAILABLE", "reason": "energy_tenant_not_configured",
+                  "contract_version": energy_client.CONTRACT_VERSION, "metrics": None}
+    else:
+        energy = await energy_client.fleet_summary(month_start, today.isoformat(), tenant_id=et)
     vehicles_total = await db.vehicles.count_documents({})
     powertrain_set = await db.vehicles.count_documents(
         {"fuel_type": {"$exists": True, "$nin": [None, ""]}})
@@ -157,8 +214,9 @@ async def energy_overview(user=Depends(require_roles(*READ_ROLES))):
         {"battery_capacity_kwh": {"$exists": True, "$ne": None}})
     status = await energy_client.get_status()
     return {
-        "connected": status.get("connected", False),
+        "connected": status.get("connected", False) and et is not None,
         "mode": status.get("mode"),
+        "tenant_mapping": "CONFIGURED" if et else "NOT_CONFIGURED",
         "period": {"from": month_start, "to": today.isoformat()},
         "energy": energy,
         "fleet": {"vehicles_total": vehicles_total,
@@ -225,10 +283,22 @@ async def _build_reconciliation(db, tid: str, dfrom: str, dto: str,
     threshold_pct = settings.get("reconciliation_threshold_percent")
     threshold_l = settings.get("reconciliation_threshold_liters")
     status_svc = await energy_client.get_status()
+    energy_tenant = await _resolve_energy_tenant(db)
+    if energy_tenant is None:
+        status_svc = {**status_svc, "connected": False,
+                      "tenant_mapping": "NOT_CONFIGURED",
+                      "reason": "energy_tenant_not_configured"}
+    else:
+        status_svc = {**status_svc, "tenant_mapping": "CONFIGURED"}
     rows = []
     for v in vehicles:
         mapped = bool(v.get("navixy_tracker_id"))
-        summ = await energy_client.vehicle_energy_summary(v, dfrom, dto, tenant_id=tid)
+        if energy_tenant is None:
+            summ = {"availability": "UNAVAILABLE",
+                    "reason": "energy_tenant_not_configured", "metrics": None}
+        else:
+            summ = await energy_client.vehicle_energy_summary(
+                v, dfrom, dto, tenant_id=energy_tenant)
         metrics = summ.get("metrics") or {}
         consumed = energy_client.best_metric(metrics.get("fuel_liters_total"))
         consumed_electric = energy_client.best_metric(metrics.get("energy_kwh_total"))

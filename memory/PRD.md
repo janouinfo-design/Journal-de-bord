@@ -834,3 +834,18 @@ affectation manuelle, droits par rôle.
 - Aucune modification de code Journal. Verrou intact : real_energy_validated=false, alertes désactivées, 0 candidat. Régression 567 PASS / 0 FAIL / 1 SKIP toujours valide.
 - **Conclusion : ENERGY BACKEND RÉEL : NON CONNECTÉ · CONTRAT V1 RÉEL : NON TESTÉ (aucun appel réel émis par le Journal ; d'après ÉNERGIE, routes métier absentes) · 0/12 véhicules testés · MAPPING 12/18 fiable (tracker_id 12/12 corroborés sur pièces).**
 - Relance : lorsque ÉNERGIE aura livré les 4 routes v1 + auth Bearer et fourni l'URL + le token.
+
+## Campagne REAL ENERGY — 26/08/2026 : PROD energie.logitrak.ch — CHAÎNE END-TO-END PROUVÉE
+- Détail complet : /app/memory/CHANGELOG.md (entrée 26/08/2026).
+- ÉNERGIE déployé en production sur le VPS utilisateur (https://energie.logitrak.ch, TLS + Bearer).
+- Mapping tenant : settings.energy_tenant_id, fail-closed, tenant-isolé, audité, UI Paramètres.
+  default → paas_13588 (persisté via PUT admin audité). Client Test B : aucun mapping, fail-closed prouvé.
+- Correctifs client prouvés : batch wire ref/start/end ; vehicle summary {ref}=navixy_tracker_id.
+- Donnée réelle traversant toute la chaîne : AUDI 781479 = 28.0 L / STALE / MEASURED / NAVIXY_CAN
+  (Energy → backend → API → UI badge Périmé → XLSX « Mesuré (périmé) » → PDF).
+- Batch par trajet : UNAVAILABLE no_per_trip_energy (honnête — Energy ne fournit pas d'énergie par trajet).
+- Tests : ciblés 26/26 · RÉGRESSION 582 PASS / 0 FAIL / 3 SKIP · testing agent iteration_29 : 7/7 PASS.
+- real_energy_validated : FALSE (bloquants : pas d'énergie par trajet côté Energy ; legacy 0,085 latent BEV ;
+  flip réservé à une décision utilisateur explicite).
+- P1 externe : fallback tenant par défaut côté Energy (neutralisé par fail-closed Journal) ;
+  écarts contrat : health "v1" vs batch "1.0", summaries sans contract_version.

@@ -31,7 +31,7 @@ function MetricCard({ label, icon: Icon, metric, testId }) {
       ) : (
         <div className="mt-1.5 flex items-center gap-2 flex-wrap">
           <p className="text-xl font-semibold text-slate-800">
-            {Number(metric.value).toLocaleString("fr-CH")} <span className="text-xs text-slate-500 font-normal">{metric.unit}</span>
+            {Number(metric.value).toLocaleString("fr-CH")} <span className="text-xs text-slate-500 font-normal">{metric.unit === "count" ? "" : metric.unit}</span>
           </p>
           <EnergyBadge metric={metric} />
         </div>
@@ -91,7 +91,7 @@ export default function EnergyOverviewPage() {
       ) : (
         <div data-testid="energy-status-banner"
              className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md px-4 py-3 text-sm flex items-center gap-2">
-          <Zap className="w-4 h-4 shrink-0" /> Module Énergie connecté (contrat v{status?.contract_version || "1.0"}).
+          <Zap className="w-4 h-4 shrink-0" /> Module Énergie connecté (contrat {String(status?.contract_version || "1.0").startsWith("v") ? status.contract_version : `v${status?.contract_version || "1.0"}`}).
         </div>
       )}
 

@@ -24,6 +24,7 @@ import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
 import NotificationsPreferencesCard from "@/components/livre/NotificationsPreferencesCard";
 import ReconciliationSettingsCard from "@/components/livre/ReconciliationSettingsCard";
 import ReconciliationAlertsCard from "@/components/livre/ReconciliationAlertsCard";
+import EnergyTenantCard from "@/components/livre/EnergyTenantCard";
 import SmtpTestCard from "@/components/livre/SmtpTestCard";
 
 const MODE_OPTIONS = [
@@ -459,6 +460,7 @@ export default function SettingsPage() {
       {/* SECTION 5 — NOTIFICATION PREFERENCES */}
       <NotificationsPreferencesCard />
 
+      <EnergyTenantCard />
       <ReconciliationSettingsCard />
       <ReconciliationAlertsCard />
     </div>

@@ -120,6 +120,11 @@ def _metric_cell(m):
     return round(float(m["value"]), 2)
 
 
+def _stale_suffix(metric) -> str:
+    """STALE reste STALE : une mesure périmée n'est jamais présentée comme fraîche."""
+    return " (périmé)" if (metric or {}).get("availability") == "STALE" else ""
+
+
 def reconciliation_to_xlsx(rows, meta: dict) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -178,10 +183,10 @@ def reconciliation_to_xlsx(rows, meta: dict) -> bytes:
             buy.get("tx_count") if has_buy else "",
             round(buy.get("amount_chf", 0), 2) if has_buy else "",
             _metric_cell(cf),
-            RECON_MEASUREMENT_LABEL.get(r.get("consumption_measurement_type"), "Aucun"),
+            RECON_MEASUREMENT_LABEL.get(r.get("consumption_measurement_type"), "Aucun") + _stale_suffix(cf),
             (cf or {}).get("source") or "",
             _metric_cell(ce),
-            RECON_MEASUREMENT_LABEL.get((ce or {}).get("measurement_type"), "") if ce_present else "",
+            (RECON_MEASUREMENT_LABEL.get((ce or {}).get("measurement_type"), "") + _stale_suffix(ce)) if ce_present else "",
             ((ce or {}).get("source") or "") if ce_present else "",
             r.get("gap_l") if r.get("gap_l") is not None else "",
             r.get("gap_pct") if r.get("gap_pct") is not None else "",
@@ -283,7 +288,7 @@ def reconciliation_to_pdf(rows, meta: dict) -> bytes:
                 P(buy.get("tx_count") if has_buy else "—"),
                 P(_pdf_num(buy.get("amount_chf")) if has_buy else "—"),
                 P(_pdf_num(cf.get("value"))),
-                P(RECON_MEASUREMENT_LABEL.get(r.get("consumption_measurement_type"), "Aucun")),
+                P(RECON_MEASUREMENT_LABEL.get(r.get("consumption_measurement_type"), "Aucun") + _stale_suffix(cf)),
                 P(_pdf_num(ce.get("value"))),
                 P(_pdf_num(r.get("gap_l"))),
                 P(_pdf_num(r.get("gap_pct"), 1)),

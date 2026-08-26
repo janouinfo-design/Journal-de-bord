@@ -132,6 +132,19 @@ class TestPreviewE2E:
     def test_all_impossible_when_disconnected(self, preview):
         if preview["mode"] == "fixture":
             pytest.skip("mode fixture actif")
+        if preview["connected"]:
+            # Energy réel connecté : invariants permanents — jamais de zéro fabriqué
+            for row in preview["rows"]:
+                assert row["status_reason"]
+                cf = row["consumed_fuel"]
+                if cf is None:
+                    assert row["consumption_measurement_type"] == "NONE"
+                else:
+                    assert cf["value"] is not None, "métrique retenue → valeur réelle, jamais 0 fabriqué"
+                    assert cf["availability"] in ("AVAILABLE", "STALE")
+                if row["gap_l"] is None:
+                    assert row["gap_pct"] is None
+            return
         assert preview["connected"] is False
         for row in preview["rows"]:
             assert row["status"] == "IMPOSSIBLE"

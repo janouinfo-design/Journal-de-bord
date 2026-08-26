@@ -18,6 +18,9 @@ export const REASON_LABEL = {
   energy_invalid_response: "Réponse du module Énergie invalide",
   missing_in_energy_response: "Trajet absent de la réponse du module Énergie",
   no_data: "Aucune donnée transmise par le module Énergie",
+  no_per_trip_energy: "Le module Énergie ne fournit pas de données par trajet",
+  mapping_invalid: "Véhicule non résolu par le module Énergie (tracker non prouvé)",
+  energy_tenant_not_configured: "Correspondance tenant Energy non configurée",
   trip_not_found: "Trajet inaccessible",
 };
 

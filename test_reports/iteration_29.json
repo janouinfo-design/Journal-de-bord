@@ -1,0 +1,42 @@
+{
+  "summary": "Frontend-only E2E test (Playwright, 1920x1080) du lot 'mapping tenant Journal → Energy' + invariants null≠0 sur la campagne REAL ENERGY. 7/7 scénarios demandés PASS : carte Tenant Energy admin (Configuré / paas_13588 / bouton Enregistrer actif), RBAC manager (input+bouton disabled + texte 'Modification réservée aux administrateurs'), RBAC chauffeur (Paramètres et Énergie redirigés vers /livre/dashboard, aucun lien Énergie dans la nav), Vue d'ensemble Énergie en mode réel connecté sans zéro fabriqué ('Non disponible' + badge 'Indisponible'), Rapprochement 18 lignes / 6 'Non mappé' avec LOGITRAK AUDI (tracker 781479) = 28.0 L badge 'Périmé' (STALE, source NAVIXY_CAN, ts 2024-06-20) type 'Mesuré' statut 'Impossible' raison 'Aucun achat de carburant sur la période.', exports Excel (7344 o) et PDF (7138 o) téléchargés non vides, bloc ÉNERGIE d'un trajet = 'Indisponible / Non disponible' (jamais 0 L / 0 kWh) tandis que 'Carb. (est.)' legacy affiche 4.00 L. Le mapping de production paas_13588 a été modifié (paas_13588_qa) puis RESTAURÉ et revérifié via API : energy_tenant_id=paas_13588, configured=true. Aucune alerte activée. Backend non retesté (hors périmètre).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/livre/energy/reconciliation/preview", "issue": "Latence ~18 s au premier chargement (année en cours, 18 véhicules) — la page reste en spinner et les boutons d'export sont désactivés pendant tout ce temps. Un timeout de test à 25 s a échoué une fois. Envisager un cache court côté backend ou un chargement progressif."},
+      {"endpoint": "/api/livre/energy/reconciliation/preview", "issue": "period.to est ramené à aujourd'hui (2026-08-26) alors que le filtre demandé était 2026-12-31 : la colonne 'Période' du tableau et le nom du fichier exporté (…_2026-01-01_2026-12-31.xlsx) divergent. Comportement probablement voulu (pas de futur) mais incohérent à l'affichage."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "EnergyOverviewPage (bannière statut)", "issue": "Texte 'Module Énergie connecté (contrat vv1).' — double 'v' : le template écrit 'contrat v{status.contract_version}' alors que l'API renvoie déjà 'v1'.", "selector": "[data-testid=\"energy-status-banner\"]", "priority": "LOW"},
+      {"component": "EnergyOverviewPage (KPI Véhicules avec données)", "issue": "L'unité technique brute 'count' est affichée à l'écran ('3 count') — devrait être sans unité.", "selector": "[data-testid=\"energy-kpi-*\"]", "priority": "LOW"},
+      {"component": "EnergyReconciliationPage (drawer détail)", "issue": "Warning React de nesting DOM/hydratation : EnergyBadge rend un <div> (Badge) à l'intérieur d'un <p> (ligne ~523). Remplacer le <p> par un <div>/<span>.", "selector": "[data-testid=\"recon-drawer-consumption\"]", "priority": "MEDIUM"},
+      {"component": "TripEnergyBlock", "issue": "La raison renvoyée par Energy (no_per_trip_energy) n'est pas dans REASON_LABEL : l'utilisateur voit seulement 'Non disponible' sans explication. Ajouter un libellé explicite type 'Le module Énergie ne fournit pas de données par trajet'.", "selector": "[data-testid=\"trip-energy-unavailable\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Rapprochement / Journal & trajets / Dashboard (filtres Du–Au)", "issues": ["Les champs de date utilisent le sélecteur natif du navigateur (input type=date, format mm/dd/yyyy en anglais) au lieu du composant Calendar shadcn — incohérent avec le reste de l'UI FR et avec les autres Select stylés."]},
+      {"screen": "Rapprochement (tableau)", "issues": ["Colonnes 'Type de mesure' et 'Fiabilité' masquées sous lg — l'information STALE/Mesuré n'est visible qu'en desktop large (badge 'Périmé' reste visible, acceptable)."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Corriger la bannière 'contrat vv1' (EnergyOverviewPage ~ligne 92) et l'unité 'count' affichée dans les KPI Énergie.",
+    "Corriger le nesting <div> Badge dans <p> du drawer de rapprochement (EnergyReconciliationPage ~ligne 523) pour supprimer le warning d'hydratation.",
+    "Ajouter le libellé FR pour la raison Energy 'no_per_trip_energy' dans REASON_LABEL (TripEnergyBlock).",
+    "Optionnel : réduire la latence du preview de rapprochement (~18 s) et aligner l'affichage de la période avec le clamp backend."
+  ],
+  "critical_code_review_comments": [
+    "EnergyTenantCard : logique fail-closed et RBAC correctes (input/bouton disabled hors admin, bouton désactivé si valeur inchangée, aucun token exposé côté client) — aucune remarque bloquante.",
+    "EnergyReconciliationPage fait 568 lignes : proche du seuil de découpage (tableau + drawer + panneau alertes pourraient être extraits en composants)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "non testé (hors périmètre)", "frontend": "100% (7/7 scénarios demandés)"},
+  "seed_data_creation": "Aucune. Le mapping tenant a été temporairement mis à 'paas_13588_qa' puis restauré à 'paas_13588' (vérifié via GET /api/livre/energy/tenant-mapping).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123",
+  "context_for_next_testing_agent": "Le rapprochement met ~18 s à charger (appel réel à https://energie.logitrak.ch) : utiliser un timeout >=60 s sur [data-testid=recon-table]. Le preset par défaut est 'Année en cours' ; le backend clampe date_to à aujourd'hui. LOGITRAK AUDI = seule ligne avec consommation réelle (28.0 L, STALE). Pour tester un rôle différent, vider cookies+localStorage avant /login (sinon redirection auto vers /livre/dashboard). Le mapping paas_13588 est une valeur de PRODUCTION : toujours la restaurer.",
+  "rca_of_the_issue": "Aucun défaut fonctionnel bloquant trouvé. Les invariants null≠0 sont respectés partout (vue d'ensemble, rapprochement, bloc trajet). Les anomalies relevées sont cosmétiques ('vv1', unité 'count'), un warning de nesting DOM React, et une latence du backend Energy externe."
+}

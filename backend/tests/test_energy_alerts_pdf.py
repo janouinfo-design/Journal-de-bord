@@ -337,12 +337,13 @@ class TestPdfExportE2E:
         d = fitz.open(stream=pdf_default.content, filetype="pdf")
         assert d.page_count >= 1
 
-    def test_metadata_and_disclaimers(self, pdf_default):
+    def test_metadata_and_disclaimers(self, pdf_default, preview):
         text = _pdf_text(pdf_default.content)
         assert "Rapprochement achats / consommation" in text
         assert "Période : 2026-01-01 au 2026-12-31" in text
         assert "Alertes automatiques : désactivées" in text
-        assert "Module Énergie non connecté" in text
+        if not preview["connected"]:
+            assert "Module Énergie non connecté" in text
         assert "jamais assimilée à zéro" in text
 
     def test_all_18_vehicles_including_unmapped(self, pdf_default, preview):

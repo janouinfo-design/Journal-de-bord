@@ -58,17 +58,22 @@ def default_trip_ids(admin_h):
 
 
 # ---------------------------------------------------------------------------
-# E2E — Energy NON CONNECTÉ (défaut : ENERGY_API_BASE_URL absente)
+# E2E — statut honnête selon l'environnement (URL absente OU configurée)
 # ---------------------------------------------------------------------------
-def test_status_not_connected(admin_h):
+def test_status_honest_by_mode(admin_h):
     r = requests.get(f"{API}/livre/energy/status", headers=admin_h, timeout=15)
     assert r.status_code == 200
     body = r.json()
     if body["mode"] == "fixture":
         pytest.skip("ENERGY_API_MODE=fixture actif dans l'environnement")
-    assert body["connected"] is False
-    assert body["mode"] == "not_connected"
-    assert body["base_url_configured"] is False
+    if body["mode"] == "not_connected":
+        assert body["connected"] is False
+        assert body["base_url_configured"] is False
+    else:
+        assert body["mode"] == "real"
+        assert body["base_url_configured"] is True
+        # connected reflète la joignabilité réelle — jamais forcé à True
+        assert isinstance(body["connected"], bool)
 
 
 def test_trips_unavailable_never_zero(admin_h, default_trip_ids):
@@ -80,9 +85,20 @@ def test_trips_unavailable_never_zero(admin_h, default_trip_ids):
     if body["mode"] == "fixture":
         pytest.skip("fixture mode — couvert par les tests unitaires")
     for env in body["results"]:
+        if env["availability"] in ("AVAILABLE", "STALE"):
+            continue  # données Energy réelles — couvertes par la campagne REAL ENERGY
         assert env["availability"] == "UNAVAILABLE"
-        assert env["reason"] == "energy_not_connected"
-        assert env["electric"] is None and env["fuel"] is None  # jamais 0 inventé
+        # raison honnête obligatoire (jamais de zéro silencieux) — la valeur exacte
+        # appartient à Energy (ex. no_per_trip_energy, mapping_invalid, energy_unreachable)
+        assert isinstance(env.get("reason"), str) and env["reason"]
+        # jamais 0 inventé : indisponible → aucune métrique fabriquée
+        for domain in ("electric", "fuel"):
+            d = env.get(domain)
+            if d is None:
+                continue
+            for m in d.values():
+                if isinstance(m, dict):
+                    assert m.get("value") is None or m.get("availability") in ("AVAILABLE", "STALE")
 
 
 def test_overview_rbac_and_shape(admin_h, driver_h):
@@ -126,11 +142,16 @@ def test_driver_cannot_read_foreign_trip(driver_h, admin_h):
 
 
 def test_tenant_isolation(admin_b_h, default_trip_ids):
-    """Admin tenant B : trajet du tenant default → trip_not_found."""
+    """Admin tenant B : trajet du tenant default → jamais de données.
+    Fail-closed mapping (energy_tenant_not_configured) prime sur trip_not_found :
+    B n'apprend même pas si le trajet existe."""
     r = requests.post(f"{API}/livre/energy/trips",
                       json={"trip_ids": [default_trip_ids[0]]}, headers=admin_b_h, timeout=15)
     assert r.status_code == 200
-    assert r.json()["results"][0]["reason"] == "trip_not_found"
+    env = r.json()["results"][0]
+    assert env["reason"] in ("trip_not_found", "energy_tenant_not_configured")
+    assert env["availability"] == "UNAVAILABLE"
+    assert env["fuel"] is None and env["electric"] is None
 
 
 # ---------------------------------------------------------------------------

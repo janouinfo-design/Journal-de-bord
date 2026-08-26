@@ -200,11 +200,16 @@ async def trip_energy_batch(items: list[dict], tenant_id: str | None = None) -> 
                    for it in items]
         return {"connected": False, "mode": "not_connected",
                 "contract_version": CONTRACT_VERSION, "results": results}
+    # Contrat réel Energy : résolution du véhicule par `ref` (= navixy_tracker_id)
+    # + fenêtre `start`/`end`. Les champs Journal sont conservés (Energy ignore le surplus).
+    wire_items = [{**it, "ref": it.get("navixy_tracker_id"),
+                   "start": it.get("start_time"), "end": it.get("end_time")}
+                  for it in items]
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             r = await client.post(f"{_base_url()}/api/energy/v1/trips/energy:batch",
                                   json={"contract_version": CONTRACT_VERSION,
-                                        "tenant_id": tenant_id, "trips": items},
+                                        "tenant_id": tenant_id, "trips": wire_items},
                                   headers=_headers(tenant_id))
             r.raise_for_status()
             body = r.json()
@@ -259,6 +264,9 @@ async def vehicle_energy_summary(vehicle: dict, date_from: str, date_to: str,
     définitif (vehicle_id / tracker_id / VIN) reste à convenir avec Energy."""
     m = mode()
     vid = vehicle.get("id") or vehicle.get("vehicle_id") or ""
+    # Contrat réel Energy : {ref} du path = navixy_tracker_id (seule clé résolue).
+    # Sans tracker : ref opaque → réponse UNAVAILABLE honnête d'Energy.
+    ref = vehicle.get("navixy_tracker_id") or vid
     if m == "fixture":
         now = datetime.now(timezone.utc).isoformat()
         idx = int(hashlib.sha256(vid.encode()).hexdigest(), 16) % 3
@@ -279,7 +287,7 @@ async def vehicle_energy_summary(vehicle: dict, date_from: str, date_to: str,
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             r = await client.get(
-                f"{_base_url()}/api/energy/v1/vehicles/{vid}/summary",
+                f"{_base_url()}/api/energy/v1/vehicles/{ref}/summary",
                 params={"from": date_from, "to": date_to, "tenant_id": tenant_id,
                         "navixy_tracker_id": vehicle.get("navixy_tracker_id"),
                         "vin": vehicle.get("vin")},

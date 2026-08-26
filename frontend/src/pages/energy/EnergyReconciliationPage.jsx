@@ -520,10 +520,10 @@ export default function EnergyReconciliationPage() {
                   <div className="text-xs text-slate-600 space-y-1" data-testid="recon-drawer-consumption">
                     {detail.consumed_fuel && detail.consumed_fuel.value != null ? (
                       <>
-                        <p className="flex items-center gap-2">Carburant consommé :
+                        <div className="flex items-center gap-2">Carburant consommé :
                           <strong className="text-slate-800">{Number(detail.consumed_fuel.value).toFixed(2)} {detail.consumed_fuel.unit}</strong>
                           <EnergyBadge metric={detail.consumed_fuel} />
-                        </p>
+                        </div>
                         <p>Source : {detail.consumed_fuel.source || "—"}</p>
                         <p>Horodatage : {detail.consumed_fuel.timestamp || "—"}</p>
                         <p>Disponibilité : {detail.consumed_fuel.availability}</p>
@@ -535,10 +535,10 @@ export default function EnergyReconciliationPage() {
                       <div className="mt-2 pt-2 border-t border-slate-100">
                         <p className="text-[10px] uppercase tracking-wider text-slate-400">Électricité (séparée — jamais comparée aux litres)</p>
                         {detail.consumed_electric && detail.consumed_electric.value != null ? (
-                          <p className="flex items-center gap-2 mt-1">kWh consommés :
+                          <div className="flex items-center gap-2 mt-1">kWh consommés :
                             <strong className="text-slate-800">{Number(detail.consumed_electric.value).toFixed(2)} kWh</strong>
                             <EnergyBadge metric={detail.consumed_electric} />
-                          </p>
+                          </div>
                         ) : (
                           <p className="italic text-slate-400 mt-1">kWh consommés : Non disponible</p>
                         )}
