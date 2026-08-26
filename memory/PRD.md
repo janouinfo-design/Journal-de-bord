@@ -858,3 +858,14 @@ affectation manuelle, droits par rôle.
 - Tests : garde-fou 22/22 · régression 603 PASS / 0 FAIL réel / 3 SKIP · testing agent iteration_30 : 5/5 PASS.
 - P0 BEV : FERMÉ pour les nouvelles écritures (BEV explicite). real_energy_validated=false inchangé.
 - En attente GO utilisateur : cache rapprochement · durcissement multi-tenant Energy (côté ÉNERGIE) · déploiement Journal VPS.
+
+## Motorisations réelles — 26/08/2026 : LIVRÉ (2/18 prouvés, 16 UNKNOWN honnêtes)
+- Détail : CHANGELOG.md. Source prouvée : garage Navixy réel (champ structuré fuel_type, lien tracker_id).
+- LOGITRAK AUDI = essence · 5-Alliance 01 = essence · 16 UNKNOWN (déduction par nom INTERDITE et respectée).
+- Endpoint PUT /vehicles/{id}/fuel-type (admin, audité) + UI Paramètres colonne Motorisation (Select contrôlé).
+- Tests 17/17 · régression 621 PASS / 0 FAIL / 3 SKIP · testing agent iteration_31 : 5/5 PASS.
+- real_energy_validated=false inchangé. Historique 5 437 trips intact. Energy non modifié.
+- Liste À RENSEIGNER MANUELLEMENT (admin, via la nouvelle UI) : 1-Enyaq 01 Bern, KAIO Skoda Enyaq 07,
+  KAIO Volvo EX30 08, KAIO Renault Zoe, Skoda Enyaq BE 579 928, 2-ORHAN, 3-IVAN 03, 4-NEDIR 04,
+  Iphone Rabi, Tab Rabi Samsung, + 6 GE-* archivés (démo) — aucune source structurée disponible.
+- En attente GO : cache rapprochement · déploiement Journal VPS · durcissement multi-tenant Energy (côté ÉNERGIE).

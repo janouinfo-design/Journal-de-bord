@@ -108,3 +108,42 @@ real_energy_validated (false).
 - P2 : UNKNOWN reçoit encore le legacy (par choix documenté) — se résorbera quand fuel_type sera renseigné.
 - P3 : total fiscal d'une période 100% BEV afficherait « 0.00 » (somme réelle vide) — cosmétique, non traité.
 - P3 : date inputs natifs (mm/dd/yyyy) au lieu du Calendar shadcn (pré-existant, relevé 2× par testing agent).
+
+## 26/08/2026 (soir) — MOTORISATIONS RÉELLES : vehicles.fuel_type depuis sources prouvées
+
+### Sources examinées (18 véhicules, lecture seule d'abord)
+- Source A (DB structurée) : fuel_type 0/18, VIN 0/18, pas de powertrain/engine_type.
+  tank_capacity_l=65 sur « 1-Enyaq 01 Bern » (saisie référence capacité, PAS une preuve de motorisation).
+- Source B (VIN) : NON DISPONIBLE (0/18 + aucun décodeur VIN configuré).
+- Source C (Documents) : NON DISPONIBLE (aucune collection documents véhicule).
+- Source D (Navixy garage, API réelle vehicle/list) : 10 véhicules Navixy, 5 liés par tracker_id.
+  2 avec champ structuré fuel_type : Audi A3 2018 (tracker 781479) = petrol + « Sans plomb 95 » +
+  VIN WAUZZZ8VJA151370 ; Toyota Previa (tracker 3131157) = petrol (VIN non normalisé, non utilisé).
+- Source E (Energy) : powertrain UNKNOWN partout — rien d'utilisable, non falsifié.
+
+### Écritures (2/18, via nouvel endpoint audité)
+- LOGITRAK AUDI → fuel_type=essence (normalisation canonique petrol→essence, mapping ICE).
+- 5-Alliance 01 → fuel_type=essence.
+- 16 restants → UNKNOWN (dont Zoe/Enyaq×3/Volvo EX30 : noms évocateurs, déduction INTERDITE ;
+  6 GE-* archivés démo ; iPhone/Tab traceurs ; ORHAN/IVAN/NEDIR sans source).
+
+### Code
+- Backend misc.py : PUT /api/livre/vehicles/{id}/fuel-type — admin only, valeurs contrôlées
+  (diesel/essence/hybrid/phev/electric/null), audit vehicle.fuel_type_updated (before/after/source).
+- Frontend SettingsPage : colonne « Motorisation » (Select contrôlé, admin only, manager disabled)
+  dans le sheet Gérer les véhicules. testid settings-vehicle-fueltype-{plate}.
+- Aucun changement du helper garde-fou. Aucun recalcul des 5 435 trips historiques.
+- Effet dérivé attendu : rapprochement affiche AUDI/Alliance = Thermique (ICE) ; Energy garde
+  son powertrain UNKNOWN (JOURNAL=ICE vs ENERGY=UNKNOWN documenté, aucune falsification).
+
+### Tests
+- tests/test_vehicle_fuel_type.py : 17/17 PASS (T1-T18 ; T UI via testing agent).
+- 1 test legacy adapté : test_powertrain_never_inferred (powertrain == mapping du fuel_type prouvé).
+- RÉGRESSION COMPLÈTE : 621 PASS / 0 FAIL / 3 SKIP (run final propre ; flaky OCR infra 502 re-testé 5/5).
+- Testing agent iteration_31 : 5/5 PASS (colonne, valeurs, edit admin + restauration, RBAC manager
+  disabled, rapprochement Thermique + 28.0 L Périmé conservé, historique intact).
+
+### P3 notés (testing agent, non corrigés — hors périmètre)
+- Flicker du sheet véhicules après changement (load() complet au lieu d'un update local).
+- Double mécanisme RBAC dans la même table (canEdit vs role==='admin').
+- SettingsPage.jsx 527 lignes (extraction composant possible).

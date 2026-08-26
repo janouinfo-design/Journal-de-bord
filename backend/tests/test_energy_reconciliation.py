@@ -161,8 +161,20 @@ class TestPreviewE2E:
             assert r["status"] == "IMPOSSIBLE"
 
     def test_powertrain_never_inferred(self, preview):
-        assert all(r["powertrain"] == "UNKNOWN" for r in preview["rows"]), \
-            "0/18 fuel_type prouvé → motorisation UNKNOWN partout, jamais déduite du modèle"
+        """Le powertrain vient UNIQUEMENT de vehicles.fuel_type (source prouvée),
+        jamais du modèle/label. Depuis le lot Motorisations réelles (26/08/2026),
+        2 véhicules sont PROUVÉS essence via le garage Navixy → ICE."""
+        import pymongo, os
+        mc = pymongo.MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=5000)
+        vmap = {v["id"]: v.get("fuel_type") for v in
+                mc[os.environ["DB_NAME"]].vehicles.find({"tenant_id": "default"},
+                                                        {"_id": 0, "id": 1, "fuel_type": 1})}
+        mc.close()
+        from app.navixy_sync import powertrain_from_fuel_type
+        for r in preview["rows"]:
+            expected = powertrain_from_fuel_type(vmap.get(r["vehicle_id"]))
+            assert r["powertrain"] == expected, \
+                f"{r['plate']}: powertrain {r['powertrain']} ≠ fuel_type prouvé ({expected})"
 
     def test_purchases_aggregated_with_sources(self, preview):
         with_buy = [r for r in preview["rows"] if r["purchased"]["tx_count"] > 0]
