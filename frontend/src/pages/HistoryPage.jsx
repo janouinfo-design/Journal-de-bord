@@ -421,7 +421,11 @@ export default function HistoryPage({ kind }) {
                     </td>
                     {!isMasked && (
                       <td className="py-3 px-4 text-right text-slate-600 whitespace-nowrap">
-                        <span title="Estimation locale (8,5 L/100 km) — ne provient pas du module Énergie" className="inline-flex items-center gap-1"><Fuel className="w-3 h-3 text-amber-500" />{(t.fuel_l ?? 0).toFixed(2)} L</span>
+                        {t.fuel_l != null ? (
+                          <span title="Estimation locale (8,5 L/100 km) — ne provient pas du module Énergie" className="inline-flex items-center gap-1"><Fuel className="w-3 h-3 text-amber-500" />{t.fuel_l.toFixed(2)} L</span>
+                        ) : (
+                          <span data-testid={`trip-fuel-na-${t.id}`} title="Aucune estimation carburant — motorisation non thermique ou donnée absente" className="text-slate-400">—</span>
+                        )}
                       </td>
                     )}
                     {!isMasked && (

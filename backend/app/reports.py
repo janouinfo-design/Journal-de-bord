@@ -41,7 +41,7 @@ def trips_to_csv(trips, classification_label: str) -> bytes:
             t.get("driver_name", ""), t.get("vehicle_plate", ""),
             t.get("start_address", ""), t.get("end_address", ""),
             t.get("distance_km", 0), t.get("duration_min", 0),
-            t.get("fuel_l", 0), t.get("avg_speed", 0), t.get("max_speed", 0),
+            t.get("fuel_l"), t.get("avg_speed", 0), t.get("max_speed", 0),
             classification_label,
         ])
     return buf.getvalue().encode("utf-8-sig")
@@ -78,7 +78,7 @@ def trips_to_xlsx(trips, classification_label: str, title: str) -> bytes:
             t.get("driver_name", ""), t.get("vehicle_plate", ""),
             t.get("start_address", ""), t.get("end_address", ""),
             t.get("distance_km", 0), t.get("duration_min", 0),
-            t.get("fuel_l", 0), t.get("avg_speed", 0), t.get("max_speed", 0),
+            t.get("fuel_l"), t.get("avg_speed", 0), t.get("max_speed", 0),
             classification_label,
         ])
         total_km += t.get("distance_km", 0) or 0
@@ -408,7 +408,7 @@ def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "
             P(t.get("end_address", ""), addr_style),
             P(f"{t.get('distance_km', 0):.1f}"),
             P(f"{t.get('duration_min', 0)} min"),
-            P(f"{t.get('fuel_l', 0):.2f}"),
+            P(f"{t['fuel_l']:.2f}" if t.get("fuel_l") is not None else "—"),
             P(classification_label),
         ])
 

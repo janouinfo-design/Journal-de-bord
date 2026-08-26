@@ -849,3 +849,12 @@ affectation manuelle, droits par rôle.
   flip réservé à une décision utilisateur explicite).
 - P1 externe : fallback tenant par défaut côté Energy (neutralisé par fail-closed Journal) ;
   écarts contrat : health "v1" vs batch "1.0", summaries sans contract_version.
+
+## Garde-fou BEV — 26/08/2026 : legacy 0,085 L/km filtré par motorisation — LIVRÉ
+- Détail : /app/memory/CHANGELOG.md. Helper central `legacy_fuel_estimation_allowed` (navixy_sync.py),
+  mapping canonique unique réutilisé par routes/energy.py. ICE+UNKNOWN → legacy ; BEV/HEV/PHEV → fuel_l ABSENT.
+- UNKNOWN conserve le legacy = dette résiduelle documentée (0/18 fuel_type renseignés). Aucune migration Mongo.
+- Affichage : HistoryPage « — », exports cellule vide, PDF « — » — jamais 0 pour absence.
+- Tests : garde-fou 22/22 · régression 603 PASS / 0 FAIL réel / 3 SKIP · testing agent iteration_30 : 5/5 PASS.
+- P0 BEV : FERMÉ pour les nouvelles écritures (BEV explicite). real_energy_validated=false inchangé.
+- En attente GO utilisateur : cache rapprochement · durcissement multi-tenant Energy (côté ÉNERGIE) · déploiement Journal VPS.

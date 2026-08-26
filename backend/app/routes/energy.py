@@ -18,6 +18,7 @@ from pymongo.errors import DuplicateKeyError
 from app import energy_client
 from app.auth import require_roles
 from app.db import get_db
+from app.navixy_sync import powertrain_from_fuel_type
 from app.routes._helpers import filter_trips_query, get_settings_doc
 from app.tenant_context import get_effective_tenant_id
 
@@ -27,17 +28,11 @@ READ_ROLES = ("admin", "manager", "lecture_seule")
 TRIP_ROLES = ("admin", "manager", "lecture_seule", "driver")
 MAX_BATCH = 100
 
-# Motorisation : uniquement depuis la donnée prouvée vehicles.fuel_type —
-# JAMAIS déduite du nom/modèle. Non prouvée → UNKNOWN.
-_POWERTRAIN_FROM_FUEL_TYPE = {
-    "diesel": "ICE", "essence": "ICE", "petrol": "ICE",
-    "hybrid": "HEV", "hev": "HEV", "phev": "PHEV",
-    "electric": "BEV", "bev": "BEV",
-}
-
-
+# Motorisation : mapping canonique unique du projet (app.navixy_sync) —
+# uniquement depuis la donnée prouvée vehicles.fuel_type, JAMAIS déduite
+# du nom/modèle. Non prouvée → UNKNOWN.
 def _powertrain(fuel_type) -> str:
-    return _POWERTRAIN_FROM_FUEL_TYPE.get((fuel_type or "").lower(), "UNKNOWN")
+    return powertrain_from_fuel_type(fuel_type)
 
 
 def _reconciliation_status(mapped: bool, tx_count: int, consumed,

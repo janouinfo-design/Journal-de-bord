@@ -75,3 +75,36 @@ Bloquants exacts :
 Projet ÉNERGIE, legacy 0,085 (navixy_sync.py:39/275), 6 véhicules non mappés,
 Mongo historique (5 421 trips), PDF fiscal legacy, alertes réelles (désactivées),
 real_energy_validated (false).
+
+## 26/08/2026 (après-midi) — GARDE-FOU BEV : legacy 0,085 L/km filtré par motorisation
+
+### Règle métier (centralisée dans app/navixy_sync.py)
+- `POWERTRAIN_FROM_FUEL_TYPE` (mapping canonique unique, réutilisé par routes/energy.py — plus de duplication)
+  + `powertrain_from_fuel_type()` + `legacy_fuel_estimation_allowed(vehicle)`.
+- Source motorisation : UNIQUEMENT `vehicles.fuel_type` (jamais nom/modèle/plaque/label).
+- ICE (ice/diesel/essence/petrol) → legacy autorisé.
+- BEV (electric/bev/ev) → legacy INTERDIT → fuel_l ABSENT (jamais 0).
+- HEV/PHEV → cas ambigu, aucune convention 8,5 L/100 validée pour hybrides → PAS de calcul (documenté).
+- UNKNOWN → legacy CONSERVÉ (dette résiduelle documentée : flotte actuelle 0/18 motorisations
+  renseignées, fiscalité existante préservée). UNKNOWN jamais converti en BEV/ICE.
+- `_build_trip_doc` : fuel_l écrit conditionnellement. AUCUNE migration Mongo (historique intact,
+  pilot trip fuel_l=0.66 vérifié). Seed mock démo : véhicules sans fuel_type → UNKNOWN → inchangé.
+
+### Affichages corrigés (absence fuel_l → jamais 0)
+- HistoryPage : « — » (testid trip-fuel-na-{id}) au lieu de 0.00 L.
+- reports.py : CSV/XLSX cellule vide (t.get("fuel_l") sans défaut 0) ; PDF trajets « — ».
+- Totaux/PDF fiscal : sommes inchangées (un BEV ne contribue aucun litre — vérifié tax-swiss 2023 test).
+
+### Tests
+- Nouveau `tests/test_legacy_fuel_guard.py` : 22/22 PASS (T1-T15 sauf T11 UI ; helper, _build_trip_doc,
+  historique intact, API trips null, exports CSV/XLSX/PDF, PDF fiscal, TripEnergyBlock indépendant).
+- RÉGRESSION COMPLÈTE : 603 PASS / 0 FAIL réel / 3 SKIP (1 flaky infra : OCR amendes 502 ingress
+  preview pendant appel Gemini — 5/5 PASS en re-run isolé, module non touché par le lot).
+- Testing agent iteration_30.json : 5/5 PASS frontend (HistoryPage —/8.50 L, TripEnergyBlock honnête,
+  exports XLSX vide + PDF —, non-régression Énergie : AUDI 28.0 L Périmé, motorisations Inconnue).
+- real_energy_validated : toujours false (flag non modifié). Projet ÉNERGIE non modifié. Mongo non migré.
+
+### Dette résiduelle / P-liste
+- P2 : UNKNOWN reçoit encore le legacy (par choix documenté) — se résorbera quand fuel_type sera renseigné.
+- P3 : total fiscal d'une période 100% BEV afficherait « 0.00 » (somme réelle vide) — cosmétique, non traité.
+- P3 : date inputs natifs (mm/dd/yyyy) au lieu du Calendar shadcn (pré-existant, relevé 2× par testing agent).
