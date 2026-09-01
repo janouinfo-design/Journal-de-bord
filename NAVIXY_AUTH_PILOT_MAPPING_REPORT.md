@@ -9,19 +9,37 @@
 
 ## RÉSULTAT GLOBAL
 ```
-RUNTIME PILOT: BLOCKED_NO_NAVIXY_CREDENTIAL
+RUNTIME PILOT: BLOCKED_CREDENTIAL_NOT_INJECTED
 ```
 
-### Phase D1.2 — vérification runtime immédiate (§1)
+### Phase D1.2 (reprise) — vérification runtime immédiate (§1)
 ```
-NAVIXY_CREDENTIAL_TYPE = NONE        (vérifié dans le runtime backend réel)
+NAVIXY_CREDENTIAL_TYPE = NONE   (dans le processus backend réellement exécuté)
 ```
-→ **STOP immédiat** (règle §1 : « Si NONE : STOP immédiatement »). Aucun appel Navixy
-exécuté (`tracker/list` non appelé), aucun fichier modifié inutilement.
+→ **STOP** (règle §1). La variable `NAVIXY_API_KEY` annoncée comme « configurée » n'est
+**pas visible** par le processus backend. Diagnostic (présence uniquement, valeur jamais lue) :
 
-Le message Phase D1.2 décrivait la procédure **quand** une clé Navixy est disponible.
-Dans l'environnement actuel, **aucune clé n'a été fournie** (ni `NAVIXY_API_KEY`, ni
-`NAVIXY_HASH`, ni `tenant.navixy_hash`). On reste donc bloqué avant l'auth réelle.
+| Emplacement vérifié | NAVIXY_API_KEY |
+|---|---|
+| `/app/backend/.env` (chargé par `server.py` via load_dotenv) | **ABSENT** |
+| Environnement du process backend en cours (PID uvicorn) | **ABSENT** |
+| Ligne `environment=` de supervisor (program:backend) | **ABSENT** |
+| Shell courant / autres process python·node | **ABSENT** |
+
+**Cause probable** : le secret a été saisi dans un service/onglet différent de celui qui
+exécute CE backend, ou le backend n'a pas été redémarré après injection, ou la variable
+n'a pas été propagée au container/process de ce backend.
+
+**Comment corriger (côté opérateur)** — au choix :
+1. Ajouter `NAVIXY_API_KEY=<clé>` dans **`/app/backend/.env`** puis
+   `sudo supervisorctl restart backend`. (le backend lit ce fichier au démarrage)
+2. OU ajouter la variable à la ligne `environment=` du program `backend` dans la conf
+   supervisor, puis `reread`/`update`/`restart backend`.
+- Ne jamais committer la clé ni l'afficher. Vérifier ensuite : le runtime doit renvoyer
+  `NAVIXY_CREDENTIAL_TYPE = API_KEY`.
+
+Le message décrivait la procédure **quand** la clé est visible par le backend ; ici elle ne
+l'est pas → on reste bloqué **avant** l'auth Navixy (aucun `tracker/list` appelé).
 
 ---
 
@@ -125,15 +143,19 @@ ODOMETER_INCREMENT= NOT_TESTED    -> FAIL
 
 ---
 
-## RÉSULTAT FINAL D1.2 (§13)
+## RÉSULTAT FINAL D1.2 (§12)
 ```
-NAVIXY_AUTH:              BLOCKED        (credential absent — tracker/list non appelé)
+NAVIXY_CREDENTIAL_TYPE:   NONE           (clé non injectée dans le process backend)
+NAVIXY_AUTH:              BLOCKED        (tracker/list non appelé)
 REAL_TRACKERS_DISCOVERED: 0
+
 PILOT_MAPPING:            UNRESOLVED
+PILOT_VEHICLE:            NOT_RESOLVED
+PILOT_PLATE:              NOT_RESOLVED
 PILOT_TRACKER:            NOT_RESOLVED
 DEVICE_MODEL:             NOT_VERIFIED
 
-ODOMETER_STATUS:          UNAVAILABLE    (navixy_not_configured — jamais 0, jamais trip.length)
+ODOMETER_STATUS:          UNAVAILABLE    (jamais 0, jamais trip.length)
 ODOMETER_VALUE:           null
 ODOMETER_SOURCE:          UNKNOWN
 ODOMETER_COUNTER_EXISTS:  UNKNOWN
@@ -154,17 +176,16 @@ BLOCKED
 ```
 
 ## NEXT SAFE STEP
-Fournir un **credential Navixy réel** côté serveur, **puis** relancer D1.1 :
-1. Définir **`NAVIXY_API_KEY`** (clé API Navixy dédiée serveur) dans l'env backend du tenant
-   pilote — OU renseigner `navixy_hash` du tenant. **Ne pas** me l'envoyer en clair ici ;
-   configurez-le côté serveur (il ne doit jamais transiter en clair/logs/commit).
-2. Je lance alors l'auth READ-ONLY `tracker/list` → `NAVIXY_AUTH: PASS/FAIL`.
-3. Je liste les trackers réels (tracker_id, label, device_model si dispo) — sans IMEI complet.
-4. Je résous le mapping véhicule ↔ tracker de manière **non ambiguë** ; si plusieurs candidats
-   FMC003/FMC130 → je vous **présente la liste** et j'attends votre choix (pas de sélection auto).
-5. Je relance `GET /driver/vehicle/odometer` → attendu `status:"REAL"` + `odometer_km`, puis
-   `get_counters` pour qualifier la source (TELTONIKA_TOTAL_ODOMETER / VEHICLE_CAN /
-   NAVIXY_GPS_CALCULATED / MANUAL / UNKNOWN), puis test d'incrément après déplacement réel.
+Le code supporte déjà `NAVIXY_API_KEY` (rien à développer). Il faut **injecter la clé dans
+le process backend** qui exécute cette API, puis me redonner la main :
+1. Placer `NAVIXY_API_KEY=<clé>` dans **`/app/backend/.env`** (fichier lu par `server.py`).
+2. `sudo supervisorctl restart backend`.
+3. Vérifier : le runtime doit renvoyer `NAVIXY_CREDENTIAL_TYPE = API_KEY`.
+Ne jamais committer/afficher la clé.
+
+Dès que `NAVIXY_CREDENTIAL_TYPE = API_KEY` est confirmé dans CE backend, je reprends D1.2 :
+`tracker/list` (auth) → trackers réels → mapping non ambigu (ou `PILOT_SELECTION_REQUIRED`)
+→ odomètre `REAL` → `get_counters` → source/AVL16 → snapshot → incrément.
 
 **Aucune** étape D2/D3/D4/D5 (Private Mode) ne sera lancée tant que D1 n'est pas `PASS`
 ou `PASS_WITH_SOURCE_UNVERIFIED`.
