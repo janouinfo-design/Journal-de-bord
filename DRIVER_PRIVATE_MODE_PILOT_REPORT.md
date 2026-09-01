@@ -7,6 +7,70 @@
 
 ---
 
+## ================= D1 FINAL — VALIDATION RUNTIME RÉELLE (VPS) =================
+> Exécuté sur le VPS de production (Docker `journal_backend`), après déploiement Phase D
+> (`integrations.py`, `credential_type`, `get_counters`, endpoint `/driver/vehicle/odometer`,
+> chiffrement) + `INTEGRATION_ENCRYPTION_KEY` configurée. READ-ONLY strict. Aucun secret exposé.
+
+### Preuves runtime obtenues
+```
+INTEGRATION_ENCRYPTION_KEY_CONFIGURED: YES
+TENANT_NAVIXY_CONFIGURED:    YES (Logitrak, Pradervand, Gaggetta — 3 comptes distincts)
+TENANT_CREDENTIAL_ENCRYPTED: NO  (clés legacy en clair — à re-chiffrer via API admin, non bloquant)
+CREDENTIAL_SCOPE:            TENANT           (credential_type = TENANT_HASH pour les 3)
+GLOBAL_FALLBACK_USED:        NO               (isolation multi-tenant runtime PROUVÉE)
+
+NAVIXY_AUTH:                 PASS (3/3 tenants, chacun avec SA propre clé)
+REAL_TRACKERS_DISCOVERED:    Logitrak=12, Pradervand=15, Gaggetta=3 (mocks 5000-5005 exclus)
+
+PILOT_TENANT:               Gaggetta (55d26c74-...)
+PILOT_MAPPING:              RESOLVED
+PILOT_TRACKER:              625282
+PILOT_PLATE:                GE-898 507 (Fiat Doblo)
+PILOT_DEVICE_MODEL:         Teltonika FMU130 (source.model = telfmu130)  [IMEI non exposé]
+
+ODOMETER_STATUS:            REAL
+ODOMETER_VALUE_KM:          43072.6
+ODOMETER_TIMESTAMP:         2026-09-01 17:33:50
+ODOMETER_COUNTER_EXISTS:    YES  (get_counters + counter/value/get concordants ; type=odometer)
+
+HARDWARE_READING:           NO
+  - sensors OBD présents (obd_consumption, obd_rpm, obd_speed, obd_fuel, obd_coolant_t, ...)
+    MAIS AUCUN mileage hardware : pas de can_mileage / obd_mileage / total_odometer.
+  - engine_hours: Entity not found.
+  - readings/list counters: uniquement {type: odometer} (valeur à décimales fines).
+AVL16_MAPPING:              NOT_VERIFIED (aucune preuve runtime d'un Total Odometer AVL16)
+ODOMETER_SOURCE:            NAVIXY_GPS_CALCULATED  (preuve : aucune source mileage hardware,
+                            décimales fines, historique GPS-corrélé strictement croissant)
+
+ODOMETER_INCREMENT:         PASS
+  - counter/data/read (25/08, réel) : 42979.147 -> 42979.867 -> 42981.275 -> 42982.304 -> 42983.8...
+    strictement croissant, même tracker, même source, timestamps cohérents.
+
+D1 STATUS: PASS_WITH_SOURCE_UNVERIFIED
+```
+
+### ⚠️ ALERTE BLOQUANTE POUR D2 (Private Mode)
+La source odomètre est **GPS-calculée par Navixy**, **PAS** hardware. Or D2 vise à **masquer le GPS**
+(coordonnées 0,0). Un odomètre GPS-calculé **cesserait d'augmenter** quand le GPS est masqué →
+**impossible de mesurer la distance privée** avec cette source sur ce parc (FMU130 sans mileage CAN exposé).
+
+Avant tout D2 sur ce parc, il faudra l'UNE de ces conditions :
+1. Exposer/activer le **Total Odometer hardware Teltonika** (AVL 16) sur le device + le mapper comme
+   source du compteur Navixy ; OU
+2. Remonter un **mileage CAN/OBD** (le bus OBD existe, mais aucun PID kilométrage n'est actuellement lu) ; OU
+3. Revoir la stratégie de confidentialité (ex. masquage applicatif côté LOGITRAK plutôt que GPS device 0,0).
+
+### NEXT
+```
+READY FOR D2 PRIVATE/BUSINESS CONFIG AUDIT
+```
+(⚠️ mais **NE PAS démarrer D2** sans décision explicite, ET en tenant compte de l'alerte source GPS :
+D2 devra d'abord trancher la question de la source odomètre hardware.)
+
+## ============================================================================
+
+
 ## RÉSULTAT GLOBAL
 
 ```
