@@ -198,6 +198,10 @@ pilote réel résolvable. Le bouton Privé/Pro production **ne doit PAS** être 
 > côté code + tests credential 4/4. Voir `NAVIXY_AUTH_PILOT_MAPPING_REPORT.md`. Statut
 > runtime toujours **BLOCKED** faute de clé réelle fournie.
 
+> **MàJ Phase D1.2** : vérification runtime immédiate → `NAVIXY_CREDENTIAL_TYPE = NONE`
+> → STOP immédiat (§1), aucun appel Navixy exécuté, aucun fichier de code modifié. Statut
+> runtime toujours **BLOCKED** faute de credential réel. Voir `NAVIXY_AUTH_PILOT_MAPPING_REPORT.md`.
+
 **On NE déclare PAS** : PILOT VALIDATED — donc **PAS** de « READY FOR DRIVER APP PRIVATE/PRO
 IMPLEMENTATION ».
 

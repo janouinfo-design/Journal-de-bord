@@ -11,7 +11,15 @@
 ```
 RUNTIME PILOT: BLOCKED_NO_NAVIXY_CREDENTIAL
 ```
-Le message Phase D1.1 décrivait la procédure **quand** une clé Navixy est disponible.
+
+### Phase D1.2 — vérification runtime immédiate (§1)
+```
+NAVIXY_CREDENTIAL_TYPE = NONE        (vérifié dans le runtime backend réel)
+```
+→ **STOP immédiat** (règle §1 : « Si NONE : STOP immédiatement »). Aucun appel Navixy
+exécuté (`tracker/list` non appelé), aucun fichier modifié inutilement.
+
+Le message Phase D1.2 décrivait la procédure **quand** une clé Navixy est disponible.
 Dans l'environnement actuel, **aucune clé n'a été fournie** (ni `NAVIXY_API_KEY`, ni
 `NAVIXY_HASH`, ni `tenant.navixy_hash`). On reste donc bloqué avant l'auth réelle.
 
@@ -113,6 +121,29 @@ NAVIXY_AUTH       = BLOCKED       -> FAIL
 PILOT_MAPPING     = UNRESOLVED    -> FAIL
 ODOMETER_VALUE    = NOT_VERIFIED  -> FAIL
 ODOMETER_INCREMENT= NOT_TESTED    -> FAIL
+```
+
+---
+
+## RÉSULTAT FINAL D1.2 (§13)
+```
+NAVIXY_AUTH:              BLOCKED        (credential absent — tracker/list non appelé)
+REAL_TRACKERS_DISCOVERED: 0
+PILOT_MAPPING:            UNRESOLVED
+PILOT_TRACKER:            NOT_RESOLVED
+DEVICE_MODEL:             NOT_VERIFIED
+
+ODOMETER_STATUS:          UNAVAILABLE    (navixy_not_configured — jamais 0, jamais trip.length)
+ODOMETER_VALUE:           null
+ODOMETER_SOURCE:          UNKNOWN
+ODOMETER_COUNTER_EXISTS:  UNKNOWN
+HARDWARE_READING:         NOT_VERIFIED
+AVL16_MAPPING:            NOT_VERIFIED
+
+ODOMETER_BEFORE:          NOT_VERIFIED
+ODOMETER_AFTER:           NOT_VERIFIED
+DELTA_KM:                 NOT_VERIFIED
+ODOMETER_INCREMENT:       NOT_TESTED
 ```
 
 ---
