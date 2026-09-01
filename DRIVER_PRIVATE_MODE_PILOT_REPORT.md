@@ -190,8 +190,13 @@ ODOMETER_CONTINUITY:     NOT_VERIFIED
 ```
 PILOT BLOCKED
 ```
-Raison : `NAVIXY_HASH` absent (env + tenant) → aucune lecture odomètre runtime, aucun tracker
+Raison : credential Navixy absent (§ D1.1 : `NAVIXY_CREDENTIAL_TYPE = NONE`, ni
+`NAVIXY_API_KEY` ni `NAVIXY_HASH`) → aucune lecture odomètre runtime, aucun tracker
 pilote réel résolvable. Le bouton Privé/Pro production **ne doit PAS** être commencé.
+
+> **MàJ Phase D1.1** : support `NAVIXY_API_KEY` (prioritaire, secret jamais exposé) ajouté
+> côté code + tests credential 4/4. Voir `NAVIXY_AUTH_PILOT_MAPPING_REPORT.md`. Statut
+> runtime toujours **BLOCKED** faute de clé réelle fournie.
 
 **On NE déclare PAS** : PILOT VALIDATED — donc **PAS** de « READY FOR DRIVER APP PRIVATE/PRO
 IMPLEMENTATION ».
