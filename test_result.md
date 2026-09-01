@@ -9,6 +9,17 @@ user_problem_statement: |
   Données réelles uniquement, N/A si champ absent.
 
 backend:
+  - task: "Phase D2: odometer_capability module (READ-ONLY registry)"
+    implemented: true
+    working: true
+    file: "backend/app/odometer_capability.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Test suite test_odometer_capability.py: 7 PASSED. Registry contains FMC003/FMC130/FMU130/FMC640/FMC650; no model verified=True (field proof required); private_mode_allowed gate blocks all models; no universal AVL16; resolve_model handles naming trap (telfmu130_fmc130→FMC130, telfmu130→FMU130, telfmb003_fmc003→FMC003). Module imports cleanly: models=['FMC003','FMC130','FMC640','FMC650','FMU130'], resolve_model('telfmu130_fmc130')='FMC130', private_mode_allowed('FMC130')=False."
   - task: "Navixy credential refactor regression - multi-tenant isolation"
     implemented: true
     working: true
@@ -173,3 +184,24 @@ agent_communication:
       TOTAL: 75 PASSED, 4 SKIPPED, 0 FAILED
       
       NO REGRESSION DETECTED. The centralized credential resolver (fail-closed, per-tenant, Fernet encryption, global fallback gated) is working correctly. Navixy-dependent reads correctly return UNAVAILABLE (never 0) when Navixy is not configured. All security checks (401, anti-IDOR, multi-tenant isolation) passing.
+  - agent: "testing"
+    message: |
+      PHASE D2 REGRESSION CHECK COMPLETE - New READ-ONLY module app/odometer_capability.py (per-model Teltonika capability registry).
+      
+      TEST RESULTS (against HTTPS preview URL):
+      ✅ Test 1 (test_odometer_capability.py): 7 PASSED
+         - Registry contains all 5 models: FMC003, FMC130, FMU130, FMC640, FMC650
+         - No model has verified=True (field proof required)
+         - private_mode_allowed gate blocks all unvalidated models
+         - No universal AVL16 imposed
+         - resolve_model handles naming trap: telfmu130_fmc130→FMC130, telfmu130→FMU130, telfmb003_fmc003→FMC003
+      ✅ Test 2 (multi-tenant suite): 17 PASSED (test_navixy_multitenant.py + test_navixy_credential.py + test_odometer_audit.py + test_tenant_navixy_provisioning.py)
+      ✅ Test 3 (BLE + auto-assign): 38 PASSED (test_iteration8_ble.py + test_phase42_autoassign.py)
+      ✅ Module import verification: PASS
+         - models: ['FMC003', 'FMC130', 'FMC640', 'FMC650', 'FMU130']
+         - resolve_model('telfmu130_fmc130') = FMC130
+         - private_mode_allowed('FMC130') = False
+      
+      TOTAL: 62 PASSED, 0 FAILED, 0 SKIPPED
+      
+      NO REGRESSION DETECTED. The new odometer_capability module is READ-ONLY (pure data + functions, no DB writes, no Navixy calls). All existing endpoints and logic remain unaffected. Multi-tenant credential isolation, BLE detection, and auto-assignment all working correctly.

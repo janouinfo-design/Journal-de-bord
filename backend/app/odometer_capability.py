@@ -67,23 +67,32 @@ class HardwareOdometerCapability:
 # ---------------------------------------------------------------------------
 REGISTRY: dict[str, HardwareOdometerCapability] = {
     "FMC003": HardwareOdometerCapability(
-        device_model="FMC003", navixy_model_code=None,
-        source_type="UNKNOWN", raw_avl_id=None, unit=None, is_cumulative=None,
+        device_model="FMC003", navixy_model_code="telfmb003_fmc003",
+        source_type="NAVIXY_GPS_CALCULATED",  # RUNTIME D2: aucun mileage HW exposé
+        raw_avl_id=None, unit="km", is_cumulative=True,
         private_business_supported=DOCUMENTED,   # doc: Private/Business + GPS masking
         gps_data_masking_supported=DOCUMENTED,
         odometer_during_private=UNKNOWN,
         remote_privatemode_supported=UNKNOWN,
-        navixy_sensor_exposable=UNKNOWN,
-        evidence_level=UNKNOWN, verified=False, status=STATUS_NOT_TESTED,
-        notes="Doc: Odometer source GNSS/OBD; distance privée incluable au Total Odometer. À confirmer firmware/config réels.",
+        navixy_sensor_exposable=NOT_SUPPORTED,   # RUNTIME D2: OBD présent, PAS de can_mileage/odo HW
+        evidence_level=RUNTIME_VERIFIED, verified=False, status=STATUS_NOT_TESTED,
+        notes=("RUNTIME D2 (ex tracker 3079431, Renault Zoe): counters=odometer(GPS)+engine_hours; "
+               "sensors OBD (conso/rpm/vitesse) mais AUCUN can_mileage/odo HW. 14 devices au parc. "
+               "Doc: Odometer GNSS/OBD; à confirmer Configurator si un Total Odometer HW est activable."),
     ),
     "FMC130": HardwareOdometerCapability(
-        device_model="FMC130",
+        device_model="FMC130", navixy_model_code="telfmu130_fmc130",
+        source_type="VEHICLE_CAN",              # RUNTIME D2: can_mileage exposé !
+        raw_avl_id=None, navixy_input="can_mileage", unit=None, is_cumulative=None,
         private_business_supported=DOCUMENTED, gps_data_masking_supported=DOCUMENTED,
-        odometer_during_private=UNKNOWN, remote_privatemode_supported=UNKNOWN,
-        navixy_sensor_exposable=UNKNOWN, evidence_level=UNKNOWN, verified=False,
-        status=STATUS_NOT_TESTED,
-        notes="Total vs Trip Odometer à auditer séparément. Ne pas assimiler à FMU130.",
+        odometer_during_private=UNKNOWN,        # à prouver terrain (D3): CAN continue si GPS masqué
+        remote_privatemode_supported=UNKNOWN,
+        navixy_sensor_exposable=RUNTIME_VERIFIED,  # can_mileage réellement présent
+        evidence_level=RUNTIME_VERIFIED, verified=False, status=STATUS_NOT_TESTED,
+        notes=("RUNTIME D2 (ex tracker 781479, LOGITRAK AUDI, code telfmu130_fmc130 = FMC130): "
+               "sensors incluent can_mileage + can_consumption + avl_io_463 + ble_beacon_id. "
+               "-> OPTION B (CAN mileage) CANDIDATE VIABLE : source HW indépendante du GPS. "
+               "11 devices au parc. Reste à prouver terrain que can_mileage continue en Private Mode."),
     ),
     "FMU130": HardwareOdometerCapability(
         device_model="FMU130", navixy_model_code="telfmu130",
@@ -93,52 +102,58 @@ REGISTRY: dict[str, HardwareOdometerCapability] = {
         gps_data_masking_supported=UNKNOWN,
         odometer_during_private=UNKNOWN,
         remote_privatemode_supported=UNKNOWN,
-        navixy_sensor_exposable=NOT_SUPPORTED,  # RUNTIME D1: aucun sensor mileage HW exposé
-        evidence_level=RUNTIME_VERIFIED,        # pour le CONSTAT "pas de mileage HW exposé"
+        navixy_sensor_exposable=NOT_SUPPORTED,  # RUNTIME D1/D2: aucun sensor mileage HW exposé
+        evidence_level=RUNTIME_VERIFIED,
         verified=False, status=STATUS_PILOT,
-        notes=("D1 runtime (tracker 625282, GE-898 507): odomètre Navixy = GPS-calculé; "
-               "OBD présent (conso/rpm/vitesse) SANS PID mileage; engine_hours absent; "
-               "pas de can_mileage/obd_mileage/total_odometer exposé. Total Odometer INTERNE "
-               "Teltonika non lisible via API Navixy (nécessite Configurator)."),
+        notes=("D1/D2 runtime (tracker 625282, GE-898 507): odomètre Navixy = GPS-calculé; "
+               "OBD présent SANS PID mileage; pas de can_mileage/odo HW; engine_hours absent. "
+               "-> pas de source HW exposée; OPTION B indisponible sur ce device tel que configuré."),
     ),
     "FMC640": HardwareOdometerCapability(
         device_model="FMC640",
         private_business_supported=UNKNOWN, gps_data_masking_supported=UNKNOWN,
         odometer_during_private=UNKNOWN, remote_privatemode_supported=UNKNOWN,
         navixy_sensor_exposable=UNKNOWN, evidence_level=UNKNOWN, verified=False,
-        status=STATUS_NOT_TESTED,
-        notes="Famille FMX6xx: AVL IDs potentiellement différents (Trip/Total/Tachograph). Ne PAS imposer AVL16.",
+        status="NOT_PRESENT",
+        notes="RUNTIME D2: ABSENT des 3 comptes Navixy réels. Famille FMX6xx: ne PAS imposer AVL16.",
     ),
     "FMC650": HardwareOdometerCapability(
         device_model="FMC650",
         private_business_supported=UNKNOWN, gps_data_masking_supported=UNKNOWN,
         odometer_during_private=UNKNOWN, remote_privatemode_supported=UNKNOWN,
         navixy_sensor_exposable=UNKNOWN, evidence_level=UNKNOWN, verified=False,
-        status=STATUS_NOT_TESTED,
-        notes=("Famille FMX6xx. Doc (À VÉRIFIER runtime/field): AVL199=Trip Odometer, "
-               "AVL216=Total Odometer, AVL192=Tachograph total vehicle distance. "
-               "Aucune de ces valeurs n'est 'verified' tant que non prouvée sur device réel."),
+        status="NOT_PRESENT",
+        notes=("RUNTIME D2: ABSENT des 3 comptes Navixy réels. Famille FMX6xx. "
+               "Doc (À VÉRIFIER si un jour présent): AVL199=Trip, AVL216=Total, AVL192=Tachograph. Non 'verified'."),
     ),
 }
 
-# Mapping code Navixy -> modèle logique (préfixes ; complété au fil des audits runtime).
-NAVIXY_MODEL_PREFIX = {
-    "telfmc003": "FMC003",
-    "telfmc130": "FMC130",
-    "telfmu130": "FMU130",
-    "telfmc640": "FMC640",
-    "telfmc650": "FMC650",
-}
+# Mapping code Navixy -> modèle logique.
+# ⚠️ Piège de nommage confirmé runtime : le code peut contenir 'telfmu130' ET un suffixe
+# '_fmc130' → c'est alors un FMC130 (pas un FMU130). On teste donc les suffixes explicites
+# AVANT le préfixe telfmu130 seul.
+NAVIXY_MODEL_RULES = [
+    ("_fmc003", "FMC003"),   # ex 'telfmb003_fmc003'
+    ("_fmc130", "FMC130"),   # ex 'telfmu130_fmc130'  (FMC130 !)
+    ("_fmc640", "FMC640"),
+    ("_fmc650", "FMC650"),
+    ("telfmc003", "FMC003"),
+    ("telfmc130", "FMC130"),
+    ("telfmc640", "FMC640"),
+    ("telfmc650", "FMC650"),
+    ("telfmu130", "FMU130"),  # FMU130 pur (aucun suffixe _fmcXXX)
+]
 
 
 def resolve_model(navixy_model_code: Optional[str]) -> Optional[str]:
-    """Résout le modèle logique depuis le code Navixy (ex 'telfmu130' -> 'FMU130').
+    """Résout le modèle logique depuis le code Navixy.
+    ex 'telfmu130' -> FMU130 ; 'telfmu130_fmc130' -> FMC130 ; 'telfmb003_fmc003' -> FMC003.
     Retourne None si inconnu — le backend traitera alors la capacité comme UNVERIFIED."""
     if not navixy_model_code:
         return None
     code = str(navixy_model_code).lower()
-    for prefix, model in NAVIXY_MODEL_PREFIX.items():
-        if code.startswith(prefix):
+    for token, model in NAVIXY_MODEL_RULES:
+        if token in code:
             return model
     return None
 

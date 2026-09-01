@@ -34,20 +34,19 @@ def test_private_mode_gate_blocks_unvalidated_models():
 def test_no_universal_avl16():
     # AVL16 ne doit PAS être imposé comme constante universelle.
     for m, cap in REGISTRY.items():
-        if cap.raw_avl_id is not None:
-            # s'il est renseigné, il ne peut l'être qu'avec une preuve (jamais le cas ici)
-            assert cap.evidence_level in (RUNTIME_VERIFIED, "FIELD_VERIFIED"), m
-    # FMU130 (pilote) : pas d'AVL imposé, source constatée GPS-calculée
-    assert REGISTRY["FMU130"].raw_avl_id is None
+        assert cap.raw_avl_id is None, f"{m}: aucun AVL ne doit être figé sans preuve terrain"
+    # FMU130 (pilote) : source constatée GPS-calculée, pas de sensor HW
     assert REGISTRY["FMU130"].source_type == "NAVIXY_GPS_CALCULATED"
     assert REGISTRY["FMU130"].navixy_sensor_exposable == NOT_SUPPORTED
+    # FMC130 : can_mileage exposé (source CAN candidate)
+    assert REGISTRY["FMC130"].source_type == "VEHICLE_CAN"
+    assert REGISTRY["FMC130"].navixy_input == "can_mileage"
 
 
 def test_resolve_model_from_navixy_code():
     assert resolve_model("telfmu130") == "FMU130"
-    assert resolve_model("telfmc130_xxx") == "FMC130"
-    assert resolve_model("telfmc003") == "FMC003"
-    assert resolve_model("telfmc650") == "FMC650"
+    assert resolve_model("telfmu130_fmc130") == "FMC130"   # piège de nommage: c'est un FMC130
+    assert resolve_model("telfmb003_fmc003") == "FMC003"
     assert resolve_model("unknowncode") is None
     assert resolve_model(None) is None
 

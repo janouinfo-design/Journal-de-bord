@@ -51,47 +51,66 @@ Preuves runtime D1/D2 : `sensor/list`, `readings/list`, `get_counters`, `counter
 
 ---
 
-## 3. MATRICE MULTI-MODÈLES (états stricts)
+## 3. MATRICE MULTI-MODÈLES (états stricts) — parc RÉEL
 
-| Modèle | Private/Business | GPS masking | Total Odometer | AVL/Source | Odo pendant privé | État |
+Inventaire runtime (3 comptes Navixy) :
+- `telfmb003_fmc003` = **FMC003** — 14 devices (Logitrak 4, Pradervand 10)
+- `telfmu130_fmc130` = **FMC130** — 11 devices (Logitrak 6, Pradervand 5)  ⚠️ code trompeur (contient `fmu130` + suffixe `_fmc130`)
+- `telfmu130` = **FMU130** — 3 devices (Gaggetta) — PILOTE
+- `iosnavixytracker_xgps` / `navixymobile_xgps` = **smartphones** (2) — hors périmètre
+- **FMC640 / FMC650 : ABSENTS** des comptes réels → `NOT_PRESENT`
+
+| Modèle | Private/Business | GPS masking | Odomètre HW exposé | Source / AVL | Odo pendant privé | État |
 |---|---|---|---|---|---|---|
-| **FMC003** | DOCUMENTED | DOCUMENTED | UNKNOWN | UNKNOWN (doc: GNSS/OBD) | UNKNOWN | NOT_TESTED |
-| **FMC130** | DOCUMENTED | DOCUMENTED | UNKNOWN | UNKNOWN | UNKNOWN | NOT_TESTED |
-| **FMU130** | UNKNOWN | UNKNOWN | UNKNOWN (interne) | Navixy=GPS_CALCULATED (RUNTIME) | UNKNOWN | **PILOT** |
-| **FMC640** | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN (FMX6xx ≠ AVL16) | UNKNOWN | NOT_TESTED |
-| **FMC650** | UNKNOWN | UNKNOWN | UNKNOWN | doc: AVL199 Trip / AVL216 Total / AVL192 Tacho (NON prouvé) | UNKNOWN | NOT_TESTED |
+| **FMC003** (14) | DOCUMENTED | DOCUMENTED | **NON** (RUNTIME) | Navixy=GPS-calc ; OBD sans mileage | UNKNOWN | NOT_TESTED |
+| **FMC130** (11) | DOCUMENTED | DOCUMENTED | **OUI `can_mileage`** (RUNTIME) | VEHICLE_CAN | UNKNOWN (à prouver D3) | NOT_TESTED |
+| **FMU130** (3) | UNKNOWN | UNKNOWN | **NON** (RUNTIME) | Navixy=GPS-calc | UNKNOWN | **PILOT** |
+| **FMC640** | — | — | — | — | — | NOT_PRESENT |
+| **FMC650** | — | — | — | — | — | NOT_PRESENT |
 
-Légende preuve : `DOCUMENTED` (doc Teltonika, non prouvé), `RUNTIME_VERIFIED` (constaté via
-Navixy API), `FIELD_VERIFIED` (prouvé sur device réel en Private Mode), `NOT_SUPPORTED`, `UNKNOWN`.
+Preuves runtime D2 (`get_counters` + `sensor/list`, 1 device/modèle) :
+- FMC003 (ex 3079431, Renault Zoe) : counters=odometer(GPS)+engine_hours ; sensors OBD ; **HARDWARE_MILEAGE=NONE**.
+- FMC130 (ex 781479, LOGITRAK AUDI) : counters=odometer+engine_hours ; sensors incl. **`can_mileage`, `can_consumption`, `avl_io_463`, `ble_beacon_id`** ; **HARDWARE_MILEAGE=`can_mileage`** ✅.
+- FMU130 (ex 625282, Fiat Doblo) : counters=odometer(GPS) ; sensors OBD ; **HARDWARE_MILEAGE=NONE**.
 
-> ⚠️ **Aucune** cellule n'est `FIELD_VERIFIED`. Les AVL 199/216/192 (FMX6xx) sont **DOCUMENTED** au mieux.
-> Ne JAMAIS imposer `AVL16` à FMC640/FMC650 (famille différente).
+> ⚠️ Aucune cellule `FIELD_VERIFIED`. `can_mileage` (FMC130) est `RUNTIME_VERIFIED` (présent), pas
+> encore prouvé « continue en Private Mode » (→ D3). Aucun AVL figé (pas d'AVL16 universel).
 
 ---
 
 ## 4. REGISTRE DE CAPACITÉS (implémenté, backend)
 Fichier : `backend/app/odometer_capability.py` — `HardwareOdometerCapability` par modèle +
-`resolve_model(navixy_code)` + `private_mode_allowed(model)` (gate prod).
-- **Aucun** modèle `verified=True` (règle absolue respectée) ; tests `test_odometer_capability.py` **7/7**.
-- Gate prod : `private_mode_allowed()` renvoie `False` pour TOUS les modèles → bouton Privé
-  interdit en production tant qu'un modèle n'est pas FIELD-VALIDATED.
-- Le backend résout la capacité **par modèle**, jamais `if teltonika: use_avl_16()`.
+`resolve_model()` (gère le piège `telfmu130_fmc130 → FMC130`) + `private_mode_allowed()` (gate prod).
+- **Aucun** modèle `verified=True` (règle absolue). Tests `test_odometer_capability.py` **7/7**.
+- Gate prod : `private_mode_allowed()` = `False` pour TOUS les modèles → bouton Privé interdit
+  en production tant qu'un modèle n'est pas FIELD-VALIDATED.
+- FMC130 : `source_type=VEHICLE_CAN`, `navixy_input=can_mileage`, `evidence_level=RUNTIME_VERIFIED`.
+- FMC003/FMU130 : `NAVIXY_GPS_CALCULATED`, `navixy_sensor_exposable=NOT_SUPPORTED`.
+- FMC640/FMC650 : `status=NOT_PRESENT`.
 
 ---
 
-## 5. OPTIONS (basées sur le runtime FMU130 + doc pour les autres)
+## 5. OPTIONS (basées sur le runtime réel par modèle)
 
 ```
-OPTION_A_TELTONIKA_TOTAL_ODOMETER: UNKNOWN
-  - Non lisible via API Navixy. Nécessite: (a) lecture Configurator (Calculation Source + Odometer
-    Value), (b) activation transmission Total Odometer (AVL) côté device, (c) exposition en
-    sensor Navixy, (d) preuve terrain qu'il continue quand GPS transmis = 0,0.
-OPTION_B_CAN_OBD: UNAVAILABLE (sur FMU130 pilote — aucun PID mileage). À réauditer par modèle.
-OPTION_C_APPLICATION_PRIVACY: CANDIDAT DE REPLI
-  - Ne pas masquer au niveau device (0,0) ; masquer la localisation UNIQUEMENT côté LOGITRAK
-    (backend/app), et calculer la distance privée à partir d'une source non-GPS si disponible,
-    sinon marquer DISTANCE UNAVAILABLE. Ne PAS choisir C tant que A/B ne sont pas éliminées par modèle.
+OPTION_A_TELTONIKA_TOTAL_ODOMETER: UNKNOWN (tous modèles)
+  - Non lisible via API Navixy ; nécessite lecture Configurator + activation transmission AVL +
+    exposition sensor + preuve terrain de continuité en Private Mode.
+
+OPTION_B_CAN_OBD:
+  - FMC130: **VIABLE (candidate)** — `can_mileage` réellement exposé (source HW indépendante du GPS).
+            À prouver en D3 : la valeur can_mileage continue quand le GPS transmis est masqué.
+  - FMC003: UNAVAILABLE (aucun mileage HW ; OBD sans PID kilométrage).
+  - FMU130: UNAVAILABLE (aucun mileage HW).
+
+OPTION_C_APPLICATION_PRIVACY: REPLI pour FMC003 & FMU130
+  - Aucune source HW → masquage applicatif côté LOGITRAK + distance privée = DISTANCE UNAVAILABLE
+    si aucune source non-GPS. Ne pas masquer au niveau device (0,0) pour ces modèles sans nouvelle analyse.
 ```
+
+**Conclusion stratégique** : le rollout Private/Business devra être **par modèle** :
+- **FMC130** → piste **Option B (CAN)** → candidat prioritaire pour D3.
+- **FMC003 / FMU130** → pas de source HW exposée → Option A (Configurator/AVL) à explorer, sinon Option C.
 
 ---
 
@@ -120,27 +139,34 @@ Pour compléter la matrice sans rien écrire :
 
 ## D2 STATUS
 ```
-D2 STATUS: NEEDS_DEVICE_READ
+D2 STATUS: READY_FOR_PILOT_CONFIG  (pour FMC130 uniquement — via can_mileage)
+           NEEDS_DEVICE_READ       (pour FMC003 & FMU130 — aucune source HW exposée)
 ```
-Raison : l'API Navixy ne permet pas de lire la config Private/Business ni le Total Odometer
-interne. Sur le FMU130 pilote, **aucune** source odomètre hardware n'est exposée (seul un
-compteur **GPS-calculé**). Pour statuer `READY_FOR_PILOT_CONFIG`, il faut une **lecture
-Configurator** (par modèle) prouvant qu'un Total Odometer hardware existe/est activable et
-continue quand le GPS transmis est masqué.
+Justification : la gate de sortie (§22) exige une stratégie crédible « GPS masqué + odomètre
+indépendant qui continue ». Le runtime D2 a **identifié une telle source sur le FMC130** :
+`can_mileage` (CAN véhicule), indépendant du GPS transmis → candidat solide pour D3.
+Pour **FMC003** et **FMU130**, aucune source HW n'est exposée → il faut d'abord une lecture
+Configurator (Total Odometer / AVL) ; sinon Option C (privacy applicative).
 
 ### GATE DE SORTIE (§22)
-Non atteinte : on n'a PAS encore identifié de stratégie crédible « GPS masqué + odomètre
-indépendant qui continue » sur le parc. (Le compteur GPS-calculé Navixy est **exclu** comme
-source privée.)
+- **FMC130 : ATTEINTE** (source non-GPS `can_mileage` identifiée ; reste à prouver terrain
+  qu'elle continue en Private Mode — objet de D3). Le compteur GPS-calculé Navixy reste **exclu**.
+- **FMC003 / FMU130 : NON atteinte** (pas de source HW indépendante du GPS pour l'instant).
 
 ### NEXT SAFE STEP
 ```
-NEXT SAFE STEP: REASSESS PRIVACY ARCHITECTURE
+NEXT SAFE STEP: D3 CAN/OBD ODOMETER PILOT   (cible FMC130 — 1 seul device)
 ```
-Concrètement, dans l'ordre, SANS écriture device tant que non décidé :
-1. Lecture Configurator FMU130 pilote → Total Odometer (Calc Source) + Private/Business config + firmware.
-2. Si Total Odometer hardware activable & continue en privé → bascule vers `D3 SINGLE-DEVICE CONFIGURATION PILOT` (FMU130).
-3. Répéter l'audit lecture par modèle (FMC003, FMC130, FMC640, FMC650) — chacun validé indépendamment.
-4. Si aucun modèle n'offre d'odomètre indépendant du GPS → étudier `OPTION C` (privacy applicative).
+Dans l'ordre, SANS écriture device tant que non décidé explicitement :
+1. **FMC130** (Option B — prioritaire) : choisir 1 device FMC130, lire l'historique `can_mileage`
+   (`counter/data/read` ou readings) pour confirmer unité + caractère cumulatif ; puis D3 terrain :
+   Private ON → vérifier GPS transmis masqué **ET** `can_mileage` qui continue → Private OFF →
+   `private_distance = can_mileage_end - can_mileage_start`.
+2. **FMC003 / FMU130** : lecture **Teltonika Configurator** (Total Odometer / Calculation Source /
+   Private-Business / firmware). Si un Total Odometer HW est activable et continue en privé →
+   `D3 SINGLE-DEVICE CONFIGURATION PILOT`. Sinon → étudier `OPTION C` (privacy applicative).
+3. **FMC640 / FMC650** : `NOT_PRESENT` dans le parc → hors périmètre tant qu'aucun device réel.
 
-**Ne PAS** démarrer D3 ni aucune écriture device automatiquement.
+**Ne PAS** démarrer D3 ni aucune écriture device automatiquement. Le bouton Privé reste **désactivé
+en production** pour TOUS les modèles (gate `private_mode_allowed()` = False) jusqu'à FIELD-VALIDATION
+par modèle.
