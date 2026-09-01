@@ -8,6 +8,52 @@ user_problem_statement: |
   toucher au cœur validé (login, claim, current-session, stop, PRO/PRIVÉ, BLE, conflits, push).
   Données réelles uniquement, N/A si champ absent.
 
+backend:
+  - task: "Navixy credential refactor regression - multi-tenant isolation"
+    implemented: true
+    working: true
+    file: "backend/app/integrations.py, app/navixy_client.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Suite 1 (test_navixy_multitenant.py + test_navixy_credential.py + test_odometer_audit.py): 14 PASSED. Multi-tenant credential isolation, priority resolution, odometer UNAVAILABLE (not zero), anti-IDOR all verified."
+  - task: "Navixy refactor regression - BLE + auto-assignment unaffected"
+    implemented: true
+    working: true
+    file: "backend/app/ble_engine.py, app/assignments.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Suite 2 (test_iteration8_ble.py + test_phase42_autoassign.py): 38 PASSED. BLE detection and auto-assignment logic unaffected by credential refactor."
+  - task: "Navixy refactor regression - Phase 3 admin/driver flows"
+    implemented: true
+    working: true
+    file: "backend/app/routes/"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Suite 3 (test_phase3_admin_driver.py): 23 PASSED, 4 SKIPPED (2nd tenant admin-b not provisioned - expected). No new failures introduced by refactor."
+  - task: "Odometer endpoint security + UNAVAILABLE behavior"
+    implemented: true
+    working: true
+    file: "backend/app/routes/livre.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Curl verification: GET /api/livre/driver/vehicle/odometer without auth → 401 ✓. With auth (chauffeur@logitrak.ch) → 200 with status='UNAVAILABLE', odometer_km=null, reason='no_active_vehicle' ✓. NEVER returns 0. Correct expected behavior (Navixy not configured in env)."
+
 frontend:
   - task: "Mes trajets (liste)"
     implemented: true
@@ -114,3 +160,16 @@ agent_communication:
       ✅ All UI elements render correctly with proper testIDs
       ✅ No console errors (filtered BLE/notifications/web-unavailable warnings)
       Real credentials tested: chauffeur@logitrak.ch / chauffeur123. Screenshots captured. No issues found.
+  - agent: "testing"
+    message: |
+      BACKEND REGRESSION TEST COMPLETE - Navixy credential refactor to centralized multi-tenant module (app/integrations.py).
+      
+      TEST RESULTS (all against HTTPS preview URL):
+      ✅ Suite 1 (Navixy multi-tenant + credential + odometer audit): 14 PASSED
+      ✅ Suite 2 (BLE + auto-assignment): 38 PASSED  
+      ✅ Suite 3 (Phase 3 admin/driver): 23 PASSED, 4 SKIPPED (expected - 2nd tenant not provisioned)
+      ✅ Curl verification: 401 without auth ✓, UNAVAILABLE (not 0) with auth ✓
+      
+      TOTAL: 75 PASSED, 4 SKIPPED, 0 FAILED
+      
+      NO REGRESSION DETECTED. The centralized credential resolver (fail-closed, per-tenant, Fernet encryption, global fallback gated) is working correctly. Navixy-dependent reads correctly return UNAVAILABLE (never 0) when Navixy is not configured. All security checks (401, anti-IDOR, multi-tenant isolation) passing.

@@ -55,38 +55,32 @@ def _env_credential() -> str:
 
 def _hash() -> str:
     """Credential effectif transmis à Navixy dans le champ `hash`.
-    Ordre : tenant.navixy_hash (contexte tenant) -> NAVIXY_API_KEY -> NAVIXY_HASH."""
-    from app.tenant_context import get_tenant_doc
-    t = get_tenant_doc()
-    if t and t.get("navixy_hash"):
-        return t["navixy_hash"]
-    cred = _env_credential()
-    if not cred:
+    Résolution centralisée multi-tenant (fail-closed) via app.integrations :
+    tenant.navixy_hash -> NAVIXY_API_KEY (dev/pilot) -> NAVIXY_HASH (legacy)."""
+    from app.integrations import get_integration_credential
+    cred = get_integration_credential(provider="NAVIXY")
+    if not cred or not cred.get("credential"):
         raise NavixyError("Clé d'intégration LOGITRAK non configurée")
-    return cred
+    return cred["credential"]
 
 
 def is_configured() -> bool:
-    from app.tenant_context import get_tenant_doc, get_tenant_id
-    if get_tenant_id():
-        t = get_tenant_doc()
-        return bool(t and t.get("navixy_hash"))
-    return bool(_env_credential())
+    from app.integrations import get_integration_credential
+    return bool(get_integration_credential(provider="NAVIXY"))
 
 
 def credential_type() -> str:
-    """Type de credential ACTIF (sans jamais révéler la valeur) : API_KEY / LEGACY_HASH / NONE.
-    Utilisé uniquement pour le rapport d'audit."""
-    from app.tenant_context import get_tenant_doc, get_tenant_id
-    if get_tenant_id():
-        t = get_tenant_doc()
-        if t and t.get("navixy_hash"):
-            return "TENANT_HASH"
-    if os.environ.get("NAVIXY_API_KEY", "").strip():
-        return "API_KEY"
-    if os.environ.get("NAVIXY_HASH", "").strip():
-        return "LEGACY_HASH"
-    return "NONE"
+    """Type de credential ACTIF (sans jamais révéler la valeur) — pour l'audit.
+    Mappe la source centralisée vers les libellés attendus par les rapports :
+    API_KEY / LEGACY_HASH / TENANT_HASH / NONE."""
+    from app.integrations import integration_status
+    src = integration_status(provider="NAVIXY")
+    return {
+        "TENANT": "TENANT_HASH",
+        "ENV_API_KEY": "API_KEY",
+        "ENV_LEGACY_HASH": "LEGACY_HASH",
+        "NONE": "NONE",
+    }.get(src, "NONE")
 
 
 
