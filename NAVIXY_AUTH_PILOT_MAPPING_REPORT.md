@@ -7,6 +7,69 @@
 
 ---
 
+## ==================== PHASE D1.4 (dernière exécution) ====================
+
+### Audit provisioning existant (§1)
+```
+TENANT_NAVIXY_READ_ENDPOINT:  YES   (GET /api/admin/tenants -> masqué, jamais le secret)
+TENANT_NAVIXY_WRITE_ENDPOINT: YES   (POST + PATCH /api/admin/tenants[/{id}], superadmin)
+TENANT_NAVIXY_TEST_ENDPOINT:  PARTIAL (validation via fetch_navixy_identity au set + POST /tenants/{id}/sync)
+ADMIN_UI_AVAILABLE:           YES   (API superadmin)
+```
+→ Provisioning **réutilisé** (pas de nouvelle API créée).
+
+### Correction appliquée (§5) — chiffrement au repos
+- Écriture admin (`POST`/`PATCH /admin/tenants`) : le credential tenant est désormais stocké via
+  `encrypt_secret()` (préfixe `enc::`) **si** `INTEGRATION_ENCRYPTION_KEY` est configurée ; sinon
+  clair legacy (rétro-compat). Validation `tracker`/identity faite sur la valeur **en clair** avant chiffrement.
+- Lecture directe `driver_beacons.py` : `decrypt_secret()` défensif (idempotent sur clair → zéro régression).
+- `_tenant_out` : ajoute `navixy_credential_encrypted` (booléen) ; **ne renvoie jamais** la valeur (masquée).
+- Réutilise `app/integrations.py` (aucun 2e mécanisme crypto). `navixy_hash` = champ legacy conservé (pas de renommage — §6).
+
+### État runtime (§7, §10, §11)
+```
+TENANT_PILOT:                 TENANT_PILOT_SELECTION_REQUIRED
+  Tenants disponibles (aucun credential Navixy configuré) :
+   - "default" (Logitrak)                     navixy_configured=false
+   - "TEST_Tenant_..._edited"                 navixy_configured=false
+TENANT_NAVIXY_CONFIGURED:     NO
+TENANT_CREDENTIAL_ENCRYPTION: DISABLED  (INTEGRATION_ENCRYPTION_KEY non configurée dans cet env)
+CREDENTIAL_SCOPE:             NONE
+GLOBAL_FALLBACK_USED:         NO
+NAVIXY_CONNECTION_TEST:       NOT_CONFIGURED
+NAVIXY_AUTH:                  BLOCKED (tracker/list non appelé)
+REAL_TRACKERS_DISCOVERED:     0
+PILOT_MAPPING:                UNRESOLVED
+ODOMETER_STATUS:              UNAVAILABLE (jamais 0, jamais trip.length)
+...                           NOT_VERIFIED
+D1 STATUS:                    BLOCKED
+```
+
+### Où saisir la clé du tenant pilote (§8 — JAMAIS dans le chat)
+Le credential ne doit pas être collé ici. Il se configure via l'**API superadmin sécurisée existante** :
+```
+PATCH /api/admin/tenants/{tenant_id}
+Authorization: Bearer <token superadmin>
+Body: {"navixy_hash": "<clé API Navixy du tenant>"}
+```
+→ Le backend **teste** la clé (fetch_navixy_identity), **rejette** une clé invalide ou un compte
+Navixy déjà rattaché, **chiffre** (si `INTEGRATION_ENCRYPTION_KEY` présente) puis **stocke**. La réponse
+ne contient jamais la clé (uniquement `navixy_hash_masked`, `has_navixy_hash`, `navixy_credential_encrypted`).
+Recommandé : définir aussi `INTEGRATION_ENCRYPTION_KEY` (Fernet) côté serveur pour un stockage chiffré.
+
+### Réponse à la question centrale de D1.4
+« Peut-on configurer et utiliser la clé Navixy propre à un tenant, récupérer ses trackers réels et lire
+un odomètre réel sans utiliser le credential d'un autre client ? »
+→ **OUI côté architecture/code** (résolveur tenant-first, fail-closed, isolation prouvée par tests) ;
+**runtime NON encore prouvé** car aucun tenant n'a de clé Navixy réelle configurée dans cet environnement.
+
+**NEXT** : `READY FOR REAL DRIVE ODOMETER RECHECK` — dès qu'une clé tenant réelle est saisie via
+`PATCH /api/admin/tenants/{id}` (superadmin), je relance D1 avec `CREDENTIAL_SCOPE=TENANT` et
+`GLOBAL_FALLBACK_USED=NO`. **D2 non démarré.**
+
+## ========================================================================
+
+
 ## RÉSULTAT GLOBAL
 ```
 RUNTIME PILOT: BLOCKED_CREDENTIAL_NOT_INJECTED
