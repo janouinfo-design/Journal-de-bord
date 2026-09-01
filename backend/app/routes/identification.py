@@ -145,6 +145,55 @@ async def driver_my_vehicle(user=Depends(get_current_user)):
                 "active_driver", "mobile_override", "confidence")}}
 
 
+@router.get("/driver/vehicle/odometer")
+async def driver_vehicle_odometer(
+    vehicle_id: Optional[str] = Query(default=None),
+    user=Depends(get_current_user),
+):
+    """Lecture READ-ONLY de l'odomètre matériel du véhicule (audit odomètre).
+
+    Sécurité :
+    - tenant scoping ('default') ;
+    - anti-IDOR : si `vehicle_id` est fourni, il doit correspondre au véhicule de
+      la session en cours du chauffeur (un chauffeur ne lit pas un véhicule tiers) ;
+    - sinon, on utilise le véhicule de la session courante.
+
+    Honnêteté des données :
+    - jamais de 0 km fictif ; si indisponible -> {odometer_km: null, status: "UNAVAILABLE"}.
+    - aucune estimation GPS : lecture du compteur Navixy uniquement.
+    """
+    from app.odometer_audit import read_vehicle_odometer
+
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+
+    # Véhicule de la session courante (source de vérité pour ce chauffeur).
+    sess = await ble_engine.get_current_session(db, driver_id)
+    current_vehicle_id = sess.get("vehicle_id") if sess else None
+
+    target_vehicle_id = vehicle_id or current_vehicle_id
+    if not target_vehicle_id:
+        return {"vehicle_id": None, "odometer_km": None, "source": None,
+                "status": "UNAVAILABLE", "reason": "no_active_vehicle"}
+
+    # Anti-IDOR : refuser un véhicule qui n'est pas celui de la session du chauffeur.
+    if vehicle_id and current_vehicle_id and vehicle_id != current_vehicle_id:
+        raise HTTPException(403, "Accès refusé à ce véhicule")
+
+    vehicle = await db.vehicles.find_one(
+        {"id": target_vehicle_id, "tenant_id": "default"}, {"_id": 0})
+    if not vehicle:
+        raise HTTPException(404, "Véhicule introuvable")
+
+    tracker_id = vehicle.get("navixy_tracker_id")
+    reading = await read_vehicle_odometer(tracker_id)
+    return {"vehicle_id": target_vehicle_id,
+            "vehicle_plate": vehicle.get("plate"), **reading}
+
+
+
 @router.get("/driver/my-profile")
 async def driver_my_profile(user=Depends(get_current_user)):
     """Profil mobile : compte, tag BLE associé, dernière détection. Jamais de mot de passe."""

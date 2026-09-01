@@ -134,3 +134,36 @@ async def send_raw_command(tracker_id: int, command: str, reliable: bool = True)
             "command": command,
             "reliable": reliable,
         })
+
+
+# ---------------------------------------------------------------------------
+# READ-ONLY counters / odometer (audit odomètre Teltonika -> Navixy).
+# Endpoints Navixy User API officiels (vérifiés sur la doc, NON inventés) :
+#   - tracker/get_counters            {hash, tracker_id}
+#   - tracker/counter/value/get       {hash, tracker_id, type: "odometer"|"engine_hours"}
+# Aucune écriture ici. `counter/value/set` n'est volontairement PAS implémenté
+# (write op non autorisée pendant l'audit).
+# ---------------------------------------------------------------------------
+async def get_counters(tracker_id: int) -> dict:
+    """Lit TOUS les compteurs courants d'un tracker (odometer, engine_hours, ...).
+
+    Réponse Navixy typique : {success, list|counters: [{type, value, update_time, ...}]}
+    ou une forme mappée selon la version. Le mapping exact est résolu par l'appelant.
+    """
+    async with httpx.AsyncClient() as c:
+        return await _post(c, "tracker/get_counters", {"tracker_id": int(tracker_id)})
+
+
+async def get_counter_value(tracker_id: int, counter_type: str = "odometer") -> dict:
+    """Lit la valeur d'UN compteur (par défaut l'odomètre) pour un tracker.
+
+    counter_type ∈ {"odometer", "engine_hours"}. Réponse Navixy : {success, value, ...}.
+    """
+    if counter_type not in ("odometer", "engine_hours"):
+        raise NavixyError("counter_type doit être 'odometer' ou 'engine_hours'")
+    async with httpx.AsyncClient() as c:
+        return await _post(c, "tracker/counter/value/get", {
+            "tracker_id": int(tracker_id),
+            "type": counter_type,
+        })
+
