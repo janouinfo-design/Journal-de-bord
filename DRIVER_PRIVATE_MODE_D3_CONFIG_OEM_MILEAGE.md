@@ -1,6 +1,40 @@
 # DRIVER_PRIVATE_MODE_D3_CONFIG_OEM_MILEAGE.md
 ## Protocole D3-CONFIG — OEM Mileage (AVL 389) — GATED / NON EXÉCUTÉ
 
+## ============================================================================
+## SNAPSHOT D3-A (Etapes 0+1) — tracker 3467714 « Manchester » — READ-ONLY
+## ============================================================================
+```
+TRACKER_ID = 3467714
+MODEL = FMC003            (source.model = telfmb003_fmc003)  ✓ confirmé
+FIRMWARE = NOT_READABLE_VIA_NAVIXY (relever via Configurator)
+
+CODEC_8_EXTENDED = NON_CONFIRMÉ_POUR_CE_DEVICE   [le .cfg fourni = FmType=FMC130, pas ce FMC003]
+OBD_FEATURE (40000) = INCONNU                    [idem — .cfg du bon device requis]
+VIN_SOURCE (40005) = INCONNU (lecture seule)     [idem]
+OEM_TOTAL_MILEAGE_PRIORITY (40430) = INCONNU     [idem]
+
+OBD_MILEAGE_SENSOR_DEFINED = YES   (sensor id 5371584 « OBD : Kilométrage OBD total », km)
+OBD_MILEAGE_VALUE = None           (sensor défini mais VIDE dans readings)
+OBD_MILEAGE_TIMESTAMP = None
+AVL389_PRESENT_RUNTIME = NO        (absent readings + get_state.additional)
+
+OBD_VIN = WV2ZZZSK3PX065783  (@ 2026-09-02 18:01:03 — VW utilitaire, OBD ACTIF/récent)
+NAVIXY_GPS_ODOMETER = 16539.43 km @ 2026-09-02 17:59:56  (RÉFÉRENCE SEULEMENT — EXCLU)
+
+AVL389_165000_PROVENANCE = UNRESOLVED
+D3A_CONFIG_WRITE_READY = NO
+BLOCKING_REASON = config device réelle de 3467714 inconnue (besoin du .cfg export du FMC003
+  « Manchester », le .cfg précédent étant FmType=FMC130 → mauvais device) ; firmware non lisible
+  via Navixy ; GO explicite requis avant toute écriture.
+```
+> Note : OBD parfaitement actif (VIN VW + rpm/temp/carburant temps réel), sensor `obd_mileage`
+> **défini mais vide** → l'AVL 389 n'est pas transmis (OEM mileage non activé côté device).
+> Hypothèse cohérente : le vrai compteur du VW ≈ 165 000 km (utilitaire) — d'où la capture — mais
+> `PROVENANCE=UNRESOLVED` maintenue. Le GPS odo Navixy (16 539) ne compte que depuis l'installation.
+
+
+
 > **STATUT : PRÉPARÉ, NON EXÉCUTÉ.** Aucune écriture device ne sera faite sans **GO explicite**
 > de l'opérateur, tracker par tracker. Aucun `privatemode` dans ce protocole (c'est D3-B, plus tard).
 > Source de vérité : Teltonika wiki — **AVL ID 389 = OBD OEM Total Mileage (km)** ; transmission
