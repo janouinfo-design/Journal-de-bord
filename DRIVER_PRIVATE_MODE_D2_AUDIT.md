@@ -141,6 +141,47 @@ requise** (relevé manuel, sans modification).
 
 
 ## ============================================================================
+## RE-AUDIT OEM MILEAGE (AVL 389) (2026-09-02) — READ-ONLY, 25 trackers
+## ============================================================================
+> Via `scripts/d2_oem_mileage_reaudit.py` : recherche explicite de `avl_io_389`
+> (OBD OEM Total Mileage, km) + tous `avl_io_*` odométriques, sur FMC003 + FMC130,
+> tous tenants (Logitrak 10, Pradervand 15, Gaggetta 0 → **25 trackers**).
+
+### Résultats
+```
+avl_io_389 PRESENT              = 0 / 25   (aucun tracker accessible n'expose l'OEM mileage)
+FOCUS tracker 3467714           = INTROUVABLE dans les 3 tenants (Logitrak/Pradervand/Gaggetta)
+Verdict FMC003 "0/14" precedent = CONFIRMÉ (le re-scan avl_io_* ne révèle aucun angle mort)
+```
+
+### Point capital : le tracker 3467714 n'est sur AUCUN de nos 3 comptes Navixy
+La capture fournie montre `avl_io_389 = 165000` pour `3467714`, et son `.cfg` a **Codec 8
+Extended activé** (param `113=1`) — donc il **peut** transmettre l'AVL 389 (>255). MAIS ce
+tracker **n'existe pas** dans les tenants Logitrak / Pradervand / Gaggetta accessibles.
+→ Il réside sur un **4ᵉ compte Navixy** (dealer / test / autre client) non configuré dans
+le backend multi-tenant. C'est pourquoi le re-audit ne le voit pas.
+
+### Interprétation (terminologie stricte)
+- **OBD OEM Total Mileage (AVL 389)** = source **véhicule/OBD, indépendante du GNSS**. Réellement
+  exposée **uniquement** sur `3467714` (hors périmètre) ; **0/25** sur le parc accessible.
+- Seul autre candidat sur le parc = `can_mileage` du `781479` (figé 2022 → inexploitable).
+- Absence d'AVL 389 sur les 25 : Codec 8 simple (781479 `113=0`), et/ou OBD OEM non activé,
+  et/ou véhicule ne fournissant pas le PID OEM.
+
+### Conséquences
+1. Piste **OEM mileage prometteuse mais démontrée sur 1 seul device** (`3467714`, dernier FW/config,
+   Codec 8 Extended) → **candidat pilote idéal**, sous réserve d'accès à son compte Navixy.
+2. Parc accessible agrandi : **25 FMC003/FMC130** (nouveaux : 3076994, 3218550, 1067937/38/39,
+   478998, 479006, 597288, 3466146, 3472998).
+3. `TELTONIKA_TOTAL_ODOMETER (11806=0=GNSS interne)` reste la piste pour les véhicules **sans** OEM
+   mileage — non exposé à Navixy aujourd'hui (activation I/O = écriture config).
+
+### Questions ouvertes
+- Sur **quel compte Navixy** se trouve `3467714` ? Ajouter un **4ᵉ tenant/credential** ?
+- Fraîcheur réelle de `avl_io_389 = 165000` (timestamp) ?
+
+
+## ============================================================================
 ## FMC003 OBD/CAN MILEAGE AUDIT (2026-09-02) — READ-ONLY, par véhicule
 ## ============================================================================
 > Runtime réel via `scripts/d2_fmc003_mileage_audit.py` (multi-tenant, READ-ONLY).
