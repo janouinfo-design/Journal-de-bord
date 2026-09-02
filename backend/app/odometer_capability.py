@@ -82,17 +82,18 @@ REGISTRY: dict[str, HardwareOdometerCapability] = {
     ),
     "FMC130": HardwareOdometerCapability(
         device_model="FMC130", navixy_model_code="telfmu130_fmc130",
-        source_type="VEHICLE_CAN",              # RUNTIME D2: can_mileage exposé !
-        raw_avl_id=None, navixy_input="can_mileage", unit=None, is_cumulative=None,
+        source_type="NAVIXY_GPS_CALCULATED",     # source VIVANTE = GPS ; can_mileage MORT
+        raw_avl_id=None, navixy_input="can_mileage", unit="km", is_cumulative=None,
         private_business_supported=DOCUMENTED, gps_data_masking_supported=DOCUMENTED,
-        odometer_during_private=UNKNOWN,        # à prouver terrain (D3): CAN continue si GPS masqué
+        odometer_during_private=NOT_SUPPORTED,   # aucune source HW vivante -> impossible
         remote_privatemode_supported=UNKNOWN,
-        navixy_sensor_exposable=RUNTIME_VERIFIED,  # can_mileage réellement présent
-        evidence_level=RUNTIME_VERIFIED, verified=False, status=STATUS_NOT_TESTED,
-        notes=("RUNTIME D2 (ex tracker 781479, LOGITRAK AUDI, code telfmu130_fmc130 = FMC130): "
-               "sensors incluent can_mileage + can_consumption + avl_io_463 + ble_beacon_id. "
-               "-> OPTION B (CAN mileage) CANDIDATE VIABLE : source HW indépendante du GPS. "
-               "11 devices au parc. Reste à prouver terrain que can_mileage continue en Private Mode."),
+        navixy_sensor_exposable=NOT_SUPPORTED,   # sensor can_mileage présent mais DONNÉE MORTE
+        evidence_level=RUNTIME_VERIFIED, verified=False, status=STATUS_BLOCKED,
+        notes=("RUNTIME D2/D3-preflight (tracker 781479, LOGITRAK AUDI, telfmu130_fmc130=FMC130): "
+               "sensor can_mileage EXISTE (id 5411571, unité km) MAIS donnée PÉRIMÉE (dernier point "
+               "2022-03-26 ; historique 2026 vide) -> can_mileage INEXPLOITABLE (mort). "
+               "Seule source vivante = odometer GPS-calculé. Le bus CAN ne remonte plus le km. "
+               "OPTION B NON viable en l'état ; nécessite réactivation/recâblage CAN avant tout D3."),
     ),
     "FMU130": HardwareOdometerCapability(
         device_model="FMU130", navixy_model_code="telfmu130",

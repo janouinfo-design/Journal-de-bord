@@ -7,6 +7,36 @@
 > INTERDIT : bulk, autres modèles (FMC003/FMU130/FMC640/FMC650), `trip.length`,
 > `counter/value/set`, toute modif de config autre que `Trigger Type` (si nécessaire).
 
+
+> ## 🔴 MISE À JOUR PRÉ-D3 (bloquant) — GATE 1 ÉCHOUE : pas de source odomètre HW vivante
+> Vérification READ-ONLY du `can_mileage` sur le FMC130 pilote (781479) :
+> ```
+> CAN_MILEAGE_SENSOR_EXISTS: YES (id 5411571, unité km, mult=1, div=1)
+> CAN_MILEAGE_VALUE:         80078.5 km
+> CAN_MILEAGE_TIMESTAMP:     2022-03-26   ← PÉRIMÉ ~4 ans
+> SENSOR_HISTORY (2026):     [] vide
+> CAN_MILEAGE_FRESH:         NO
+> CAN_MILEAGE_CLASSIFICATION: UNKNOWN (donnée morte, incrément non testable)
+> ```
+> → Le sensor `can_mileage` **existe mais ne reçoit plus de données depuis 2022** (bus CAN
+> ne remonte plus le km). Confirmé par l'opérateur : « FMC130 n'a pas can_mileage » (exploitable).
+> **GATE 1 non satisfaite → D3 NE DÉMARRE PAS.** Aucune écriture device. `privatemode` NON envoyé.
+>
+> **Verdict parc (runtime réel) :** aucune source odomètre **hardware vivante** (FMC003=aucune,
+> FMC130=CAN mort, FMU130=aucune). Seules sources vivantes = **GPS-calculées** → **incompatibles**
+> avec le masquage GPS. ⇒ L'architecture « GPS masqué + odomètre qui continue » est
+> **NON RÉALISABLE sur le parc actuel** sans action matérielle/config préalable.
+>
+> **Prochaines options (aucune n'est D3 en l'état) :**
+> 1. **Réactiver le CAN** sur les FMC130 (recâblage/PID CAN mileage) → puis re-preflight `can_mileage` vivant → D3.
+> 2. **Option A** : activer le **Total Odometer Teltonika (GNSS interne)** via Configurator et vérifier
+>    terrain qu'il continue quand le GPS *transmis* est masqué (GNSS interne ≠ GPS transmis).
+> 3. **Option C** : confidentialité **applicative** LOGITRAK (masquage côté backend/app), distance
+>    privée = `DISTANCE UNAVAILABLE` si aucune source non-GPS ; ne pas masquer au niveau device.
+>
+> Le registre `odometer_capability.py` reflète ce verdict : FMC130 `status=BLOCKED`,
+> `odometer_during_private=NOT_SUPPORTED`. Bouton Privé prod **désactivé** pour tous les modèles.
+
 ---
 
 ## PRÉ-REQUIS (avant GATE 1) — LECTURE MANUELLE TELTONIKA CONFIGURATOR

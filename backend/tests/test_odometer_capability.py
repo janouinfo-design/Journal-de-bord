@@ -38,9 +38,11 @@ def test_no_universal_avl16():
     # FMU130 (pilote) : source constatée GPS-calculée, pas de sensor HW
     assert REGISTRY["FMU130"].source_type == "NAVIXY_GPS_CALCULATED"
     assert REGISTRY["FMU130"].navixy_sensor_exposable == NOT_SUPPORTED
-    # FMC130 : can_mileage exposé (source CAN candidate)
-    assert REGISTRY["FMC130"].source_type == "VEHICLE_CAN"
+    # FMC130 : sensor can_mileage présent MAIS donnée morte (2022) -> non exploitable
     assert REGISTRY["FMC130"].navixy_input == "can_mileage"
+    assert REGISTRY["FMC130"].source_type == "NAVIXY_GPS_CALCULATED"
+    assert REGISTRY["FMC130"].navixy_sensor_exposable == NOT_SUPPORTED
+    assert REGISTRY["FMC130"].odometer_during_private == NOT_SUPPORTED
 
 
 def test_resolve_model_from_navixy_code():

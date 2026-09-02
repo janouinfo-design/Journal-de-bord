@@ -20,6 +20,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "Test suite test_odometer_capability.py: 7 PASSED. Registry contains FMC003/FMC130/FMU130/FMC640/FMC650; no model verified=True (field proof required); private_mode_allowed gate blocks all models; no universal AVL16; resolve_model handles naming trap (telfmu130_fmc130→FMC130, telfmu130→FMU130, telfmb003_fmc003→FMC003). Module imports cleanly: models=['FMC003','FMC130','FMC640','FMC650','FMU130'], resolve_model('telfmu130_fmc130')='FMC130', private_mode_allowed('FMC130')=False."
+      - working: true
+        agent: "testing"
+        comment: "Phase D3 preflight non-regression check PASS. FMC130 downgraded from VEHICLE_CAN to NAVIXY_GPS_CALCULATED with status=BLOCKED and odometer_during_private=NOT_SUPPORTED (runtime finding: can_mileage sensor exists but data stale since 2022, not usable). Test results: test_odometer_capability.py 7 PASSED (FMC130 now source_type NAVIXY_GPS_CALCULATED, navixy_sensor_exposable NOT_SUPPORTED, odometer_during_private NOT_SUPPORTED; private_mode_allowed False for all models). Full regression suite: 55 PASSED, 3 warnings (pre-existing deprecation warnings). Verification: private_mode_allowed('FMC130') = False ✓. NO REGRESSION DETECTED."
   - task: "Navixy credential refactor regression - multi-tenant isolation"
     implemented: true
     working: true
@@ -230,3 +233,31 @@ agent_communication:
       ✅ Warnings: 3 (pre-existing deprecation warnings, not related to D3 changes)
       
       NO REGRESSION DETECTED. Phase D3 PREPARATION artifacts are documentation-only. No app logic, endpoints, routes, models, or existing modules were modified. All existing functionality (odometer capability, Navixy multi-tenant, BLE, auto-assignment) remains fully operational.
+  - agent: "testing"
+    message: |
+      PHASE D3 PREFLIGHT NON-REGRESSION CHECK COMPLETE - FMC130 capability registry update (odometer_capability.py).
+      
+      CONTEXT: FMC130 downgraded from VEHICLE_CAN to NAVIXY_GPS_CALCULATED with status=BLOCKED and odometer_during_private=NOT_SUPPORTED. Runtime finding: can_mileage sensor exists (id 5411571) but data is stale since 2022-03-26 (2026 history empty) - not usable. Only live source is GPS-calculated odometer.
+      
+      TEST RESULTS (against HTTPS preview URL https://driver-fleet-ble.preview.emergentagent.com):
+      ✅ login_attempts purged: 0 documents (clean state)
+      ✅ Test 1 (test_odometer_capability.py): 7 PASSED
+         - FMC130 now source_type=NAVIXY_GPS_CALCULATED (was VEHICLE_CAN)
+         - FMC130 navixy_sensor_exposable=NOT_SUPPORTED (sensor exists but data dead)
+         - FMC130 odometer_during_private=NOT_SUPPORTED (no live HW source)
+         - FMC130 status=BLOCKED (requires CAN reactivation/rewiring before D3)
+         - private_mode_allowed('FMC130') = False ✓ (all models blocked, no field validation yet)
+         - resolve_model naming trap still handled correctly
+      ✅ Test 2 (full regression suite): 55 PASSED, 0 FAILED, 0 SKIPPED
+         - test_navixy_multitenant.py: PASS
+         - test_navixy_credential.py: PASS
+         - test_odometer_audit.py: PASS
+         - test_tenant_navixy_provisioning.py: PASS
+         - test_iteration8_ble.py: PASS
+         - test_phase42_autoassign.py: PASS
+      ✅ Warnings: 3 (pre-existing deprecation warnings: multipart import, Query regex)
+      ✅ Module verification: private_mode_allowed('FMC130') = False ✓
+      
+      TOTAL: 62 PASSED (7 + 55), 0 FAILED, 0 SKIPPED
+      
+      NO REGRESSION DETECTED. The FMC130 capability update is data-only (READ-ONLY registry). No app endpoints, routes, models, or logic changed. This module contains pure functions and data structures. All existing functionality (multi-tenant Navixy, BLE, auto-assignment, odometer audit) remains fully operational. The update accurately reflects runtime reality: FMC130 tracker 781479's CAN bus is not providing live mileage data.
