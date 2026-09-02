@@ -2,6 +2,35 @@
 ## Phase D2 — Audit READ-ONLY Private/Business + Total Odometer (PARC MULTI-MODÈLES)
 
 ## ============================================================================
+## ÉTAT GLOBAL DES DOSSIERS (2026-09-02) — audit API Navixy CLOS
+## ============================================================================
+```
+FMC130 : API_AUDIT=CLOSED | CONFIGURATOR_CHECK=PENDING | D3=BLOCKED
+         (can_mileage figé 2022 ; aucun Total Odometer exposé ; GPS Navixy exclu)
+FMC003 : API_AUDIT=CLOSED | HARDWARE_ODOMETER_VIA_NAVIXY=NONE (0/14) | CONFIGURATOR_CHECK=PENDING
+         (aucun mileage HW véhicule ; aucun Total Odometer exposé ; GPS Navixy exclu)
+FMU130 : DEPRECATED — NO FURTHER ACTION
+FMC640/FMC650 : NOT_PRESENT
+```
+**Étape décisive suivante = lecture Teltonika Configurator** (READ-ONLY), 3 pilotes A/B/C —
+voir `DRIVER_PRIVATE_MODE_CONFIGURATOR_READ_SHEET.md`.
+
+> **Nuance importante (ne pas conclure trop tôt) :** aucun véhicule du parc n'expose aujourd'hui à
+> Navixy d'odomètre **hardware** indépendant du GPS. Cela **ne déclare PAS** le Private Mode
+> globalement impossible. Deux issues après Configurator :
+> - `READY_FOR_D3_CONFIG_PILOT` — Total Odometer activable **et** conservé quand la position transmise
+>   est masquée (idéalement GNSS interne) → solution idéale (GPS masqué + km conservés) → D3 (GO explicite).
+> - `NO_VALID_PRIVATE_ODOMETER_SOURCE` — pas de distance privée hardware fiable → **décision produit
+>   LOGITRAK** (privacy applicative / km privé = UNAVAILABLE / autre source / bouton Privé désactivé).
+>
+> Le **pilote C** (FMC003 EV → Total Odometer **GNSS interne** indépendant du véhicule) est le test le
+> plus déterminant : s'il est concluant, l'absence de PID OBD sur les EV (Zoe/Enyaq/EX30) **ne condamne
+> pas** le mode privé. Bouton Privé **désactivé en prod** (`private_mode_allowed()=False`) tant qu'aucun
+> pilote n'est FIELD-VALIDATED.
+
+## ============================================================================
+
+## ============================================================================
 ## D2 CLÔTURE — FMC130 TOTAL ODOMETER AUDIT (2026-09-02) — VERDICT DÉFINITIF
 ## ============================================================================
 > **READ-ONLY strict.** Runtime réel collecté sur le VPS (conteneur `journal_backend`)
