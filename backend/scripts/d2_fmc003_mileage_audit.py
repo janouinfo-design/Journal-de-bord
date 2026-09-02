@@ -41,7 +41,30 @@ from app.tenant_context import (set_current_tenant, reset_current_tenant,
                                 refresh_tenant_cache)
 from app.db import init_db
 from app import navixy_client as nc
-from app.odometer_capability import resolve_model
+
+# resolve_model() INLINE (le conteneur VPS peut ne pas embarquer app.odometer_capability).
+# Règles identiques au module canonique : suffixes explicites AVANT 'telfmu130' seul.
+_NAVIXY_MODEL_RULES = [
+    ("_fmc003", "FMC003"),   # ex 'telfmb003_fmc003'
+    ("_fmc130", "FMC130"),   # ex 'telfmu130_fmc130'  (FMC130 !)
+    ("_fmc640", "FMC640"),
+    ("_fmc650", "FMC650"),
+    ("telfmc003", "FMC003"),
+    ("telfmc130", "FMC130"),
+    ("telfmc640", "FMC640"),
+    ("telfmc650", "FMC650"),
+    ("telfmu130", "FMU130"),  # FMU130 pur (aucun suffixe _fmcXXX)
+]
+
+
+def resolve_model(navixy_model_code):
+    if not navixy_model_code:
+        return None
+    code = str(navixy_model_code).lower()
+    for token, model in _NAVIXY_MODEL_RULES:
+        if token in code:
+            return model
+    return None
 
 TARGET_MODEL = "FMC003"
 RAW_OUT = "/tmp/d2_fmc003_audit_raw.json"
@@ -231,7 +254,11 @@ async def audit_vehicle(trk_entry, now):
 async def run():
     db = init_db()
     await refresh_tenant_cache(db)
-    tenants = dict(tc._tenant_cache)  # lu APRÈS refresh (la globale du module est réassignée)
+    # Lecture des tenants : cache module si peuplé, sinon fallback DB direct (robuste).
+    tenants = dict(getattr(tc, "_tenant_cache", {}) or {})
+    if not tenants:
+        rows = await db.tenants.find({}, {"_id": 0}).to_list(1000)
+        tenants = {t["id"]: t for t in rows}
     now = datetime.utcnow()
 
     raw_dump = {"tenants_scanned": [], "vehicles": []}
