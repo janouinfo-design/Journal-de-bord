@@ -62,6 +62,45 @@ Lecture de configuration/état **sans aucune écriture**. Verdict attendu unique
 `READY_FOR_D3` | `READY_FOR_D3_CONFIG_PILOT` | `CONFIGURATOR_READ_REQUIRED` | `FMC130_NO_VALID_ODOMETER_SOURCE`.
 FMC003 **non entamé** tant que FMC130 n'est pas clos.
 
+### CLÔTURE CONFIG FMC130 — CONFIG-READ (2026-09-02) — VERDICT DÉFINITIF
+> Runtime réel via `scripts/d2_fmc130_config_read.py` (READ-ONLY). Endpoints Navixy tentés
+> et réponses **réelles** (falsifiable, non présumé).
+
+```
+VERDICT_FMC130                     = CONFIGURATOR_READ_REQUIRED
+DEVICE_CONFIG_READABLE_VIA_NAVIXY  = NO
+CONFIGURATOR_READ_REQUIRED         = YES
+```
+
+**Disponibilité réelle des endpoints READ-ONLY (tracker 781479) :**
+| Endpoint | Résultat | Contenu réel |
+|---|---|---|
+| `tracker/get_state` | OK | état/GPS/inputs (config plateforme, pas device) |
+| `tracker/get_diagnostics` | OK | inputs OBD (`obd_rpm`, `obd_speed`, `obd_coolant_t`…) + `obd_vin=WAUZZZ8V0JA152970`, `update_time` **2024-06-20** → **figé** ; **aucun PID kilométrage** |
+| `tracker/settings/read` | OK | **uniquement** `label` + `group_id` (réglage **plateforme**) |
+| `tracker/settings/tracking/read` | OK | mode tracking plateforme (angle/distance/interval, `stop_detection=ignition`) — **pas** la config Odometer/Private device |
+| `tracker/command/list` | INDISPONIBLE | `code 112 Wrong method: 'list'` (info-seule ; ne donne pas la config de toute façon) |
+
+**Paramètres Teltonika (tous NON lisibles via API Navixy) :** `odometer_calculation_source`,
+`total_odometer_io_enabled`, `total_odometer_avl_id`, `private_business_supported`,
+`gps_data_masking`, `odometer_calc_in_private_mode`, `trigger_type` → `NON_LISIBLE_VIA_NAVIXY`.
+
+**Correction d'interprétation (honnêteté) :** `get_diagnostics` renvoie bien des valeurs OBD
+(sous la clé `inputs`, non `list` — le compteur du script affichait « 0 » à tort), **mais** elles
+sont **figées au 2024-06-20** et **ne contiennent aucun kilométrage**. Cela **confirme**
+`CAN_OBD_NOT_CURRENTLY_REPORTING` (données présentes mais non renouvelées ; cause physique
+toujours **indéterminée** depuis D2).
+
+**Conséquence :** la config device Teltonika (source de calcul odomètre, Total Odometer I/O + son
+AVL réel, Private/Business, GPS masking, comportement odomètre en privé, Trigger Type) **n'est pas
+accessible via l'API User Navixy**. La seule voie « raw getparam » passerait par
+`raw_command/send` = **écriture de commande → interdite en D2**. → **Lecture Teltonika Configurator
+requise** (relevé manuel, sans modification).
+
+**Bifurcation post-Configurator :**
+- Total Odometer activable **et** source indépendante du GPS transmis en mode privé → `D3 pilote FMC130`.
+- Sinon → `FMC130_NO_VALID_ODOMETER_SOURCE`.
+
 ## ============================================================================
 
 
