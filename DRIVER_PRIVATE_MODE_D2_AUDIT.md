@@ -1,6 +1,70 @@
 # DRIVER_PRIVATE_MODE_D2_AUDIT.md
 ## Phase D2 — Audit READ-ONLY Private/Business + Total Odometer (PARC MULTI-MODÈLES)
 
+## ============================================================================
+## D2 CLÔTURE — FMC130 TOTAL ODOMETER AUDIT (2026-09-02) — VERDICT DÉFINITIF
+## ============================================================================
+> **READ-ONLY strict.** Runtime réel collecté sur le VPS (conteneur `journal_backend`)
+> via `scripts/d2_total_odometer_audit.py` : endpoints `tracker/get_state`,
+> `tracker/readings/list`, `tracker/get_counters`, `track/list`. Secrets/IMEI/SIM/GPS masqués.
+> Ce bloc **remplace l'hypothèse antérieure** (« `can_mileage` = candidat viable ») : la preuve
+> runtime la contredit (voir ci-dessous). L'historique D1/D2 plus bas est conservé pour traçabilité.
+
+**Device pilote :** tracker `781479` « LOGITRAK AUDI », `source.model = telfmu130_fmc130` (→ FMC130),
+VIN OBD `WAUZZZ8V0JA152970` (Audi).
+
+### Verdict D2 (défini, à figer au commit)
+```
+FMC130_TOTAL_ODOMETER               = NOT_CURRENTLY_EXPOSED
+D3                                  = NEEDS_CONFIG
+RECENT_DRIVING                      = YES  (6 trajets / 24h, 45.39 km, dernier mvt 2026-09-02 12:38:14)
+TELTONIKA_TOTAL_ODOMETER_INCREMENT  = PENDING_REAL_DRIVE
+TELTONIKA_TOTAL_ODOMETER_AVL_ID     = UNVERIFIED   (aucune preuve modèle/firmware/runtime pour ce device)
+CAN_OBD_STATUS                      = CAN_OBD_NOT_CURRENTLY_REPORTING
+```
+
+### Preuve runtime (valeurs réelles, non inventées)
+| Champ | Valeur | Unité | Dernier update | Interprétation |
+|---|---|---|---|---|
+| `can_mileage` (readings/inputs) | 80 078.5 | km | **2022-03-26 10:23:34** | Non renouvelé depuis 2022 → **source secondaire uniquement**, non fiable en l'état |
+| `can_consumption` | 28.0 | L | 2022-03-26 | idem (CAN non renouvelé) |
+| `obd_*` (rpm, speed, fuel, VIN…) | — | — | 2024-04 → 2024-06 | valeurs OBD non renouvelées depuis 2024 |
+| `odometer` (get_counters, REF Navixy) | 139 316.67 | km | 2026-09-02 14:57 | **GPS-calculé Navixy → NON admissible** pour distance privée |
+| `engine_hours` | 1 253.03 | h | 2026-09-02 15:09 | vivant, mais pas une distance |
+| `board_voltage` | 13.22 | V | 2026-09-02 14:57 | device lui-même vivant |
+
+### Formulations corrigées (importantes)
+1. **NE PAS conclure « le bus CAN/OBD est mort ».** La preuve établit seulement
+   `CAN_OBD_NOT_CURRENTLY_REPORTING` : les dernières valeurs CAN/OBD sont anciennes (2022 / 2024),
+   mais D2 **ne prouve pas la cause physique** (câble, configuration device, mapping Navixy,
+   changement de véhicule/ECU, etc.). Cause = **INDÉTERMINÉE depuis D2**.
+2. **NE PAS figer l'AVL ID 16** comme vérité pour ce FMC130 : `TELTONIKA_TOTAL_ODOMETER_AVL_ID =
+   UNVERIFIED` tant qu'aucune preuve spécifique **modèle + firmware + runtime/config** ne l'établit.
+
+### Interprétation
+- Aucun champ `total_odometer` / `hw_mileage` / odomètre total hardware n'est exposé à Navixy
+  (ni `readings/list`, ni `get_state.state[.additional]`, ni `get_counters`).
+- C'est un **`NOT_CURRENTLY_EXPOSED`**, **pas** `NOT_SUPPORTED` : le firmware FMC130 supporte en
+  principe un « Total Odometer », mais il n'est pas exposé/mappé aujourd'hui pour ce device.
+- Le device lui-même fonctionne (GPS/GSM/`board_voltage`/`ble_beacon_id` récents) ; seul le flux
+  CAN/OBD n'est pas renouvelé.
+
+### Pourquoi D3 = NEEDS_CONFIG (2 verrous avant tout test privatemode)
+1. Faire **exposer un Total Odometer hardware** vers Navixy (activation/mapping) — sinon D3 n'a
+   aucune source à mesurer.
+2. Déterminer la **source de calcul de l'odomètre** (GNSS vs OBD/CAN). CAN/OBD ne remontant pas
+   actuellement, la seule source restante serait GNSS → question centrale de D3 :
+   *le Total Odometer GNSS continue-t-il d'incrémenter en interne quand la position transmise est
+   masquée ?* (plausible mais **non prouvé**).
+
+### Prochaine mission (READ-ONLY, décidée) — fermer la config FMC130 avant FMC003
+Lecture de configuration/état **sans aucune écriture**. Verdict attendu unique parmi :
+`READY_FOR_D3` | `READY_FOR_D3_CONFIG_PILOT` | `CONFIGURATOR_READ_REQUIRED` | `FMC130_NO_VALID_ODOMETER_SOURCE`.
+FMC003 **non entamé** tant que FMC130 n'est pas clos.
+
+## ============================================================================
+
+
 > **Suite de** D1 FINAL (`db1b25d`). **READ-ONLY strict** : aucun `setparam`,
 > `privatemode`, `raw_command/send`, `counter/value/set`, `counter/update`, aucune
 > modification device/Navixy. Aucune donnée inventée.
