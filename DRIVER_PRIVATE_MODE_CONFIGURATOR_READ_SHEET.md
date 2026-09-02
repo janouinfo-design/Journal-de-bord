@@ -66,6 +66,51 @@ Pour **chaque** paramètre : `CURRENT_VALUE` | `AVAILABLE (YES/NO)` | `SOURCE` (
 
 **Captures A :** ☐ Odometer  ☐ I/O Total Odometer  ☐ Private/Business  ☐ Trigger
 
+### ✅ PILOTE A — RELEVÉ RÉEL depuis `Config_costa(3).cfg` (export FMC130, READ-ONLY)
+> Source : fichier de config Teltonika fourni (gzip décompressé). Mapping des IDs **sourcé**
+> sur le wiki Teltonika FMC130 (Parameter list / Trip-Odometer settings), non supposé.
+
+**Header :** `FmType=FMC130` | `HwVersion=FMC1_4` | Firmware `Title=03.29.00 or higher` |
+`ConfigurationVersion=10.0.0.0`
+
+| Param (ID) | Valeur | Signification (wiki FMC130) |
+|---|---|---|
+| 11800 | **1** | Trip scenario / priorité = **Low (activé)** |
+| 11801 | 1 | Eventual records = Enable |
+| 11802 | **0** | Trip odometer mode = **Continuous** |
+| 11803 | 5 | Start speed = 5 km/h |
+| **11806** | **0** | **Odometer Calculation Source = GNSS** ★ point décisif |
+| **11807** | **54193** | **Odometer Value = 54193 km** (valeur stockée dans la config) |
+| 11815 | 0 | (sous-param groupe Trip — non déterminant ici) |
+| 11500 / 11501 | 1 / 1 | Bluetooth/OBD activé côté config (mais OBD non renouvelé depuis 2024, cf runtime) |
+
+**Synthèse Pilote A :**
+```
+TOTAL_ODOMETER_SUPPORTED:                  YES
+TOTAL_ODOMETER_ENABLED:                    YES (Trip scenario actif, valeur stockée présente)
+TOTAL_ODOMETER_SOURCE:                     GNSS            (11806=0)  ★ indépendant de l'OBD/CAN
+TOTAL_ODOMETER_CURRENT_VALUE:              54193 km        (11807 — valeur de config, pas forcément live)
+TOTAL_ODOMETER_AVL_ID:                     UNVERIFIED      (le .cfg ne prouve pas l'IO/AVL réellement ENVOYÉ)
+PRIVATE_MODE_SUPPORTED:                    NO (natif)      (aucun paramètre Private/Business natif dans ce .cfg)
+GPS_MASKING_CONFIGURABLE:                  NO (côté device — le masquage relève de Navixy/plateforme)
+PRIVATE_ODOMETER_CALCULATION_CONFIGURABLE: N/A
+EXTERNAL_TRIGGER_SUPPORTED:                Digital Input possible, mais pas de scénario privé natif
+```
+
+**Correction d'un indice précédent :** la source de calcul est le param **11806** (=0=GNSS),
+**pas** 11811. La valeur `11811=16` appartient à la matrice de sous-paramètres Trip et **n'est
+PAS** une preuve d'AVL ID 16 → `TOTAL_ODOMETER_AVL_ID` reste **UNVERIFIED**.
+
+**Verdict Pilote A :** `READY_FOR_D3_CONFIG_PILOT`
+> L'odomètre interne du FMC130 est calculé sur **GNSS** (indépendant de l'OBD/CAN mort) et possède
+> une valeur réelle (54193 km, Continuous). C'est la source non-GPS-plateforme recherchée. **MAIS**
+> il n'est **pas encore exposé à Navixy** (runtime D2 : aucun champ total_odometer reçu ; seul
+> l'odometer GPS-calculé Navixy et le can_mileage mort existent). Deux prérequis restants (config
+> pilot, sur GO explicite) :
+> 1. **Activer l'envoi de l'élément I/O Total Odometer** (écriture config → PAS maintenant) et
+>    vérifier réception côté Navixy + relever l'**AVL ID réel**.
+> 2. Prouver en D3 que cet odomètre GNSS interne **continue** quand la position transmise est masquée.
+
 ---
 
 # ============ PILOTE B — FMC003 avec OBD ACTIF (tracker : __________) ============
