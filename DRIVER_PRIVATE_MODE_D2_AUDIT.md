@@ -2,6 +2,32 @@
 ## Phase D2 — Audit READ-ONLY Private/Business + Total Odometer (PARC MULTI-MODÈLES)
 
 ## ============================================================================
+## DEEP-DUMP compte 234783 (2026-09-02) — 3467714 / 3467693 / 3467717 — READ-ONLY
+## ============================================================================
+> Via `scripts/d2_deep_dump_234783.py` : dump get_state + readings/list + get_counters
+> + **sensor/list** ; recherche récursive 389/odometer/mileage/odo/distance.
+> Compte 234783 = compte démo Teltonika/Navixy (51 FMC003 nommés par villes).
+
+Découvertes :
+1. **`avl_io_389` absent de TOUS les endpoints API** des 3 trackers → la capture UI `165000`
+   ne se retrouve pas dans l'état live (origine à clarifier).
+2. **`obd_mileage` (« OBD : Kilométrage OBD total », km)** = sensor **DÉFINI** dans Navixy
+   (sensor/list) mais **SANS valeur** dans readings → **mappé mais VIDE** (AVL OEM mileage non transmis).
+3. **`obd_custom_odometer`** présent mais **NON fiable** (Dakar 103.87 « V » @18:17 ; Gilan 119.23 @14/08 ;
+   échelles incohérentes vs GPS odo → config custom bricolée, à ne pas valider).
+4. **OBD ACTIF/récent** (VIN VW temps réel, rpm/speed/fuel frais) mais **aucun km véhicule fiable exposé**.
+
+Statut : `avl_io_389 = SENSOR_DEFINED_BUT_EMPTY` ; `obd_custom_odometer = NON_FIABLE` ;
+`OBD_bus = ACTIF` ; `km_vehicule_fiable = AUCUN`.
+
+Voie D3-config (NON exécutée, écriture, sur GO) : activer `40000:1;40430:1` (+`113:1` OK) sur un
+véhicule au PID OEM supporté (VW utilitaires) → vérifier que `obd_mileage` se peuple et incrémente.
+
+Question ouverte : d'où venait la capture `avl_io_389 = 165000` (écran/tracker/date) ?
+
+
+
+## ============================================================================
 ## ÉTAT GLOBAL DES DOSSIERS (2026-09-02) — audit API Navixy CLOS
 ## ============================================================================
 ```
