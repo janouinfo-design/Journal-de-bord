@@ -23,6 +23,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "Phase D3 preflight non-regression check PASS. FMC130 downgraded from VEHICLE_CAN to NAVIXY_GPS_CALCULATED with status=BLOCKED and odometer_during_private=NOT_SUPPORTED (runtime finding: can_mileage sensor exists but data stale since 2022, not usable). Test results: test_odometer_capability.py 7 PASSED (FMC130 now source_type NAVIXY_GPS_CALCULATED, navixy_sensor_exposable NOT_SUPPORTED, odometer_during_private NOT_SUPPORTED; private_mode_allowed False for all models). Full regression suite: 55 PASSED, 3 warnings (pre-existing deprecation warnings). Verification: private_mode_allowed('FMC130') = False ✓. NO REGRESSION DETECTED."
+      - working: true
+        agent: "testing"
+        comment: "Phase 3 non-regression check PASS after refactoring with business strategies. Refactoring added: per-model target strategies (FMC003=VEHICLE_OBD_CAN_MILEAGE vehicle-dependent, FMC130=TELTONIKA_TOTAL_ODOMETER, FMU130=DEPRECATED, FMC640/650=HARDWARE_CAN_FMS_TACHO), STATUS_DEPRECATED, VehicleOdometerCapability class, updated private_mode_allowed(model, vehicle_capability) + new vehicle_private_mode_allowed(). Test results: test_odometer_capability.py 8 PASSED (was 7, added test_fmc003_gate_is_per_vehicle for per-vehicle gate logic). Full regression suite: 55 PASSED, 3 warnings (pre-existing deprecation warnings). Module verification: FMU130 deprecated allowed=False ✓, FMC130 allowed=False ✓, FMC003 strategy=VEHICLE_OBD_CAN_MILEAGE ✓. NO REGRESSION DETECTED. Module remains READ-ONLY (pure data + functions, no DB writes, no Navixy calls, not called by endpoints yet)."
   - task: "Navixy credential refactor regression - multi-tenant isolation"
     implemented: true
     working: true
@@ -261,3 +264,42 @@ agent_communication:
       TOTAL: 62 PASSED (7 + 55), 0 FAILED, 0 SKIPPED
       
       NO REGRESSION DETECTED. The FMC130 capability update is data-only (READ-ONLY registry). No app endpoints, routes, models, or logic changed. This module contains pure functions and data structures. All existing functionality (multi-tenant Navixy, BLE, auto-assignment, odometer audit) remains fully operational. The update accurately reflects runtime reality: FMC130 tracker 781479's CAN bus is not providing live mileage data.
+  - agent: "testing"
+    message: |
+      PHASE 3 NON-REGRESSION CHECK COMPLETE - Refactoring odometer_capability.py with business strategies.
+      
+      CONTEXT: Refactored per-model odometer capability registry with business strategies. Added:
+      - Per-model target strategies: FMC003=VEHICLE_OBD_CAN_MILEAGE (vehicle-dependent), FMC130=TELTONIKA_TOTAL_ODOMETER, FMU130=DEPRECATED, FMC640/650=HARDWARE_CAN_FMS_TACHO
+      - STATUS_DEPRECATED for FMU130 (parc retiré ~2027, no further dev)
+      - VehicleOdometerCapability dataclass for per-vehicle capabilities (essential for FMC003)
+      - Updated private_mode_allowed(model, vehicle_capability=None) to support per-vehicle gate
+      - New vehicle_private_mode_allowed(model, vc) function for concrete tracker/vehicle resolution
+      - Tests updated: added test_fmc003_gate_is_per_vehicle (8th test)
+      
+      TEST RESULTS (against HTTPS preview URL https://driver-fleet-ble.preview.emergentagent.com):
+      ✅ login_attempts purged: 0 documents (clean state)
+      ✅ Test 1 (test_odometer_capability.py): 8 PASSED (was 7, added per-vehicle gate test)
+         - All 5 models present: FMC003, FMC130, FMU130, FMC640, FMC650
+         - Per-model strategies verified: FMC003=VEHICLE_OBD_CAN_MILEAGE, FMC130=TELTONIKA_TOTAL_ODOMETER, FMU130=DEPRECATED, FMC640/650=HARDWARE_CAN_FMS_TACHO
+         - FMU130 deprecated: status=STATUS_DEPRECATED, private_mode_allowed('FMU130')=False ✓
+         - No model verified=True (field proof required)
+         - private_mode_allowed gate blocks all models (no field validation yet)
+         - No universal AVL16 imposed
+         - resolve_model naming trap handled: telfmu130_fmc130→FMC130, telfmu130→FMU130, telfmb003_fmc003→FMC003
+         - FMC003 per-vehicle gate: requires vehicle_capability=CAN_MILEAGE_VALIDATED/TELTONIKA_ODOMETER_VALIDATED/HARDWARE_SOURCE_VALIDATED
+      ✅ Test 2 (full regression suite): 55 PASSED, 0 FAILED, 0 SKIPPED
+         - test_navixy_multitenant.py: PASS
+         - test_navixy_credential.py: PASS
+         - test_odometer_audit.py: PASS
+         - test_tenant_navixy_provisioning.py: PASS
+         - test_iteration8_ble.py: PASS
+         - test_phase42_autoassign.py: PASS
+      ✅ Warnings: 3 (pre-existing deprecation warnings: multipart import, Query regex)
+      ✅ Module import verification: PASS
+         - FMU130 deprecated allowed = False ✓
+         - FMC130 allowed = False ✓
+         - FMC003 strategy = VEHICLE_OBD_CAN_MILEAGE ✓
+      
+      TOTAL: 63 PASSED (8 + 55), 0 FAILED, 0 SKIPPED
+      
+      NO REGRESSION DETECTED. The refactoring is READ-ONLY (pure data + functions, no DB writes, no Navixy calls, not called by endpoints yet). All existing functionality (multi-tenant Navixy, BLE, auto-assignment, odometer audit) remains fully operational. The business strategies accurately reflect LOGITRAK's multi-model architecture: strategy depends on MODEL, and for FMC003 on VEHICLE. No hardcoded AVL16 universal approach.

@@ -7,6 +7,47 @@
 > **Règle** : la capacité est par **MODÈLE + FIRMWARE + CONFIG**, jamais « Teltonika » global.
 > `DOCUMENTED` ≠ `RUNTIME_VERIFIED` ≠ `FIELD_VERIFIED`.
 
+
+## ============ CORRECTION DE STRATÉGIE PAR MODÈLE (décision métier) ============
+> La stratégie de kilométrage privé **diffère selon le modèle** (ne pas généraliser).
+> Le compteur **GPS-calculé Navixy n'est JAMAIS** une source de distance privée.
+
+| Modèle | Installation | STRATÉGIE cible | Disponibilité | Statut |
+|---|---|---|---|---|
+| **FMC003** | OBD | `VEHICLE_OBD_CAN_MILEAGE` (fallback `TELTONIKA_TOTAL_ODOMETER`) | **VEHICLE_DEPENDENT** (par véhicule) | À valider (par véhicule) |
+| **FMC130** | Fixe | `TELTONIKA_TOTAL_ODOMETER` (odomètre INTERNE) | DEVICE/CONFIG_DEPENDENT | À valider |
+| **FMU130** | Ancien | — | N/A | **DEPRECATED** (retiré ~2027, aucun dev) |
+| **FMC640** | Poids lourd | `HARDWARE_CAN_FMS_TACHO` (Total Odo) | VEHICLE/CONFIG_DEPENDENT | À valider (absent du parc) |
+| **FMC650** | Poids lourd | `HARDWARE_CAN_FMS_TACHO` (Total Odo) | VEHICLE/CONFIG_DEPENDENT | À valider (absent du parc) |
+
+Reclassements clés (les preuves D1/D2 sont conservées, réinterprétées) :
+- **FMC130** : cible = **Total Odometer INTERNE Teltonika**, PAS `can_mileage` (observé mais donnée
+  périmée 2022 → source secondaire/comparaison uniquement), PAS le GPS Navixy. Prochaine mission :
+  **FMC130 TOTAL ODOMETER AUDIT** (READ-ONLY) : ce Total Odometer interne est-il transmis à Navixy
+  et continue-t-il en Private Mode ?
+- **FMC003** : cible = **OBD/CAN mileage**, mais **validation VÉHICULE PAR VÉHICULE**. L'absence de
+  `can_mileage` sur un véhicule pilote ne prouve pas l'incapacité du modèle (dépend véhicule/ECU/PID/
+  firmware/config). Statut par véhicule : `CAN_MILEAGE_VALIDATED | TELTONIKA_ODOMETER_VALIDATED |
+  HARDWARE_SOURCE_VALIDATED | NO_HARDWARE_ODOMETER | NOT_TESTED`. Mission séparée : **FMC003 OBD/CAN
+  MILEAGE AUDIT**.
+- **FMU130** : **DEPRECATED** → `PRIVATE_MODE_ROLLOUT=NO`, `FURTHER_VALIDATION=NOT_REQUIRED`. Historique
+  d'audit conservé, aucun nouveau développement, ne bloque plus le projet.
+- **FMC640/FMC650** : restent dans le scope (poids lourds) ; sources CAN/FMS/Tacho/Total Odo à
+  déterminer runtime ; jamais d'AVL universelle. Actuellement **absents** des comptes Navixy.
+
+Gate production (par tracker) : `MODEL (+ VEHICLE pour FMC003) + SOURCE VALIDÉE + FIELD_VALIDATED`.
+Implémenté : `odometer_capability.py` (champs `strategy`/`availability`, `STATUS_DEPRECATED`,
+`VehicleOdometerCapability`, `private_mode_allowed(model, vehicle_capability)`,
+`vehicle_private_mode_allowed(...)`). Bouton Privé **désactivé** pour tous tant que non FIELD-VALIDATED.
+
+Ordre des prochaines missions (aucune n'est lancée automatiquement) :
+1. **FMC130 TOTAL ODOMETER AUDIT** (READ-ONLY) → puis D3 FMC130 single device.
+2. **FMC003 OBD/CAN MILEAGE AUDIT** (par véhicule).
+3. FMC640 / FMC650 : quand des devices réels existeront.
+4. FMU130 : **NO FURTHER ACTION**.
+
+## =============================================================================
+
 ---
 
 ## 1. CORRECTION DE TERMINOLOGIE D1
