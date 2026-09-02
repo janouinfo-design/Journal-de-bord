@@ -111,7 +111,64 @@ requise** (relevé manuel, sans modification).
 > `DOCUMENTED` ≠ `RUNTIME_VERIFIED` ≠ `FIELD_VERIFIED`.
 
 
-## ============ CORRECTION DE STRATÉGIE PAR MODÈLE (décision métier) ============
+## ============================================================================
+## FMC003 OBD/CAN MILEAGE AUDIT (2026-09-02) — READ-ONLY, par véhicule
+## ============================================================================
+> Runtime réel via `scripts/d2_fmc003_mileage_audit.py` (multi-tenant, READ-ONLY).
+> 3 tenants scannés : **Logitrak (4 FMC003)**, **Pradervand (10 FMC003)**, **Gaggetta (0)**.
+> Secrets/GPS masqués. Aucune écriture. FMC130 non touché.
+
+### Verdict dossier
+```
+FMC003_HARDWARE_ODOMETER_VIA_NAVIXY = NONE  (0 / 14 véhicules)
+FMC003_ALL_VEHICLES_STATUS          = NO_HARDWARE_ODOMETER  (14 / 14)
+```
+
+**Aucun** des 14 FMC003 n'expose à Navixy : ni `can_mileage`/`obd_mileage`/`vehicle_distance`/
+`total_distance`/`total_mileage`, ni un **Total Odometer Teltonika** (`TELTONIKA_TOTAL_ODOMETER_
+EXPOSED = NO` partout). Seul l'odomètre **GPS-calculé Navixy** est vivant → **exclu** par règle.
+
+### Détail (14 véhicules)
+| Tracker | Véhicule | OBD/CAN inputs | Mileage HW | Total Odo | GPS odo Navixy (exclu) | Statut |
+|---|---|---|---|---|---|---|
+| 3079431 | KAIO Renault Zoe | YES | NONE | NO | 7210 @ 2025-07-25 | NO_HARDWARE_ODOMETER |
+| 3131157 | 5-Alliance 01 | YES | NONE | NO | 242979 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 3218549 | 1-Enyaq 01 Bern | YES | NONE | NO | 348 @ 2024-12-09 | NO_HARDWARE_ODOMETER |
+| 3218553 | KAIO Volvo EX30 08 | NO | NONE | NO | 0.0 @ 2024-11-20 | NO_HARDWARE_ODOMETER |
+| 478988 | 9-GE 643 258 | NO | NONE | NO | 232778 @ 2026-09-01 | NO_HARDWARE_ODOMETER |
+| 478990 | 8-GE 894 929 | NO | NONE | NO | 142017 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 478994 | 7-GE 780467 | NO | NONE | NO | 190687 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 479003 | 4-GE 808 478 | YES | NONE | NO | 152344 @ 2026-08-28 | NO_HARDWARE_ODOMETER |
+| 479009 | 2-GE 752 796 | YES | NONE | NO | 81886 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 479012 | 1-GE 433 787 | NO | NONE | NO | 64273 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 596853 | 5-GE 411 639 | NO | NONE | NO | 76260 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 3461150 | 11-GE 854 325 | NO | NONE | NO | 19921 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 3466130 | 12-GE498 143 | NO | NONE | NO | 29309 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+| 3612095 | 15-GE 347 347 | YES | NONE | NO | 2599 @ 2026-09-02 | NO_HARDWARE_ODOMETER |
+
+### Observations
+- **Règle confirmée** : la présence d'inputs OBD (rpm/speed/fuel) sur 6 véhicules (`YES`) **ne fournit
+  aucun kilométrage** — aucun n'a de PID mileage. « OBD présent » ≠ « kilométrage disponible ».
+- Plusieurs véhicules sont **électriques** (Zoe, Enyaq, Volvo EX30, Alliance) : le PID kilométrage OBD
+  y est souvent absent/non standard → cohérent avec l'absence totale de mileage CAN/OBD.
+- Cas GPS odo figés / faibles : `3218553` (0.0, 2024-11), `3218549` (348, 2024-12), `3079431`
+  (2025-07) → peu/pas de roulage récent sous Navixy ; sans incidence sur le verdict.
+
+### Nuance de méthode (honnêteté)
+`OBD_CAN_PRESENT` reflète les inputs OBD/CAN présents dans `readings/list` à l'instant T. Un véhicule
+`NO` pourrait avoir des données OBD **figées** non présentes dans les readings courants (comme le CAN
+2022 du FMC130). Cela **ne change pas** le verdict : même figées, ces valeurs ne contiennent aucun
+kilométrage et ne seraient pas « vivantes » → non admissibles.
+
+### Conséquence & options (comme FMC130)
+Pour ces 14 FMC003, **aucune source de distance privée admissible via Navixy** aujourd'hui. Bifurcation :
+- **(A) Lecture Teltonika Configurator** (par véhicule, lecture seule) : un Total Odometer est-il
+  activable et sur quelle source (GNSS/OBD) ? Pour les EV sans PID mileage, la voie OBD restera
+  probablement vide → Total Odometer serait alors GNSS (même problématique privé que FMC130).
+- **(C) Fallback privacy applicative** LOGITRAK : `private_distance = UNAVAILABLE` si aucune source
+  non-GPS. Ne jamais masquer au niveau device pour ces modèles sans nouvelle analyse.
+
+## ============================================================================
 > La stratégie de kilométrage privé **diffère selon le modèle** (ne pas généraliser).
 > Le compteur **GPS-calculé Navixy n'est JAMAIS** une source de distance privée.
 
