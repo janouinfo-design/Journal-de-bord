@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://driver-fleet-ble.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://fmc130-odo-audit.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,7 +25,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://driver-fleet-ble.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://fmc130-odo-audit.preview.emergentagent.com"
       }
     },
     "production": {
