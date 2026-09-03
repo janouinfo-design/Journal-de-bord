@@ -29,38 +29,49 @@ Driver App -> LOGITRAK Backend -> Navixy raw_command/send("privatemode ON/OFF")
 
 ### Bloc PRECHECK
 ```
-TRACKER_ID = 3657864
-MODEL = FMC003
+TRACKER_ID = 3657864   MODEL = FMC003   (FW 04.02 ; Odometer Value 11807=140267 ≈ 140268 dashboard ✅)
 
-DEVICE_PRIVATE_CONFIG_CONFIRMED = NO      (pas de .cfg/export SPÉCIFIQUE au 3657864 analysé)
-ODOMETER_SOURCE_GNSS            = LIKELY_YES (AVL16 remonte+incrémente -> cohérent GNSS ; non prouvé par .cfg)
-GPS_DATA_MASKING_ZERO           = UNKNOWN  (jamais observé sur 3657864 ; pas de .cfg)
-PRIVATE_ODOMETER_CALCULATION    = LIKELY_ENABLED (AVL16 s'actualise ; à confirmer par .cfg)
-TRIGGER_TYPE                    = UNKNOWN  (doit être EXTERNAL ; à confirmer par .cfg du 3657864)
-TOTAL_ODOMETER_IO               = LIKELY_LOW_MONITORING (AVL16 transmis ; à confirmer par .cfg)
+DEVICE_PRIVATE_CONFIG_CONFIRMED = PARTIAL (config .cfg 3657864 analysée ; 1 param à corriger)
+ODOMETER_SOURCE_GNSS            = YES        (11806=0)
+GPS_DATA_MASKING_ZERO           = NO  ❌     (11813=0 = Normal ; REQUIS 11813=1 = Data Sent As Zero)
+PRIVATE_ODOMETER_CALCULATION    = ENABLED    (11815=1 -> distance privée incluse dans AVL16) ✅
+TRIGGER_TYPE                    = EXTERNAL   (11849=0) ✅
+TOTAL_ODOMETER_IO               = ACTIVE     (avl_io_16 transmis, prouvé runtime) ✅
+CODEC                           = Codec 8 (113=0) — suffisant pour AVL16 (ID<=255) ✅
 
-REMOTE_PRIVATE_COMMAND_SUPPORTED  = YES  (Navixy raw_command/send + "privatemode ON", si Trigger=External)
+REMOTE_PRIVATE_COMMAND_SUPPORTED  = YES  (Navixy raw_command/send "privatemode ON", Trigger=External OK)
 REMOTE_BUSINESS_COMMAND_SUPPORTED = YES  ("privatemode OFF")
 BTAPP_REQUIRED                    = NO
-
-AVL16_RUNTIME = PASS  (API_MAPPING + SCALE + CUMULATIVE tous VERIFIED ; 140264.62≈140268 dashboard)
+AVL16_RUNTIME                     = PASS
 
 D3B_READY = NO
-D3B_BLOCKING_REASON =
-   Config Private/Business du 3657864 NON confirmée spécifiquement. Requis avant GO :
-   export .cfg (ou lecture Configurator READ-ONLY) du device 3657864 prouvant :
-     - GPS Data Masking = Data Sent As Zero
-     - Trigger Type = External  (sinon `privatemode` rejeté)
-     - Odometer Calculation = Enable
-     - I/O Total Odometer = Low/Monitoring
-     - Odometer Calculation Source = GNSS
-   (Ne pas déduire d'un autre tracker / ancien .cfg — preuve propre au 3657864 exigée.)
+D3B_BLOCKING_REASON = GPS Data Masking = Normal (param 11813=0). En mode privé, les coordonnées
+   ne seraient PAS masquées. SEULE correction manquante -> passer 11813 = 1 (Data Sent As Zero).
+   Tous les autres paramètres sont conformes.
 
 D3B_EXECUTION = NOT_STARTED
 PRIVATE_MODE_PRODUCTION = DISABLED
-NEXT_ACTION = fournir le .cfg/relevé Configurator du 3657864 -> puis WAIT_FOR_EXPLICIT_GO_D3B
-ROLLBACK_READY = YES  (privatemode OFF via raw_command/send ; si retour Business non confirmé -> FAILED/UNKNOWN)
+NEXT_ACTION = corriger 11813:1 sur 3657864 (opérateur) -> re-vérifier -> WAIT_FOR_EXPLICIT_GO_D3B
+ROLLBACK_READY = YES
 ```
+
+### CHANGE_REQUIRED (à faire par l'opérateur — l'audit N'exécute PAS)
+```
+TRACKER          = 3657864 (FMC003, compte 121349)
+ACTION           = régler GPS Data Masking -> "Data Sent As Zero"  (param 11813 : 0 -> 1)
+                   via Teltonika Configurator (Save to device) OU FOTA/Navixy setparam 11813:1
+RAISON           = sans masquage, le mode privé transmettrait les vraies coordonnées (viole
+                   l'exigence "GPS privé masqué"). Les autres params (Trigger External, Odometer
+                   Calculation Enable, GNSS) sont déjà corrects.
+ÉTAT ACTUEL      = 11813=0 (Normal)
+RÉSULTAT ATTENDU = 11813=1 ; en privé, coordonnées envoyées à 0,0, tracker online, AVL16 continue
+RISQUE           = faible (paramètre de confidentialité ; réversible)
+ROLLBACK         = remettre 11813=0 (Normal) si besoin
+```
+> NB : cette écriture de config est décidée/exécutée par l'opérateur. L'audit ne la lance pas.
+> Après correction : ré-exporter le .cfg pour confirmer 11813=1, puis D3B_READY pourra passer à YES.
+
+
 
 ### Précheck runtime READ-ONLY (à exécuter par l'opérateur avec d3b_snapshot.py before)
 Confirmer avant tout GO : TRACKER_ONLINE, AVL16_PRESENT/RECENT/VALUE_KM/TIMESTAMP,
