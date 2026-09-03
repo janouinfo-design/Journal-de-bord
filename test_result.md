@@ -26,6 +26,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "Phase 3 non-regression check PASS after refactoring with business strategies. Refactoring added: per-model target strategies (FMC003=VEHICLE_OBD_CAN_MILEAGE vehicle-dependent, FMC130=TELTONIKA_TOTAL_ODOMETER, FMU130=DEPRECATED, FMC640/650=HARDWARE_CAN_FMS_TACHO), STATUS_DEPRECATED, VehicleOdometerCapability class, updated private_mode_allowed(model, vehicle_capability) + new vehicle_private_mode_allowed(). Test results: test_odometer_capability.py 8 PASSED (was 7, added test_fmc003_gate_is_per_vehicle for per-vehicle gate logic). Full regression suite: 55 PASSED, 3 warnings (pre-existing deprecation warnings). Module verification: FMU130 deprecated allowed=False ✓, FMC130 allowed=False ✓, FMC003 strategy=VEHICLE_OBD_CAN_MILEAGE ✓. NO REGRESSION DETECTED. Module remains READ-ONLY (pure data + functions, no DB writes, no Navixy calls, not called by endpoints yet)."
+      - working: true
+        agent: "testing"
+        comment: "STRATÉGIE V2 MIGRATION COMPLETE - Socle commun AVL 16 pour FMC003+FMC130. Test results: test_odometer_capability.py 17 PASSED (was 8, added 9 V2 tests). All 8 business invariants PASS: (a) FMC003 strategy=TELTONIKA_TOTAL_ODOMETER + primary_source=TELTONIKA_TOTAL_ODOMETER ✓, (b) FMC130 strategy=TELTONIKA_TOTAL_ODOMETER ✓, (c) FMC003 secondary_source=OBD_OEM_TOTAL_MILEAGE (AVL 389 optionnel) ✓, (d) Aucun modèle verified=True ✓, (e) vehicle_private_mode_allowed exige TOUTES 4 preuves (runtime/cumulative/private_increment/field_validated) + source=AVL16 + raw_avl_id=16 ✓, (f) private_mode_production_allowed()=False ✓, (g) FMU130 DEPRECATED, FMC640/650 NOT_PRESENT, tous private_mode_allowed=False ✓, (h) normalize_teltonika_total_odometer scale explicite (UNVERIFIED sans mapping, VERIFIED avec mapping validé) ✓. Module isolation verified: ONLY imported by test_odometer_capability.py (grep confirmed). NO REGRESSION DETECTED. Module remains READ-ONLY (pure business logic, no endpoints, no DB writes, no Navixy calls)."
   - task: "Navixy credential refactor regression - multi-tenant isolation"
     implemented: true
     working: true
@@ -163,6 +166,56 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      STRATÉGIE ODOMÈTRE V2 MIGRATION TEST COMPLETE (2026-09-03)
+      
+      CONTEXTE: Migration backend module odometer_capability.py vers stratégie V2 (socle commun AVL 16 pour FMC003+FMC130). AUCUN endpoint HTTP concerné - pure logique métier + tests unitaires.
+      
+      TEST RESULTS:
+      ✅ (1) test_odometer_capability.py: 17 PASSED (100%)
+         - test_all_expected_models_present
+         - test_v2_common_strategy_fmc003_fmc130
+         - test_avl389_is_secondary_for_fmc003_not_required
+         - test_fmc130_secondary_can_mileage
+         - test_fmu130_deprecated
+         - test_fmc640_650_not_auto_compatible
+         - test_no_model_is_verified_without_field_proof
+         - test_no_universal_avl16_hardcoded
+         - test_gps_never_admissible_source
+         - test_resolve_model_from_navixy_code
+         - test_presence_of_avl16_alone_is_not_enough
+         - test_full_field_validation_required_per_tracker
+         - test_wrong_source_or_avl_blocks_gate
+         - test_deprecated_and_notpresent_never_allowed_even_if_flags
+         - test_production_gate_disabled_by_default
+         - test_scale_normalization_explicit
+         - test_legacy_model_gate_still_false_by_default
+      
+      ✅ (2) Régression backend: Module isolation verified
+         - grep confirmed: odometer_capability.py ONLY imported by test_odometer_capability.py
+         - NO other test files import this module
+         - NO REGRESSION DETECTED
+      
+      ✅ (3) Business invariants verification (8/8 PASS):
+         a. ✓ REGISTRY["FMC003"].strategy == "TELTONIKA_TOTAL_ODOMETER" AND primary_source == "TELTONIKA_TOTAL_ODOMETER"
+         b. ✓ REGISTRY["FMC130"].strategy == "TELTONIKA_TOTAL_ODOMETER"
+         c. ✓ FMC003 secondary_source == "OBD_OEM_TOTAL_MILEAGE" (AVL 389 secondaire optionnel)
+         d. ✓ Aucun modèle avec verified=True (aucune validation terrain)
+         e. ✓ vehicle_private_mode_allowed renvoie False si UNE SEULE des 4 preuves manque (runtime_verified/cumulative_verified/private_increment_verified/field_validated), True SEULEMENT si TOUTES présentes + source=TELTONIKA_TOTAL_ODOMETER + raw_avl_id=16
+         f. ✓ private_mode_production_allowed() == False
+         g. ✓ FMU130 DEPRECATED, FMC640/650 NOT_PRESENT, tous private_mode_allowed()==False
+         h. ✓ normalize_teltonika_total_odometer(140258496) -> scale_status="UNVERIFIED" + normalized_value=None ; avec mapping {multiplier:1,divider:1000,scale_status:"VERIFIED"} -> 140258.496
+      
+      MIGRATION V2 CHANGES VERIFIED:
+      - FMC003 & FMC130 now use SAME PRIMARY strategy: TELTONIKA_TOTAL_ODOMETER (AVL 16)
+      - AVL 389 (OBD OEM) downgraded to SECONDARY optional source for FMC003
+      - New per-tracker gate vehicle_private_mode_allowed() requiring ALL 4 proofs
+      - New normalize_teltonika_total_odometer() with explicit scale (never presumed)
+      - private_mode_production_allowed() = False by default
+      - FMU130 remains DEPRECATED; FMC640/FMC650 remain NOT_PRESENT
+      
+      NO REGRESSION DETECTED. Module remains READ-ONLY (pure business logic, no DB writes, no Navixy calls, not called by endpoints).
   - agent: "main"
     message: |
       Phase 4.1 terminée. Qualité: typecheck PASS, lint 0 err (2 warnings pré-existants),
