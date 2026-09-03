@@ -17,7 +17,9 @@ AVL389_PRESENT = NO
 OEM_MILEAGE_INCREMENT = NO_VALUE_YET
 NAVIXY_GPS_ODOMETER = 16578.1 km @ 08:32:16  (REFERENCE SEULEMENT)
 
-D3A_VERDICT = OEM_MILEAGE_NOT_SUPPORTED_BY_VEHICLE  (présomption — voir nuances)
+D3A_VERDICT = INCONCLUSIVE_SLEEP_MODE  (verdict NOT_SUPPORTED RÉTRACTÉ)
+  → À 08:32 le tracker se réveillait à peine / cycle sleep : l'absence de obd_mileage NE PROUVE PAS
+    l'absence du PID OEM. Test à refaire dans de bonnes conditions (voir ci-dessous).
 ```
 
 ### Interprétation (nuancée)
