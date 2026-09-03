@@ -2,6 +2,35 @@
 ## Protocole D3-CONFIG — OEM Mileage (AVL 389) — GATED / NON EXÉCUTÉ
 
 ## ============================================================================
+## D3-A « Total Odo » RUNTIME (2026-09-03 10:xx) — MAPPING INCORRECT DÉTECTÉ
+## ============================================================================
+Deux sensors odométriques dans `sensor/list` de 3467714 :
+```
+id 5371584  "OBD : Kilométrage OBD total"  input=obd_mileage          -> VIDE
+id 5570045  "Total Odo" (créé par opérateur) input=obd_custom_odometer  div=0.01 -> VALEUR 0.0
+```
+**PROBLÈME :** le sensor « Total Odo » est mappé sur l'input **`obd_custom_odometer`** (input custom
+distinct, VIDE sur Manchester) et NON sur **`avl_io_389`** (le vrai OEM Total Mileage = 165113 prouvé
+Air Console). => « Total Odo » = 0.0.
+
+**Correction requise (côté Navixy, action opérateur — PAS appliquée par l'audit) :**
+re-mapper « Total Odo » sur l'input **`avl_io_389`** (OEM Total Mileage).
+
+**Question déterminante :** lors de la création du sensor, `avl_io_389` était-il proposé dans la liste
+des inputs Navixy ?
+- OUI -> refaire le mapping sur avl_io_389 (réglé).
+- NON -> Navixy ne décode/n'expose pas encore l'AVL 389 comme input mappable (il n'apparaît que dans
+  l'Air Console FOTA = flux device). À résoudre (réception/décodage OEM côté compte Navixy).
+
+Positif : `LOGITRAK_API_READABLE = YES` (le sensor custom est bien lisible via l'API) — il manque
+seulement le bon input source.
+```
+D3A_VERDICT = MAPPING_TO_FIX (input avl_io_389 requis ; DASHBOARD_COMPARISON = TO_CONFIRM)
+```
+
+
+
+## ============================================================================
 ## STRATÉGIE DISTANCE PRIVÉE — SÉPARÉE PAR MODÈLE (RÈGLE — NE PAS MÉLANGER)
 ## ============================================================================
 > Correction (2026-09-03). AVL ID 389 = OBD OEM Total Mileage est documenté Teltonika pour la
