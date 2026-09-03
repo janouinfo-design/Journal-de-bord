@@ -61,6 +61,36 @@ D3A_VERDICT = INCONCLUSIVE_SLEEP_MODE  (verdict NOT_SUPPORTED RÉTRACTÉ)
     l'absence du PID OEM. Test à refaire dans de bonnes conditions (voir ci-dessous).
 ```
 
+### ✅ MAPPING NAVIXY FAIT + DISTINCTION 2 ODOMÈTRES (2026-09-03)
+L'opérateur a mappé `avl_io_389` → sensor Navixy **« Total Odo »**. Visible dans la fiche véhicule.
+**Choix de source = AVL 389 (OEM Total Mileage), PAS l'Odometer Value interne.**
+
+| Source | Valeur | Nature | Retenue ? |
+|---|---|---|---|
+| **AVL 389 « Total Odo »** | 165113 (brut) | vrai compteur véhicule (OBD OEM), incrémente | ✅ OUI |
+| Odometer Value (section Odometer, GNSS) | 2957 | odomètre interne Teltonika, valeur arbitraire | ❌ NON |
+
+**Raisons du rejet de l'Odometer Value interne (2957) :**
+1. Ne reflète pas le km réel du véhicule.
+2. **Private/Business → « Odometer Calculation » = Disable** → l'odomètre interne n'est PAS calculé
+   pendant le mode privé → ne bougerait pas en privé. Inutilisable pour la distance privée.
+
+**⚠️ Calibration à corriger :** Navixy affiche `165.11 km` alors que l'AVL brut = `165113`
+(facteur ÷1000 erroné). Régler le divider/unité du sensor « Total Odo » pour afficher `165113 km`
+(à caler sur le compteur réel du tableau de bord).
+
+### Config Private/Business Teltonika constatée (photo Configurator) — FAVORABLE
+```
+GPS Data Masking     = "Data Sent As Zero"   → coords masquées MAIS device reste ONLINE ✅
+Trigger              = BTApp / External       → déclenchable par l'app Bluetooth ✅ (bouton app)
+Odometer Calculation = Disable (en privé)     → odomètre INTERNE GNSS NON calculé en privé
+Scenario             = Low Priority, Eventual Records = Enable
+```
+→ Conséquence : la distance privée devra venir de **l'AVL 389 (OEM/OBD)**, PAS de l'odomètre interne.
+→ **D3-B à prouver :** en mode privé (GPS Data Masking actif), l'AVL 389 (OEM mileage) **continue-t-il
+   d'incrémenter** ? (l'OBD étant indépendant du GPS, c'est probable — mais à VALIDER terrain).
+
+
 ### ⚡ PREUVE AIR CONSOLE FOTA (2026-09-03 ~10:04) — l'AVL 389 EXISTE ET INCRÉMENTE
 ```
 Air Console FOTA (flux BRUT device 3467714) :
