@@ -2,6 +2,33 @@
 ## Stratégie odomètre V2 — Socle commun AVL 16 (Teltonika Total Odometer)
 
 ## ============================================================================
+## AVL 16 INCRÉMENTATION PROUVÉE — tracker 3657864 (2026-09-03) + fix échelle
+## ============================================================================
+Roulage réel observé via avl16_chain_validate :
+```
+départ    : avl_io_16 = 140257.0        (valeur figée initiale, en km)
+en roulant: avl_io_16 = 140262347       (trame réelle) ; puis 140262435
+140262347 / 1000 = 140262.347 km   ;  Δ vs 140257 = +5.347 km  ≈ distance roulée ✅
+```
+=> **AVL16_CUMULATIVE = VERIFIED** (l'odomètre interne augmente avec la distance).
+
+⚠️ ÉCHELLE : l'AVL 16 brut est en **MÈTRES**. Le sensor Navixy « ODO TOTAL » (id 5570680) a
+**divider=1** -> il affiche les mètres bruts (140262347) au lieu des km. **À CORRIGER : divider=1000**
+(comme sur Manchester). Après correction : 140262.347 km, cohérent avec preuve terrain
+(avl_io_16=140258496 -> 140258.496 km).
+
+Statut chaîne (tracker 3657864) :
+```
+AVL16_API_MAPPING = VERIFIED
+AVL16_CUMULATIVE  = VERIFIED (Δ+5.347 km cohérent)
+AVL16_SCALE       = RUNTIME_PENDING -> corriger sensor divider=1000, puis re-vérifier + tableau de bord
+```
+Confirme (encore) la stratégie V2 : calibration AVL 16 **par tracker** (jamais ÷1000 figé en dur ;
+mais l'unité brute réelle est le mètre -> divider=1000 attendu quand la trame n'est pas déjà en km).
+
+
+
+## ============================================================================
 ## PILOTE AVL 16 = tracker 3657864 (compte 121349) — 2026-09-03
 ## ============================================================================
 > Changement de pilote : on travaille désormais sur **3657864** (compte 121349), plus Manchester.
