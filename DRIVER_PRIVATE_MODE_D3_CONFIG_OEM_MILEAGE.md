@@ -61,6 +61,35 @@ D3A_VERDICT = INCONCLUSIVE_SLEEP_MODE  (verdict NOT_SUPPORTED RÉTRACTÉ)
     l'absence du PID OEM. Test à refaire dans de bonnes conditions (voir ci-dessous).
 ```
 
+### RE-TEST (2026-09-03 09:55) — conditions IDÉALES (sleep mode écarté)
+```
+ignition = TRUE, rpm 2043, speed 27 km/h, coolant 92°C, connection=active, MOVING=YES
+VIN/rpm/speed/fuel = TOUS @ 09:55:24 (OBD pleinement actif)
+Le vehicule a roulé ~26 km entre 08:32 et 09:53 (GPS odo 16578 -> 16604) => roulage REEL confirmé.
+
+OBD_MILEAGE_VALUE = None (TOUJOURS VIDE)   AVL389_PRESENT = NO   OEM_MILEAGE = NO_VALUE_YET
+```
+**Verdict confirmé (sleep mode écarté) : `OEM_MILEAGE_NOT_REPORTED_DESPITE_IDEAL_CONDITIONS`.**
+Le VW `WV2ZZZSK3PX065783` ne fournit pas le PID OEM total mileage exploitable par le FMC003 dans
+cette configuration, moteur tournant. Ce n'est ni la config (113/40000/40430 OK), ni l'OBD (actif),
+ni le sleep (écarté).
+
+**Dernière piste config OEM (écriture, GATED) :** le **profil OEM OBD** (`40002=10` au .cfg) doit
+correspondre au groupe **VAG (VW/Audi/Škoda/Seat)**. Si le profil sélectionné n'est pas celui du VW,
+le PID mileage n'est pas décodé. À vérifier/ajuster dans Configurator (côté opérateur). Sinon,
+l'OEM AVL 389 est à considérer **non exploitable sur ce véhicule**.
+
+### BASCULE STRATÉGIQUE → piste « Total Odometer GNSS interne »
+Source admissible alternative (citée par l'opérateur) : **Teltonika Total Odometer calculé sur GNSS
+interne** (`11806=0`, valeur `11807`). Dans le .cfg Manchester : `11806=0` (GNSS), `11807=60 km`
+→ le device CALCULE bien un Total Odometer interne. **MAIS il n'est PAS exposé à Navixy** (aucun
+`total_odometer`/`avl_io_16` dans readings ; seul le compteur `odometer` Navixy GPS-calculé plateforme
+existe — EXCLU car il s'arrête si les coordonnées sont masquées).
+→ Pour l'utiliser : activer l'envoi de l'I/O **Total Odometer** (AVL 16) dans la config (écriture,
+GATED) ; puis prouver (a) qu'il incrémente, (b) qu'il continue quand les coordonnées sont masquées
+(privatemode). C'est la nouvelle cible de D3.
+
+
 ### Interprétation (nuancée)
 Conditions **idéales** réunies — config parfaite (Codec 8 Ext + OBD Feature + OEM Total Mileage
 priority), OBD **actif** (VIN/rpm/vitesse temps réel), véhicule **en mouvement** — et pourtant
