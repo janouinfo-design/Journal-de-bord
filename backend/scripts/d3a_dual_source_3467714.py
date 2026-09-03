@@ -109,7 +109,8 @@ def _read_hw_mileage(readings):
 
 
 def _read_total_odo_389(readings):
-    return _reading_by_name(readings, {"avl_io_389", "obd_mileage"})
+    # inclut obd_custom_odometer (le capteur "Total Odo" de Manchester y est mappé)
+    return _reading_by_name(readings, {"avl_io_389", "obd_mileage", "obd_custom_odometer"})
 
 
 def _read_sensor_named(readings, name_sub):
