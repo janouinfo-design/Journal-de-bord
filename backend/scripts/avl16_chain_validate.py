@@ -173,14 +173,15 @@ async def run():
         bool(sens_km and sens_km.get("value") not in (None, ""))
     print(f"  API_READABLE      = {'YES' if api_readable else 'NO'}", flush=True)
 
-    # cohérence raw/1000 vs sensor km
+    # NB: tracker/readings/list renvoie DÉJÀ la valeur NORMALISÉE (après divider du sensor).
+    # La valeur brute en mètres n'est PAS exposée ici (voir sensor/data/read / historique hw_mileage).
+    # On juge la cohérence par : valeur normalisée ≈ compteur de référence (tableau de bord).
     coherence = None
     if raw16 and sens_km and _isnum(raw16["value"]) and _isnum(sens_km["value"]):
-        expected_km = float(raw16["value"]) / EXPECTED_DIVIDER
-        got = float(sens_km["value"])
-        coherence = abs(expected_km - got) < max(1.0, 0.001 * expected_km)
-        print(f"  COHERENCE (/1000) = raw/1000={expected_km:.3f} vs sensor={got} -> "
-              f"{'OK' if coherence else 'ECART'}", flush=True)
+        same = abs(float(raw16["value"]) - float(sens_km["value"])) < 0.01
+        print(f"  NOTE: readings/list = valeur normalisee (km). raw==sensor -> {same} "
+              f"(le brut en metres n'est pas expose par cet endpoint).", flush=True)
+        coherence = same
 
     # 4/5) incrementation
     print(f"\n----- [4/5] INCREMENTATION (MOVING={'YES' if moving else 'NO'}) -----", flush=True)
@@ -215,7 +216,7 @@ async def run():
     cumulative = ("VERIFIED" if (raw_delta and raw_delta > 0) or (km_delta and km_delta > 0)
                   else ("PENDING_REAL_DRIVE" if not moving else "NO_INCREMENT_OBSERVED"))
     if api_readable and coherence:
-        scale = "RUNTIME_PENDING->likely /1000 (coherent)"
+        scale = "RUNTIME_PENDING (valeur km coherente ; confirmer vs tableau de bord + increment)"
     elif api_readable:
         scale = "RUNTIME_PENDING (verifier vs tableau de bord)"
     else:
