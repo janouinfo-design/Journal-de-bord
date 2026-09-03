@@ -61,6 +61,28 @@ D3A_VERDICT = INCONCLUSIVE_SLEEP_MODE  (verdict NOT_SUPPORTED RÉTRACTÉ)
     l'absence du PID OEM. Test à refaire dans de bonnes conditions (voir ci-dessous).
 ```
 
+### ⚡ PREUVE AIR CONSOLE FOTA (2026-09-03 ~10:04) — l'AVL 389 EXISTE ET INCRÉMENTE
+```
+Air Console FOTA (flux BRUT device 3467714) :
+  avl_io_389 = 165113   → OBD OEM Total Mileage = 165 113 km (le VRAI compteur véhicule)
+  avl_io_390 = 495      (OEM fuel level)
+  avl_io_256 = WV2ZZZSK3PX065783 (VIN)
+Incrementation prouvée : capture initiale ~165000 -> 165113 (+113 km). CUMULATIF + VIVANT.
+```
+**RÉTRACTATION : le verdict `NOT_SUPPORTED_BY_VEHICLE` est FAUX.** Le véhicule FOURNIT bien le PID
+OEM mileage, le device le transmet. Nouveau statut :
+```
+OEM_MILEAGE_SUPPORTED_BY_VEHICLE = YES  (prouvé Air Console : 165113 km, incrémente)
+OEM_MILEAGE_VISIBLE_VIA_NAVIXY_API = NO (obd_mileage vide / avl_io_389 absent des readings)
+=> PROBLÈME = RÉCEPTION/MAPPING CÔTÉ NAVIXY (ni véhicule, ni config device, ni sleep)
+```
+Causes possibles : (a) délai de propagation (Air Console 10:04 > dernier test 09:56) ;
+(b) le sensor Navixy `obd_mileage` n'est pas lié à l'input AVL 389 / Navixy ne décode pas cet AVL /
+le device n'envoie l'AVL 389 qu'au flux FOTA et pas au serveur Navixy.
+**Action : re-lire l'API Navixy MAINTENANT (post-10:04). Si toujours absent -> corriger le mapping
+Navixy (config plateforme, PAS device).**
+
+
 ### RE-TEST (2026-09-03 09:55) — conditions IDÉALES (sleep mode écarté)
 ```
 ignition = TRUE, rpm 2043, speed 27 km/h, coolant 92°C, connection=active, MOVING=YES
