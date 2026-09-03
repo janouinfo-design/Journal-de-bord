@@ -90,6 +90,7 @@ AVAIL_DEVICE_CONFIG = AVAIL_DEVICE_CONFIG_DEPENDENT
 
 # Statut d'échelle (normalisation AVL 16)
 SCALE_UNVERIFIED = "UNVERIFIED"
+SCALE_RUNTIME_PENDING = "RUNTIME_PENDING"   # forte présomption /1000, à confirmer via API + incrément
 SCALE_VERIFIED = "VERIFIED"
 
 
