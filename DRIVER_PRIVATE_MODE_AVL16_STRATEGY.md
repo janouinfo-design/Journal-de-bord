@@ -1,6 +1,35 @@
 # DRIVER_PRIVATE_MODE_AVL16_STRATEGY.md
 ## Stratégie odomètre V2 — Socle commun AVL 16 (Teltonika Total Odometer)
 
+## ============================================================================
+## PILOTE AVL 16 = tracker 3657864 (compte 121349) — 2026-09-03
+## ============================================================================
+> Changement de pilote : on travaille désormais sur **3657864** (compte 121349), plus Manchester.
+
+Chaîne AVL 16 — état runtime (READ-ONLY) :
+```
+[AUTH] success=True  TID=3657864
+Sensor Navixy « ODO TOTAL » : input=avl_io_16, multiplier=1, DIVIDER=1, unit=km
+  -> mult_ok=True, div_ok=False (div=1 ici, PAS 1000), unit_ok=True
+AVL16_RAW_VALUE / SENSOR_VALUE_KM = 140257.0 km  @ 2026-09-03 13:42:57
+API_READABLE = YES   AVL16_API_MAPPING = VERIFIED
+AVL16_CUMULATIVE = PENDING_REAL_DRIVE   AVL16_SCALE = RUNTIME_PENDING
+```
+
+Point de calibration IMPORTANT (confirme la stratégie V2) :
+- Sur ce tracker, le sensor affiche 140257.0 km avec **divider=1** (Navixy convertit déjà en amont).
+- Sur Manchester, le sensor affichait la bonne valeur avec **divider=1000**.
+- => La calibration AVL 16 **varie par tracker**. NE PAS coder un ÷1000 universel.
+  La normalisation reste **par tracker** (mapping validé) — c'est déjà le cas dans
+  `normalize_teltonika_total_odometer()`.
+- Le « ECART (/1000) » affiché par le script est un faux négatif (readings/list renvoie déjà la
+  valeur normalisée en km). Valeur exploitable = 140257.0 km (cohérente avec preuve terrain
+  avl_io_16=140258496 sur ce véhicule Audi A3).
+
+Reste à fermer : incrémentation réelle (rouler -> SENSOR_KM_DELTA>0) + comparaison tableau de bord.
+
+
+
 > Décision d'architecture 2026-09-03, fondée sur preuves terrain. Remplace la stratégie
 > « FMC003 = AVL 389 obligatoire ». Les conclusions AVL 389 antérieures ne sont PAS fausses :
 > elles sont marquées **SUPERSEDED_AS_PRIMARY_STRATEGY**. Aucune écriture device/Navixy dans
