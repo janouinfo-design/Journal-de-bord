@@ -2,6 +2,31 @@
 ## Stratégie odomètre V2 — Socle commun AVL 16 (Teltonika Total Odometer)
 
 ## ============================================================================
+## AVL 16 SCALE CORRIGÉE — tracker 3657864 (2026-09-03) — CHAÎNE PROPRE
+## ============================================================================
+Sensor « ODO TOTAL » corrigé : divider 1 -> **1000**. Résultat :
+```
+input=avl_io_16  mult=1  divider=1000  unit=km   (mult_ok/div_ok/unit_ok = True)
+SENSOR_VALUE_KM = 140264.62 km   API_READABLE=YES
+```
+Cohérent : ~140257 (départ) -> 140264.62 km après roulage (+~7 km) ; aligné avec preuve terrain
+(avl_io_16=140258496 -> 140258.5 km).
+
+Statut chaîne AVL 16 (tracker 3657864) :
+```
+AVL16_API_MAPPING = VERIFIED
+AVL16_CUMULATIVE  = VERIFIED (Δ prouvé en roulage)
+AVL16_SCALE       = km cohérents (divider=1000) ; RESTE: comparaison compteur tableau de bord
+```
+Il ne reste que la comparaison au tableau de bord pour passer AVL16_SCALE = VERIFIED définitif,
+puis préparer D3-B (mode Privé : GPS=0,0 + AVL16 continue).
+
+Note script : l'affichage "COHERENCE (/1000) ECART" est un faux négatif (readings/list renvoie déjà
+la valeur normalisée km) — sans impact.
+
+
+
+## ============================================================================
 ## AVL 16 INCRÉMENTATION PROUVÉE — tracker 3657864 (2026-09-03) + fix échelle
 ## ============================================================================
 Roulage réel observé via avl16_chain_validate :
