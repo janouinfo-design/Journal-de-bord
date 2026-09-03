@@ -2,6 +2,28 @@
 ## Stratégie odomètre V2 — Socle commun AVL 16 (Teltonika Total Odometer)
 
 ## ============================================================================
+## ✅ CHAÎNE AVL 16 VALIDÉE RUNTIME — tracker 3657864 (Audi) — 2026-09-03
+## ============================================================================
+Comparaison tableau de bord :
+```
+Tableau de bord (Audi, 15:00) = 140268 km
+Sensor Navixy AVL16 (14:53)   = 140264.62 km
+Écart = -3.4 km  -> explique par le roulage entre 14:53 et 15:00. COHÉRENT.
+```
+Statut FINAL de la chaîne (tracker 3657864) :
+```
+AVL16_API_MAPPING = VERIFIED
+AVL16_CUMULATIVE  = VERIFIED
+AVL16_SCALE       = VERIFIED (m->km /1000 ; 140264.62 ≈ 140268 tableau de bord)
+DASHBOARD_COMPARISON = OK
+```
+=> Source de distance privée AVL 16 **prouvée de bout en bout en conditions réelles**.
+RESTE (avant prod) : D3-B (mode Privé : GPS=0,0 + AVL16 continue) — NON exécuté sans GO.
+`field_validated` reste FALSE tant que D3-B n'est pas PASS. PRIVATE_MODE_PRODUCTION = DISABLED.
+
+
+
+## ============================================================================
 ## AVL 16 SCALE CORRIGÉE — tracker 3657864 (2026-09-03) — CHAÎNE PROPRE
 ## ============================================================================
 Sensor « ODO TOTAL » corrigé : divider 1 -> **1000**. Résultat :

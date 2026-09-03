@@ -172,3 +172,21 @@ def test_legacy_model_gate_still_false_by_default():
         assert private_mode_allowed(m) is False
     assert private_mode_allowed("FMXUNKNOWN") is False
     assert private_mode_allowed(None) is False
+
+
+def test_pilot_3657864_runtime_verified_but_gate_still_false():
+    """Le pilote 3657864 est runtime+cumulative+scale validé, MAIS D3-B non fait
+    -> private_increment_verified=False, field_validated=False -> gate = False."""
+    from app.odometer_capability import get_pilot_capability
+    vc = get_pilot_capability(3657864)
+    assert vc is not None
+    assert vc.private_distance_source == SOURCE_TELTONIKA_TOTAL_ODOMETER
+    assert vc.raw_avl_id == AVL_TOTAL_ODOMETER
+    assert vc.runtime_verified is True
+    assert vc.cumulative_verified is True
+    assert vc.scale_status == SCALE_VERIFIED
+    # D3-B pas encore fait -> pas autorisé en prod
+    assert vc.private_increment_verified is False
+    assert vc.field_validated is False
+    assert vehicle_private_mode_allowed(vc.device_model, vc) is False
+    assert private_mode_production_allowed() is False

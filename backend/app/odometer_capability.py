@@ -394,3 +394,37 @@ def private_mode_production_allowed() -> bool:
         if cap.verified and cap.status == STATUS_VALIDATED and _model_supports_avl16_strategy(model):
             return True
     return False
+
+
+
+# ---------------------------------------------------------------------------
+# Capacités PILOTES validées RUNTIME (par tracker) — traçabilité des preuves réelles.
+# `field_validated` reste False (D3-B mode Privé non encore prouvé) -> gate = False.
+# Ces entrées documentent l'état atteint ; elles n'autorisent PAS le mode privé prod.
+# ---------------------------------------------------------------------------
+PILOT_VEHICLE_CAPABILITIES: dict[int, VehicleOdometerCapability] = {
+    3657864: VehicleOdometerCapability(
+        vehicle_id="pilot-3657864", tracker_id=3657864, device_model="FMC003",
+        private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER,
+        raw_avl_id=AVL_TOTAL_ODOMETER, navixy_input="avl_io_16", navixy_sensor_id=5570680,
+        raw_unit="m", normalized_unit="km", multiplier=1.0, divider=1000.0,
+        scale_status=SCALE_VERIFIED,
+        last_value_km=140264.62, last_timestamp="2026-09-03 14:53:39", fresh=True,
+        runtime_verified=True,        # avl_io_16 reçu via l'API ✅
+        cumulative_verified=True,     # +5.3 km prouvé en roulant ✅
+        private_increment_verified=False,  # D3-B non exécuté
+        field_validated=False,        # pas de PASS terrain mode Privé
+        capability=CAP_AVL16_CUMULATIVE_VERIFIED,
+        source_type=SOURCE_TELTONIKA_TOTAL_ODOMETER, unit="km", last_value=140264.62,
+        notes=("Pilote V2. Chaîne AVL16 validée runtime: sensor 'ODO TOTAL' avl_io_16 mult=1 div=1000 "
+               "km ; API_READABLE ; +5.3 km en roulage ; 140264.62 ≈ 140268 tableau de bord (Audi, "
+               "écart = roulage 14:53->15:00). RESTE D3-B (GPS=0,0 + AVL16 continue) avant prod."),
+    ),
+}
+
+
+def get_pilot_capability(tracker_id: Optional[int]) -> Optional[VehicleOdometerCapability]:
+    """Capacité pilote runtime pour un tracker (traçabilité). None si non enregistré."""
+    if tracker_id is None:
+        return None
+    return PILOT_VEHICLE_CAPABILITIES.get(int(tracker_id))
