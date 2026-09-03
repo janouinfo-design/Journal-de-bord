@@ -2,6 +2,47 @@
 ## Protocole D3-CONFIG — OEM Mileage (AVL 389) — GATED / NON EXÉCUTÉ
 
 ## ============================================================================
+## D3-A RUNTIME VERIFY (2026-09-03 08:32) — 3467714 Manchester — READ-ONLY
+## ============================================================================
+```
+TRACKER_ID = 3467714   MODEL = FMC003   IMEI 864636064631720   FW 04.02.00.Rev.602
+OBD_ACTIVE = YES   (VIN WV2ZZZSK3PX065783 @ 08:32:46, rpm 1504, speed 45 km/h — temps réel)
+MOVING = YES       (le véhicule roulait pendant le test)
+
+CONFIG DEVICE (déjà faite par l'operateur) : 113=1, 40000=1, 40430=1  ✅
+
+OBD_MILEAGE_SENSOR_DEFINED = YES  (« OBD : Kilométrage OBD total », km, id 5371584)
+OBD_MILEAGE_VALUE = None          ← TOUJOURS VIDE malgré config OK + OBD actif + roulage
+AVL389_PRESENT = NO
+OEM_MILEAGE_INCREMENT = NO_VALUE_YET
+NAVIXY_GPS_ODOMETER = 16578.1 km @ 08:32:16  (REFERENCE SEULEMENT)
+
+D3A_VERDICT = OEM_MILEAGE_NOT_SUPPORTED_BY_VEHICLE  (présomption — voir nuances)
+```
+
+### Interprétation (nuancée)
+Conditions **idéales** réunies — config parfaite (Codec 8 Ext + OBD Feature + OEM Total Mileage
+priority), OBD **actif** (VIN/rpm/vitesse temps réel), véhicule **en mouvement** — et pourtant
+`obd_mileage` (AVL 389) **ne se peuple pas**. Ce n'est donc **ni** un problème de config, **ni** un
+problème de liaison OBD : c'est le **PID OEM « total mileage » qui n'est pas fourni/décodé** pour ce
+VW précis.
+
+### Nuances (ne pas figer « NOT_SUPPORTED » définitivement)
+1. Le **profil OEM OBD** Teltonika sélectionné (param `40002=10` vu au .cfg) doit correspondre au
+   **groupe VAG** (VW/Audi/Skoda/Seat). Si le profil OEM n'est pas le bon, le PID mileage n'est pas décodé.
+2. Le PID OEM mileage peut remonter à **très basse fréquence** (à confirmer sur une fenêtre plus longue).
+3. Beaucoup de véhicules **ne fournissent tout simplement pas** ce PID via OBD standard.
+
+### Conséquence stratégique
+- Pour **ce VW**, l'OEM mileage (AVL 389) **n'est pas exploitable en l'état**.
+- **Piste parallèle à reprendre** : Total Odometer **GNSS interne** (`11806=0`) — non exposé Navixy
+  aujourd'hui, activation I/O à étudier (écriture, gated).
+- Tester l'OEM mileage sur un véhicule **d'une autre marque** pourrait donner un résultat différent
+  (le support AVL 389 est **véhicule-dépendant**, comme documenté).
+
+## ============================================================================
+
+## ============================================================================
 ## SNAPSHOT D3-A (Etapes 0+1) — tracker 3467714 « Manchester » — READ-ONLY
 ## ============================================================================
 ```
