@@ -2,6 +2,10 @@
 ## D3-B — FMC003 Private Mode Field Pilot — tracker 3657864 (Audi)
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
+> 📌 REPRISE : test terrain reporté à **demain** (2026-09-04). Tout est prêt (`D3B_READY = YES`).
+> Il ne reste qu'à exécuter la séquence terrain sur GO explicite. Voir « PLAN D'EXÉCUTION DEMAIN » ci-dessous.
+
+
 ## ============================================================================
 ## FINAL PRECHECK (2026-09-03) — mécanisme remote + verrouillage config
 ## ============================================================================
