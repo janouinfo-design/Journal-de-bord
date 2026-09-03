@@ -2,6 +2,50 @@
 ## Protocole D3-CONFIG — OEM Mileage (AVL 389) — GATED / NON EXÉCUTÉ
 
 ## ============================================================================
+## RÉPONSE OFFICIELLE NAVIXY (2026-09-03) — AVL 16 = hw_mileage (RÉFÉRENCE)
+## ============================================================================
+Navixy confirme pour le **FMC130** (et applicable à l'odomètre interne des FMC00x) :
+```
+- Total Odometer FMC130 = AVL 16 (avl_io_16) = "kilométrage matériel" (hw_mileage).
+- Accès : créer un capteur de mesure avec AVL IO 16 -> lire via tracker/readings/list
+  ou sensor/data/read. Historique brut : champ  inputs.hw_mileage.
+- "Odometer Calculation = Enable" permet à AVL 16 de CONTINUER à augmenter MÊME quand
+  les coordonnées GPS sont envoyées comme 0,0 (GPS Data Masking = Data Sent As Zero). ★
+- Régler l'E/S "Total Odometer" sur Low / Monitoring (pour que l'AVL 16 soit transmis).
+- La conso GPS plateforme n'augmente pas pour les points 0,0 -> se fier à la valeur
+  MATÉRIELLE de l'odomètre (AVL 16), PAS au GPS.
+```
+**Impact majeur :** l'AVL 16 (hw_mileage, odomètre interne GNSS) est une **source de distance privée
+CONFIRMÉE** qui continue en mode privé (0,0). C'est LA solution universelle (FMC130 + FMC00x).
+
+### Correction de mon conseil précédent (honnêteté)
+J'avais écrit « ne pas activer Odometer Calculation ». **À nuancer :** pour la voie **AVL 16**,
+`Odometer Calculation = Enable` + `I/O Total Odometer = Low/Monitoring` sont **corrects et NÉCESSAIRES**
+(confirmé Navixy). Cela n'affecte pas l'AVL 389 (OBD), qui reste une source distincte.
+
+### STRATÉGIE À DEUX SOURCES (clarifiée)
+```
+SOURCE PRINCIPALE (universelle, confirmée Navixy) : AVL 16 / hw_mileage (odomètre interne GNSS)
+  - FMC130 ET FMC003
+  - continue à 0,0 en mode privé si Odometer Calculation=Enable + GPS masking=Data Sent As Zero
+  - = distance GNSS accumulée par le traceur (fiable pour une DIFFÉRENCE ; ≠ forcément km tableau de bord)
+
+SOURCE COMPLÉMENTAIRE (FMC003 OBD, bonus "vrai km véhicule") : AVL 389 / OEM Total Mileage
+  - seulement si le véhicule fournit le PID OEM (Manchester : 165113 ✅)
+  - comportement en privé à confirmer (D3-B), mais OBD -> probablement continue aussi
+```
+
+### Actions qui en découlent (opérateur, hors périmètre écriture de l'audit)
+1. Navixy : créer un capteur **AVL IO 16** (ex. « HW Mileage / Odo interne ») → `inputs.hw_mileage`.
+2. Configurator/FOTA : **I/O Total Odometer = Low/Monitoring** + **Odometer Calculation = Enable**
+   + **GPS Data Masking = Data Sent As Zero** (Navixy dit la config actuelle déjà correcte, sauf
+   l'E/S Total Odometer à passer en Low). = écriture device, décidée/appliquée par l'opérateur.
+3. Audit (READ-ONLY) : le script lira `avl_io_16` / `hw_mileage` + `avl_io_389` en parallèle.
+4. D3-B : prouver que hw_mileage (et/ou AVL 389) continue d'incrémenter quand GPS = 0,0.
+
+
+
+## ============================================================================
 ## D3-A « Total Odo » RUNTIME (2026-09-03 10:xx) — MAPPING INCORRECT DÉTECTÉ
 ## ============================================================================
 Deux sensors odométriques dans `sensor/list` de 3467714 :
