@@ -2,6 +2,34 @@
 ## Protocole D3-CONFIG — OEM Mileage (AVL 389) — GATED / NON EXÉCUTÉ
 
 ## ============================================================================
+## STRATÉGIE DISTANCE PRIVÉE — SÉPARÉE PAR MODÈLE (RÈGLE — NE PAS MÉLANGER)
+## ============================================================================
+> Correction (2026-09-03). AVL ID 389 = OBD OEM Total Mileage est documenté Teltonika pour la
+> famille OBD **FMB001/FMC001/FMM001/FMB003/FMC003/FMM003**. **Le FMC130 n'est PAS dans la liste
+> de support de l'AVL 389.** Ne jamais bâtir la stratégie Privé du FMC130 sur l'AVL 389.
+
+```
+FMC003 (installation OBD)
+  → SOURCE CIBLE : OBD OEM Total Mileage (AVL 389 → sensor Navixy "Total Odo")
+  → CONDITION    : uniquement si le véhicule fournit réellement le PID OEM
+  → cas Manchester 3467714 : AVL 389 = 165113, incrémente ✅ (à valider en Private Mode)
+
+FMC130 (installation fixe)
+  → SOURCE CIBLE : TELTONIKA_TOTAL_ODOMETER interne (Calculation Source = GNSS)
+  → PAS AVL 389 (non supporté par ce modèle)
+  → À PROUVER (D3 FMC130) :
+       Total Odometer (Calc Source=GNSS) + Private Odometer Calculation = ON
+       + coordonnées transmises = masquées  → Total Odometer CONTINUE d'incrémenter
+  → ⚠️ NB : sur le pilote FMC003 Manchester, "Odometer Calculation (private)" = Disable ;
+     pour la voie FMC130 il faudra "Private Odometer Calculation = ON" (réglage différent, par modèle).
+```
+
+**Résumé : FMC003 → AVL 389 si disponible ; FMC130 → Total Odometer interne (GNSS).**
+Les deux dossiers restent séparés ; un échec sur l'un ne condamne pas l'autre.
+
+
+
+## ============================================================================
 ## EXIGENCES PRODUIT « MODE PRIVÉ » (DÉCISION MÉTIER — RÉFÉRENCE DE GATE)
 ## ============================================================================
 > Décidé avec l'opérateur (2026-09-03). Ces exigences priment sur toute implémentation.
