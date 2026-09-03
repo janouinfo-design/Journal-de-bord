@@ -2,6 +2,45 @@
 ## Protocole D3-CONFIG — OEM Mileage (AVL 389) — GATED / NON EXÉCUTÉ
 
 ## ============================================================================
+## EXIGENCES PRODUIT « MODE PRIVÉ » (DÉCISION MÉTIER — RÉFÉRENCE DE GATE)
+## ============================================================================
+> Décidé avec l'opérateur (2026-09-03). Ces exigences priment sur toute implémentation.
+
+**Définition du Mode Privé (cible) :**
+```
+GPS_COORDINATES        = MASKED      (aucune position/adresse/trace/replay visible)
+TRACKER                = ONLINE      (reste joignable — retour Professionnel à distance possible)
+PRIVATE_DISTANCE       = CONTINUES_TO_INCREMENT   (km privés comptabilisés)
+```
+
+**Méthode = vrai `privatemode`** (PAS Deep Sleep `11000:4` qui couperait le GSM) :
+- masque les coordonnées GPS transmises ;
+- garde le traceur joignable ;
+- permet le retour Professionnel à distance ;
+- continue à comptabiliser les km parcourus en période privée.
+
+**Source de la distance privée (admissible) — NE PAS dire « non-GPS » :**
+- `OBD OEM Total Mileage` / **AVL 389** → km véhicule OBD, indépendant du GNSS ; OU
+- **Teltonika Total Odometer calculé sur GNSS interne** → admissible UNIQUEMENT si D3 prouve qu'il
+  continue d'incrémenter quand les **coordonnées transmises** sont masquées.
+- ❌ **Jamais** calculer les km privés depuis les coordonnées GPS masquées ni le trajet Navixy.
+
+**GATE PRODUCTION (absolue) :**
+```
+PRIVATE_MODE_PRODUCTION_ALLOWED = TRUE
+   uniquement si une source kilométrique fiable est FIELD_VALIDATED pendant le mode Privé.
+Sinon -> bouton Privé DÉSACTIVÉ en production. PAS de mode Privé final avec distance "indisponible".
+```
+
+**Découplage actuel constaté (à relier en Phase 2) :** le bouton chauffeur (`driver_set_mode` →
+`mobile_override`) classe les trajets mais NE déclenche PAS de masquage device. Le lien
+bouton→masquage device sera ajouté, mais l'ENVOI RÉEL reste GATED (simulation) jusqu'à la
+FIELD-VALIDATION ci-dessus. Objectif D3-B = prouver simultanément
+`GPS_COORDINATES=MASKED` + `TRACKER=ONLINE` + `PRIVATE_DISTANCE=CONTINUES_TO_INCREMENT`.
+
+
+
+## ============================================================================
 ## D3-A RUNTIME VERIFY (2026-09-03 08:32) — 3467714 Manchester — READ-ONLY
 ## ============================================================================
 ```
