@@ -115,8 +115,18 @@ Odometer Calculation = Disable (en privé)     → odomètre INTERNE GNSS NON ca
 Scenario             = Low Priority, Eventual Records = Enable
 ```
 → Conséquence : la distance privée devra venir de **l'AVL 389 (OEM/OBD)**, PAS de l'odomètre interne.
-→ **D3-B à prouver :** en mode privé (GPS Data Masking actif), l'AVL 389 (OEM mileage) **continue-t-il
-   d'incrémenter** ? (l'OBD étant indépendant du GPS, c'est probable — mais à VALIDER terrain).
+→ **Formulation corrigée :** l'AVL 389 est **théoriquement indépendant** du réglage « Odometer
+   Calculation » (car il provient du kilométrage OEM du véhicule via OBD, pas de l'odomètre interne
+   Teltonika) — **à confirmer EXPÉRIMENTALEMENT pendant D3-B** (ne pas l'affirmer avant preuve terrain).
+→ **D3-B à prouver :**
+```
+Mode Professionnel : AVL389 = X
+   ↓ privatemode ON
+GPS transmis = MASQUÉ ; tracker = ONLINE ; AVL389 continue = X + distance privée
+   ↓ retour Professionnel
+GPS = NORMAL
+```
+   Si validé → solution idéale FMC003 OEM : aucune position privée visible, kilométrage privé conservé.
 
 
 ### ⚡ PREUVE AIR CONSOLE FOTA (2026-09-03 ~10:04) — l'AVL 389 EXISTE ET INCRÉMENTE
