@@ -27,33 +27,32 @@ Driver App -> LOGITRAK Backend -> Navixy raw_command/send("privatemode ON/OFF")
            -> Teltonika (Trigger=External) -> Private/Business Mode
 ```
 
-### Bloc PRECHECK
+### Bloc PRECHECK  — ✅ MIS À JOUR (2026-09-03 13:40) : config corrigée, D3B_READY = YES
 ```
-TRACKER_ID = 3657864   MODEL = FMC003   (FW 04.02 ; Odometer Value 11807=140267 ≈ 140268 dashboard ✅)
+TRACKER_ID = 3657864   MODEL = FMC003   (FW 04.02 ; Odometer 11807=140267 ≈ 140268 dashboard ✅)
 
-DEVICE_PRIVATE_CONFIG_CONFIRMED = PARTIAL (config .cfg 3657864 analysée ; 1 param à corriger)
+DEVICE_PRIVATE_CONFIG_CONFIRMED = YES  (.cfg 3657864 re-exporté ; tous params conformes)
 ODOMETER_SOURCE_GNSS            = YES        (11806=0)
-GPS_DATA_MASKING_ZERO           = NO  ❌     (11813=0 = Normal ; REQUIS 11813=1 = Data Sent As Zero)
+GPS_DATA_MASKING_ZERO           = YES ✅     (11813=1 = Data Sent As Zero)  [CORRIGÉ 0->1]
 PRIVATE_ODOMETER_CALCULATION    = ENABLED    (11815=1 -> distance privée incluse dans AVL16) ✅
 TRIGGER_TYPE                    = EXTERNAL   (11849=0) ✅
 TOTAL_ODOMETER_IO               = ACTIVE     (avl_io_16 transmis, prouvé runtime) ✅
-CODEC                           = Codec 8 (113=0) — suffisant pour AVL16 (ID<=255) ✅
+CODEC                           = Codec 8 (113=0) — suffisant pour AVL16 ✅
 
-REMOTE_PRIVATE_COMMAND_SUPPORTED  = YES  (Navixy raw_command/send "privatemode ON", Trigger=External OK)
-REMOTE_BUSINESS_COMMAND_SUPPORTED = YES  ("privatemode OFF")
+REMOTE_PRIVATE_COMMAND_SUPPORTED  = YES   (Navixy raw_command/send "privatemode ON")
+REMOTE_BUSINESS_COMMAND_SUPPORTED = YES   ("privatemode OFF")
 BTAPP_REQUIRED                    = NO
 AVL16_RUNTIME                     = PASS
 
-D3B_READY = NO
-D3B_BLOCKING_REASON = GPS Data Masking = Normal (param 11813=0). En mode privé, les coordonnées
-   ne seraient PAS masquées. SEULE correction manquante -> passer 11813 = 1 (Data Sent As Zero).
-   Tous les autres paramètres sont conformes.
-
+D3B_READY = YES
+D3B_BLOCKING_REASON = (aucun) — config conforme ; attente GO explicite opérateur
 D3B_EXECUTION = NOT_STARTED
 PRIVATE_MODE_PRODUCTION = DISABLED
-NEXT_ACTION = corriger 11813:1 sur 3657864 (opérateur) -> re-vérifier -> WAIT_FOR_EXPLICIT_GO_D3B
-ROLLBACK_READY = YES
+NEXT_ACTION = WAIT_FOR_EXPLICIT_GO_D3B  (GO D3-B FMC003 3657864)
+ROLLBACK_READY = YES  (privatemode OFF via raw_command/send ; si retour Business non confirmé -> FAILED/UNKNOWN)
 ```
+
+
 
 ### CHANGE_REQUIRED (à faire par l'opérateur — l'audit N'exécute PAS)
 ```
