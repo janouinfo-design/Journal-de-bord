@@ -115,6 +115,35 @@ def _recent(ts):
         return False
 
 
+def _find_can_mileage(readings, sensors):
+    """Lit can_mileage (source SECONDAIRE de comparaison) : valeur/unite/timestamp
+    depuis readings, + definition du sensor si presente. READ-ONLY."""
+    val = ts = unit = None
+    for grp in ("inputs", "virtual_sensors", "sensors", "counters", "states"):
+        for it in (readings.get(grp) or []):
+            nm = str(it.get("input_name") or it.get("name") or it.get("field") or "").lower()
+            if nm == "can_mileage":
+                val = it.get("value")
+                unit = it.get("units_type") or it.get("units")
+                ts = it.get("update_time") or it.get("time")
+                break
+        if val is not None:
+            break
+    sensor = None
+    for s in (sensors.get("list") or []):
+        if str(s.get("input_name") or "").lower() == "can_mileage":
+            sensor = s
+            break
+    return {
+        "present": (val is not None) or (sensor is not None),
+        "value": val, "unit": unit, "timestamp": ts,
+        "sensor_id": sensor.get("id") if sensor else None,
+        "sensor_name": sensor.get("name") if sensor else None,
+        "multiplier": sensor.get("multiplier") if sensor else None,
+        "divider": sensor.get("divider") if sensor else None,
+    }
+
+
 # ---------- résolution tenant + credential ----------
 async def _resolve_tenant_and_cred():
     from app.db import init_db, get_db
@@ -217,17 +246,49 @@ async def precheck():
         and (str(s_unit).lower() in ("km", "kilometer", "kilometre"))
     )
     scale_verified = bool(mapping_expected and avl16_readable)
+
+    # ---- Source SECONDAIRE de comparaison : can_mileage (READ-ONLY) ----
+    cm = _find_can_mileage(readings or {}, sensors or {})
+    cm_readable = _isnum(cm.get("value"))
+    cm_recent = _recent(cm.get("timestamp"))
+    if not cm.get("present"):
+        cm_status = "ABSENT"
+    elif cm_readable and cm_recent:
+        cm_status = "RUNTIME_FRESH"
+    elif cm_readable and not cm_recent:
+        cm_status = "STALE"
+    else:
+        cm_status = "INCONCLUSIVE"
+
+    # Statut AVL16 : distinguer NON EXPOSÉ (device/config) de NON SUPPORTÉ (jamais).
+    # Le FMC130 SUPPORTE AVL16 -> si absent ici = NOT_CURRENTLY_EXPOSED.
+    if avl16_present and scale_verified:
+        avl16_status = "PRESENT"
+    elif avl16_present:
+        avl16_status = "PRESENT_MAPPING_UNVERIFIED"
+    else:
+        avl16_status = "NOT_CURRENTLY_EXPOSED"
+
+    # Odomètre plateforme Navixy (GPS-calculé) — RÉFÉRENCE uniquement, EXCLU du privé.
+    navixy_gps_odo = None
+    for grp in ("counters",):
+        for it in (readings.get(grp) or []):
+            if str(it.get("type") or it.get("name") or "").lower() in ("odometer", "mileage"):
+                navixy_gps_odo = it.get("value")
+                break
+
     print("MODEL = %s" % vehicle.get("model"), flush=True)
     print("TENANT_ID = %s" % tenant_id, flush=True)
     print("CRED_SOURCE = %s (valeur jamais affichee)" % cred.get("source"), flush=True)
     print("TRACKER_ONLINE = %s" % online, flush=True)
     print("GPS_NORMAL = %s (%s: %s)" % (gps_normal, verdict, reason), flush=True)
     print("", flush=True)
+    print("--- PRIMARY: AVL16 (Teltonika Total Odometer) ---", flush=True)
+    print("AVL16_STATUS = %s" % avl16_status, flush=True)
     print("AVL16_PRESENT = %s" % avl16_present, flush=True)
     print("AVL16_RAW_VALUE = %s" % avl16_val, flush=True)
     print("AVL16_TIMESTAMP = %s" % avl16_ts, flush=True)
     print("AVL16_RECENT = %s" % avl16_recent, flush=True)
-    print("", flush=True)
     print("SENSOR_DEFINED = %s" % s_defined, flush=True)
     print("SENSOR_ID = %s" % s_id, flush=True)
     print("SENSOR_INPUT = %s" % s_input, flush=True)
@@ -235,9 +296,21 @@ async def precheck():
     print("SENSOR_DIVIDER = %s" % s_div, flush=True)
     print("SENSOR_UNIT = %s" % s_unit, flush=True)
     print("SENSOR_VALUE_KM = %s" % sensor_value_km, flush=True)
-    print("", flush=True)
     print("AVL16_API_READABLE = %s" % avl16_readable, flush=True)
     print("AVL16_SCALE_VERIFIED = %s" % scale_verified, flush=True)
+    print("", flush=True)
+    print("--- SECONDARY (comparaison, fallback): can_mileage ---", flush=True)
+    print("CAN_MILEAGE_PRESENT = %s" % cm.get("present"), flush=True)
+    print("CAN_MILEAGE_VALUE = %s" % cm.get("value"), flush=True)
+    print("CAN_MILEAGE_UNIT = %s" % cm.get("unit"), flush=True)
+    print("CAN_MILEAGE_TIMESTAMP = %s" % cm.get("timestamp"), flush=True)
+    print("CAN_MILEAGE_SENSOR_ID = %s" % cm.get("sensor_id"), flush=True)
+    print("CAN_MILEAGE_MULTIPLIER = %s" % cm.get("multiplier"), flush=True)
+    print("CAN_MILEAGE_DIVIDER = %s" % cm.get("divider"), flush=True)
+    print("CAN_MILEAGE_RUNTIME = %s" % cm_status, flush=True)
+    print("", flush=True)
+    print("--- REFERENCE (EXCLU du calcul prive) ---", flush=True)
+    print("NAVIXY_GPS_ODOMETER = %s" % navixy_gps_odo, flush=True)
     print("", flush=True)
     ok = (online and gps_normal and avl16_present and avl16_recent
           and avl16_readable and scale_verified)
@@ -251,15 +324,20 @@ async def precheck():
         if not gps_normal:
             reasons.append("GPS_NOT_NORMAL")
         if not avl16_present:
-            reasons.append("AVL16_ABSENT")
-        if not avl16_recent:
+            reasons.append("AVL16_NOT_CURRENTLY_EXPOSED")
+        if avl16_present and not avl16_recent:
             reasons.append("AVL16_STALE")
-        if not avl16_readable:
+        if avl16_present and not avl16_readable:
             reasons.append("AVL16_NOT_READABLE")
-        if not scale_verified:
+        if avl16_present and not scale_verified:
             reasons.append("MAPPING_NOT_VERIFIED")
         print("FMC130_D3_PRECHECK = BLOCKED", flush=True)
         print("BLOCKING_REASON = " + ", ".join(reasons), flush=True)
+        # Aide au diagnostic si AVL16 absent mais can_mileage vivant
+        if not avl16_present and cm_status == "RUNTIME_FRESH":
+            print("NOTE = AVL16 NOT_CURRENTLY_EXPOSED mais can_mileage RUNTIME_FRESH "
+                  "-> verifier config Total Odometer I/O (11806/11815/Total Odometer I/O) ; "
+                  "can_mileage = SECONDARY_VALIDATED_SOURCE candidate.", flush=True)
     print("\n(READ-ONLY : aucune commande, aucun privatemode/setparam, aucune modif sensor/device.)", flush=True)
     print("D3_FMC130_EXECUTION = NOT_STARTED | PRIVATE_MODE_GLOBAL = DISABLED | REAL_DEVICE_COMMANDS = MOCK/SIMULATION", flush=True)
 
