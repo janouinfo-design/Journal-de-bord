@@ -152,6 +152,17 @@ frontend:
       - working: true
         agent: "testing"
         comment: "All 5 tests PASS: (1) Login screen renders with all elements (LOGITRAK, email, password, eye toggle testID=login-toggle-password, Rester connecté checkbox testID=login-remember, Se connecter button). (2) Password eye toggle works - icon changes 👁️↔🙈, secureTextEntry toggles correctly. (3) Remember checkbox toggles checkmark ✓ on/off. (4) KEY TEST: Login with spaces '  chauffeur@logitrak.ch  ' succeeds - trim() works, navigates to Driver screen showing Jean Dupont + bottom tabs (Conduite/Mes trajets/Profil/Réglages). (5) No console errors (BLE/notifications warnings filtered). Screenshots confirm all features working."
+  - task: "Phase 2 - Confidentialité section (Private/Professional mode) in DriverScreen"
+    implemented: true
+    working: true
+    file: "logitrak-driver-app/src/screens/DriverScreen.tsx, src/hooks/usePrivateMode.ts, src/api/privateMode.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Phase 2 Confidentialité validation COMPLETE. Hook tests: 6/6 PASSED (non-optimistic state management, backend authoritative, no jargon in error messages, anti-concurrence, UNKNOWN fallback). Full regression: 7 suites / 41 tests PASSED. Typecheck: PASS. Static audit: ALL 6 criteria PASSED - (a) all states handled (BUSINESS/PRIVATE/REQUESTED/UNKNOWN), (b) section gated by allowed flag, (c) buttons disabled during busy+REQUESTED, (d) ZERO technical jargon (no AVL/Navixy/Teltonika/privatemode/raw_command), (e) all testIDs present (private-mode-section/state/business/private/error), (f) no position data exposed when PRIVATE. Implementation is production-ready. NO ISSUES FOUND."
 
 metadata:
   created_by: "main_agent"
@@ -166,6 +177,81 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      PHASE 2 CONFIDENTIALITÉ VALIDATION COMPLETE (React Native/Expo App)
+      
+      CONTEXT: Validation of new "Confidentialité" section (Private/Professional mode) in DriverScreen via Jest unit tests + static code audit. NO device testing (all mocked). This is a React Native/Expo app, NOT a web app - Playwright not applicable.
+      
+      TEST RESULTS:
+      ✅ (1) Hook Tests (usePrivateMode.test.tsx): 6/6 PASSED
+         - ✓ récupère l'état réel au montage (jamais BUSINESS par défaut)
+         - ✓ bascule non-optimiste : REQUESTED puis PRIVATE seulement après réponse ok
+         - ✓ non-confirmation backend -> pas de PRIVATE + message honnête sans jargon
+         - ✓ erreur réseau -> UNKNOWN + message, jamais PRIVATE confirmé
+         - ✓ double-tap : une seule intention envoyée (anti-concurrence)
+         - ✓ lecture impossible au montage -> UNKNOWN (jamais BUSINESS supposé)
+      
+      ✅ (2) Full Regression Suite: 7 suites / 41 tests PASSED
+         - tripsStore.test.ts: PASS
+         - usePrivateMode.test.tsx: PASS
+         - sessionStore.test.ts: PASS
+         - vehiclesStore.test.ts: PASS
+         - authStore.test.ts: PASS
+         - recentVehicles.test.ts: PASS
+         - tripHelpers.test.ts: PASS
+      
+      ✅ (3) Typecheck: PASS (npx tsc --noEmit, exit 0)
+      
+      ✅ (4) Static Audit of DriverScreen.tsx (lines 360-410) - ALL CHECKS PASSED:
+      
+         a. ✓ States handled at display (lines 365-373):
+            - 'PRIVATE' → 'Mode Privé activé'
+            - 'BUSINESS' → 'Mode Professionnel activé'
+            - 'PRIVATE_REQUESTED' → 'Passage en mode Privé…'
+            - 'BUSINESS_REQUESTED' → 'Retour en mode Professionnel…'
+            - default → 'État indéterminé' (covers UNKNOWN)
+         
+         b. ✓ Section gating (line 361): {privateMode.status.allowed ? (
+            Section only rendered when allowed=true. NOT_ALLOWED → section hidden.
+         
+         c. ✓ Buttons disabled during busy and REQUESTED states (non-optimistic):
+            - Line 387: disabled={privateMode.busy || privateMode.status.state === 'BUSINESS'}
+            - Line 388: loading={privateMode.status.state === 'BUSINESS_REQUESTED'}
+            - Line 397: disabled={privateMode.busy || privateMode.status.state === 'PRIVATE'}
+            - Line 398: loading={privateMode.status.state === 'PRIVATE_REQUESTED'}
+         
+         d. ✓ NO technical jargon in UI text:
+            Checked DriverScreen.tsx (360-410), usePrivateMode.ts (_reasonToMessage), privateMode.ts API.
+            ZERO instances of forbidden jargon: AVL/AVL16/Navixy/Teltonika/privatemode/GPS Data Masking/Data Sent As Zero/raw_command/11813/11000.
+            All messages use business-friendly language: "Mode Privé activé", "Votre position n'est pas affichée. Les kilomètres parcourus restent comptabilisés.", etc.
+            Test explicitly verifies no jargon (line 85-86 of usePrivateMode.test.tsx) - PASSED.
+         
+         e. ✓ testID present for automation:
+            - private-mode-section (line 362)
+            - private-mode-state (line 364)
+            - private-mode-business (line 390)
+            - private-mode-private (line 400)
+            - private-mode-error (line 405)
+         
+         f. ✓ No position data exposed when PRIVATE:
+            Verified section contains NO lat/lng/address/map/polyline.
+            Only displays: state labels, hint text ("position n'est pas affichée"), mode buttons, error messages.
+            Privacy correctly implemented: when PRIVATE, no actual position data shown.
+      
+      CONCLUSION:
+      ALL validation criteria met. The "Confidentialité" section is production-ready:
+      - Non-optimistic state management (backend authoritative)
+      - Proper state handling (BUSINESS, PRIVATE, REQUESTED, UNKNOWN)
+      - Correct gating (hidden when not allowed)
+      - Buttons disabled during busy/REQUESTED
+      - Zero technical jargon in UI
+      - All testIDs present
+      - No position data exposed when PRIVATE
+      - All tests passing (6 hook + 41 total)
+      - Typecheck clean
+      
+      NO ISSUES FOUND. Implementation validated.
   - agent: "testing"
     message: |
       STRATÉGIE ODOMÈTRE V2 MIGRATION TEST COMPLETE (2026-09-03)
