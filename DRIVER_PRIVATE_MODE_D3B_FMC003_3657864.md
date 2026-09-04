@@ -3,6 +3,30 @@
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
 ## ============================================================================
+## NUANCE (2026-09-04) — diagnostic "masquage KO" était NON CONCLUANT
+## ============================================================================
+Erreur de méthode (due au faux positif gps_masked) : on a surtout envoyé `privatemode OFF`
+sur un device DÉJÀ en Business -> aucun changement attendu (normal). On n'a JAMAIS fait le test
+propre : `privatemode ON` PUIS vérification du masquage avec le script CORRIGÉ (lecture
+`state.gps.location`). Donc « masquage ne fonctionne pas » = **NON PROUVÉ / à refaire**.
+
+Doc Teltonika (confirmée) : avec `Trigger Type = External (11849=0)` — NOTRE config — la commande
+`privatemode ON/OFF` DOIT fonctionner (c'est `Weekly Schedule` qui la bloquerait). Casse OK.
+=> La config actuelle permet A PRIORI le pilotage par COMMANDE. Rien à changer avant d'avoir
+refait le test ON proprement.
+
+État de départ propre disponible : Business + GPS visible (location=46.54/6.59 réelle) ✅.
+
+TEST PROPRE À FAIRE (sur GO, en roulant) :
+1. snapshot (script corrigé) -> confirmer GPS_MASKED=False (Business).
+2. privatemode ON.
+3. attendre ~1-2 min -> snapshot -> GPS_MASKED devient-il True (location 0,0) ?
+   - OUI -> masquage OK -> rouler -> AVL16 continue -> privatemode OFF -> GPS revient. PASS.
+   - NON -> LÀ seulement, investiguer config/mécanisme (device attend peut-être un input malgré
+     External, ou param complémentaire).
+
+
+## ============================================================================
 ## DIAGNOSTIC MASQUAGE (2026-09-04) — le mode Privé NE S'ACTIVE PAS via privatemode
 ## ============================================================================
 Preuve directe (get_state.state.gps.location, vraie position transmise) :
