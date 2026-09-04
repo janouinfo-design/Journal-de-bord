@@ -198,3 +198,51 @@ async def seed_mock_data(force: bool = False):
                 trips.append(_gen_trip(driver["id"], driver["name"], v["id"], v["plate"], day))
     if trips:
         await db.trips.insert_many(trips)
+
+    # ------------------------------------------------------------------
+    # FIXTURE DEV UNIQUEMENT — 1 trajet marqué PRIVÉ (device) pour valider
+    # l'UI web « Position masquée — Mode Privé ». NE JAMAIS utiliser en prod.
+    # Le trajet est stocké AVEC coordonnées réelles ; le backend les REDACTE
+    # à la lecture API (private_mode_engine.redact_private_trip), exactement
+    # comme en production. Marqueur métier autoritaire : private_mode=True.
+    # ------------------------------------------------------------------
+    try:
+        if vehicles and drivers:
+            v0 = vehicles[0]
+            d0 = next((d for d in drivers if d["id"] == v0["assigned_driver_id"]), drivers[0])
+            now = datetime.now(timezone.utc)
+            start_dt = now.replace(hour=9, minute=5, second=0, microsecond=0)
+            end_dt = start_dt + timedelta(minutes=22)
+            await db.trips.insert_one({
+                "id": "DEV-PRIVATE-FIXTURE-0001",   # id fixe, identifiable comme fixture DEV
+                "tenant_id": "default",
+                "driver_id": d0["id"],
+                "driver_name": d0["name"],
+                "vehicle_id": v0["id"],
+                "vehicle_plate": v0["plate"],
+                "navixy_track_id": 9_999_001,
+                "start_time": start_dt.astimezone(timezone.utc).isoformat(),
+                "end_time": end_dt.astimezone(timezone.utc).isoformat(),
+                # coords réelles stockées -> DOIVENT être masquées par l'API
+                "start_address": "Lausanne (DEV fixture)",
+                "start_lat": 46.5197, "start_lng": 6.6323, "start_zone_type": "office",
+                "end_address": "Genève (DEV fixture)",
+                "end_lat": 46.2044, "end_lng": 6.1432, "end_zone_type": "personal",
+                "distance_km": 62.3,
+                "duration_min": 22,
+                "fuel_l": 5.1,
+                "avg_speed": 90.0,
+                "max_speed": 120.0,
+                "classification": "professional",
+                "auto_classified": True,
+                "modified_by": None,
+                "modified_at": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                # Marqueur métier PRIVÉ (device) — source autoritaire de la redaction
+                "private_mode": True,
+                "mode_status": "PRIVATE",
+                "is_dev_fixture": True,
+            })
+    except Exception as _e:  # ne jamais bloquer le seed sur la fixture DEV
+        import logging
+        logging.getLogger("mock_navixy").warning("DEV private fixture skipped: %s", _e)

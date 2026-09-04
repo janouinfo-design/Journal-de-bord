@@ -1,4 +1,15 @@
 # DRIVER_PRIVATE_MODE_D3_PROTOCOL.md
+
+> ⛔ **DOCUMENT PÉRIMÉ / HISTORIQUE — NE PAS UTILISER POUR EXÉCUTION.**
+> Ce protocole reposait sur `can_mileage` (constaté mort depuis 2022) et précède
+> la migration V2 vers **AVL ID 16** (Total Odometer GNSS) qui a fait réussir le
+> FMC003. Il est conservé pour l'historique uniquement.
+>
+> 👉 **Protocole FMC130 à jour (stratégie AVL16)** : `DRIVER_PRIVATE_MODE_D3_FMC130_AVL16.md`
+> 👉 **Script snapshot READ-ONLY FMC130** : `scripts/d3_fmc130_snapshot.py`
+
+---
+
 ## Phase D3 — Pilote terrain Private/Business + can_mileage — FMC130 tracker 781479 UNIQUEMENT
 
 > **NE PAS EXÉCUTER AUTOMATIQUEMENT.** Ce document + le script `d3_pilot.py` sont PRÉPARÉS.
