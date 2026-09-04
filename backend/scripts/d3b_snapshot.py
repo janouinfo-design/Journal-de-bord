@@ -103,19 +103,14 @@ def _gps_masked_from_point(lat, lng):
 
 
 async def _last_gps_point():
-    """Lit la DERNIÈRE position réelle via track/read (get_state n'expose pas lat/lng directs).
-    Retourne (lat, lng, ts) ou (None, None, None)."""
-    from datetime import timedelta
-    now = datetime.utcnow()
-    d_from = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
-    d_to = now.strftime("%Y-%m-%d %H:%M:%S")
-    r = await raw("track/read", {"tracker_id": TID, "from": d_from, "to": d_to,
-                                 "simplify": False, "point_limit": 5})
-    pts = r.get("list") or []
-    if not pts:
-        return None, None, None
-    p = pts[-1]
-    return p.get("lat"), p.get("lng"), p.get("get_time") or p.get("time")
+    """Position TRANSMISE = state.gps.location.{lat,lng} (get_state n'expose PAS gps.lat/lng ;
+    track/read renvoie 0 point en mode privé). Source de vérité du masquage."""
+    st = ((await raw("tracker/get_state", {"tracker_id": TID})) or {}).get("state") or {}
+    gps = st.get("gps") or {}
+    loc = gps.get("location") or {}
+    if isinstance(loc, dict) and (loc.get("lat") is not None or loc.get("lng") is not None):
+        return loc.get("lat"), loc.get("lng"), gps.get("updated")
+    return None, None, gps.get("updated")
 
 
 async def capture(phase):

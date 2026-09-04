@@ -2,6 +2,37 @@
 ## D3-B — FMC003 Private Mode Field Pilot — tracker 3657864 (Audi)
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
+## ============================================================================
+## DIAGNOSTIC MASQUAGE (2026-09-04) — le mode Privé NE S'ACTIVE PAS via privatemode
+## ============================================================================
+Preuve directe (get_state.state.gps.location, vraie position transmise) :
+```
+location = { lat: 46.5452033, lng: 6.58915 }   signal_level=100   (coords RÉELLES)
+```
+=> GPS **JAMAIS masqué** malgré plusieurs `privatemode ON/OFF` (tous `success:True` côté Navixy).
+Correctif script : le masquage se lit sur `state.gps.location.{lat,lng}` (PAS gps.lat/lng, PAS
+track/read qui renvoie 0 point). Vérifié : 46.54/6.59 -> GPS_MASKED=False ; 0,0 -> True.
+
+CONCLUSION :
+```
+AVL16 (distance)          = OK, fiable, incrémente
+Canal Navixy raw_command  = accepte privatemode ON/OFF (success:True)
+MASQUAGE GPS via privatemode = NE FONCTIONNE PAS sur ce device/config (position reste réelle)
+=> le mode Privé Teltonika ne bascule PAS via la commande GPRS privatemode ici.
+```
+HYPOTHÈSE PRINCIPALE : `Trigger Type = External` (11849=0) => le changement de mode est piloté par
+une SOURCE EXTERNE (entrée physique / digital input), et NON par la commande `privatemode`.
+La commande est acceptée par Navixy mais ignorée/inopérante par le device dans cette config.
+
+PISTES À VÉRIFIER (aucune exécutée) :
+1. Réponse RÉELLE du device à `privatemode ?` (canal commande asynchrone — peut renvoyer une erreur).
+2. Sur Teltonika, quelle SOURCE le "Trigger External" attend-il exactement (DIN ? autre) ?
+3. Alternative si on veut piloter par COMMANDE : est-il possible de configurer un trigger
+   software/commande au lieu d'un input physique (changement de config device -> décision opérateur).
+
+STATUT : D3-B masquage = FAIL/UNPROVEN ; field_validated=FALSE ; PRIVATE_MODE_PRODUCTION=DISABLED.
+
+
 > 📌 REPRISE : test terrain reporté à **demain** (2026-09-04). Tout est prêt (`D3B_READY = YES`).
 > Il ne reste qu'à exécuter la séquence terrain sur GO explicite. Voir « PLAN D'EXÉCUTION DEMAIN » ci-dessous.
 
