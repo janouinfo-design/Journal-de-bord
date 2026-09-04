@@ -21,6 +21,7 @@ import { useTripsStore } from '@/store/tripsStore';
 import { useCurrentSessionPoll } from '@/hooks/useCurrentSession';
 import { useQueueFlusher } from '@/hooks/useQueueFlusher';
 import { useRealtime } from '@/hooks/useRealtime';
+import { usePrivateMode } from '@/hooks/usePrivateMode';
 import { bleScanner, ScannerState } from '@/ble/scanner';
 import { showLocalNotification } from '@/utils/notifications';
 import { Vehicle } from '@/api/ble';
@@ -81,6 +82,9 @@ export function DriverScreen() {
 
   useCurrentSessionPoll();
   useQueueFlusher();
+
+  // Phase 2 — Mode Privé/Professionnel (masquage GPS device + km privés). Backend autoritaire.
+  const privateMode = usePrivateMode();
 
   // Rafraîchit automatiquement quand une session BLE apparaît/évolue côté serveur.
   useRealtime((event) => {
@@ -353,6 +357,59 @@ export function DriverScreen() {
           />
         </View>
 
+        {/* Phase 2 — Confidentialité : mode Privé (masque la position) / Professionnel */}
+        {privateMode.status.allowed ? (
+          <View style={styles.privacyCard} testID="private-mode-section">
+            <Text style={styles.privacyTitle}>Confidentialité</Text>
+            <Text style={styles.privacyState} testID="private-mode-state">
+              {privateMode.status.state === 'PRIVATE'
+                ? 'Mode Privé activé'
+                : privateMode.status.state === 'BUSINESS'
+                ? 'Mode Professionnel activé'
+                : privateMode.status.state === 'PRIVATE_REQUESTED'
+                ? 'Passage en mode Privé…'
+                : privateMode.status.state === 'BUSINESS_REQUESTED'
+                ? 'Retour en mode Professionnel…'
+                : 'État indéterminé'}
+            </Text>
+            {privateMode.status.state === 'PRIVATE' ? (
+              <Text style={styles.privacyHint}>
+                Votre position n’est pas affichée. Les kilomètres parcourus restent comptabilisés.
+              </Text>
+            ) : null}
+
+            <View style={styles.modesRow}>
+              <ModeButton
+                label="Professionnel"
+                sub="Position visible"
+                color={colors.primary}
+                active={privateMode.status.state === 'BUSINESS'}
+                disabled={privateMode.busy || privateMode.status.state === 'BUSINESS'}
+                loading={privateMode.status.state === 'BUSINESS_REQUESTED'}
+                onPress={() => privateMode.requestMode('BUSINESS')}
+                testID="private-mode-business"
+              />
+              <ModeButton
+                label="Privé"
+                sub="Position masquée"
+                color={colors.perso}
+                active={privateMode.status.state === 'PRIVATE'}
+                disabled={privateMode.busy || privateMode.status.state === 'PRIVATE'}
+                loading={privateMode.status.state === 'PRIVATE_REQUESTED'}
+                onPress={() => privateMode.requestMode('PRIVATE')}
+                testID="private-mode-private"
+              />
+            </View>
+
+            {privateMode.error ? (
+              <Text style={styles.privacyError} testID="private-mode-error">
+                {privateMode.error}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+
         {/* Je m'arrête — visible uniquement si session active */}
         {hasSession ? (
           <TouchableOpacity
@@ -552,6 +609,17 @@ const styles = StyleSheet.create({
   bannerPro: { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderColor: colors.primary, borderWidth: 1 },
   bannerPerso: { backgroundColor: 'rgba(71, 85, 105, 0.15)', borderColor: colors.perso, borderWidth: 1 },
   bannerText: { color: colors.text, fontWeight: '600', fontSize: font.size.md },
+
+  privacyCard: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md,
+    borderWidth: 1, borderColor: 'rgba(148,163,184,0.25)',
+  },
+  privacyTitle: { color: colors.text, fontWeight: '700', fontSize: font.size.md, marginBottom: spacing.xs },
+  privacyState: { color: colors.text, fontSize: font.size.md, marginBottom: spacing.xs },
+  privacyHint: { color: '#94a3b8', fontSize: font.size.sm, marginBottom: spacing.sm },
+  privacyError: { color: '#ef4444', fontSize: font.size.sm, marginTop: spacing.xs },
+
 
   modesRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   modeBtn: {

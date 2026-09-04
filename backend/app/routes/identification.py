@@ -121,6 +121,66 @@ async def driver_stop(user=Depends(get_current_user)):
     return await ble_engine.stop_driving(db, driver_id, actor=user.get("email", "?"))
 
 
+# ---------- Phase 2 — Bascule Privé / Professionnel (backend autoritaire) ----------
+@router.get("/driver/private-mode")
+async def driver_private_mode_get(user=Depends(get_current_user)):
+    """État courant Privé/Professionnel du véhicule de la session du chauffeur.
+    Retour : {state, allowed, reason, vehicle_id, tracker_id, last_transition_at}.
+    Aucune position exposée. Backend autoritaire."""
+    from app import private_mode_engine as pm
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    sess = await ble_engine.get_current_session(db, driver_id)
+    if not sess or not sess.get("vehicle_id"):
+        return {"state": pm.UNKNOWN, "allowed": False, "reason": "no_active_vehicle",
+                "vehicle_id": None, "tracker_id": None, "last_transition_at": None}
+    vehicle_id = sess["vehicle_id"]
+    vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": "default"}, {"_id": 0}) or {}
+    tracker_id = vehicle.get("navixy_tracker_id")
+    model = pm.resolve_model(vehicle.get("model"))
+    vc = await pm.resolve_vehicle_capability(db, tracker_id, model)
+    allowed = bool(tracker_id) and pm.vehicle_private_mode_allowed(model, vc)
+    st = await pm.get_mode_state(db, vehicle_id)
+    return {
+        "state": st.get("state", pm.UNKNOWN),
+        "allowed": allowed,
+        "reason": None if allowed else ("no_tracker" if not tracker_id
+                                        else "capability_not_field_validated"),
+        "vehicle_id": vehicle_id,
+        "tracker_id": tracker_id,
+        "last_transition_at": st.get("updated_at"),
+    }
+
+
+class PrivateModeIn(BaseModel):
+    mode: str  # "PRIVATE" | "BUSINESS"
+
+
+@router.post("/driver/private-mode")
+async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(get_current_user)):
+    """Intention métier de bascule : {"mode": "PRIVATE"|"BUSINESS"}.
+    Le backend résout véhicule/tracker/capability, applique la commande (GATED) et confirme.
+    Aucun tracker_id/raw command/tenant libre accepté depuis le frontend."""
+    from app import private_mode_engine as pm
+    mode = (payload.mode or "").upper()
+    if mode not in (pm.PRIVATE, pm.BUSINESS):
+        raise HTTPException(400, "mode doit être 'PRIVATE' ou 'BUSINESS'")
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+
+    async def _resolve_session(_db, _drv):
+        return await ble_engine.get_current_session(_db, _drv)
+
+    res = await pm.request_mode(db, driver_id, mode, actor=user.get("email", "?"),
+                                resolve_session=_resolve_session)
+    # jamais de secret/raw device dans la réponse ; statuts métier uniquement
+    return res
+
+
 @router.get("/driver/my-vehicle")
 async def driver_my_vehicle(user=Depends(get_current_user)):
     """Véhicule actuel (session en cours) ou dernier véhicule utilisé.
