@@ -92,21 +92,31 @@ OTHER_TRACKERS  = BLOCKED
 
 ## 5. Résolution du tenant réel (READ-ONLY) — **BLOQUANT**
 
-Audit READ-ONLY exécuté sur la base de cet environnement (fork) :
+Audit READ-ONLY exhaustif exécuté sur **toutes les bases accessibles** de
+l'instance Mongo de cet environnement (fork) :
 
 ```text
+[scan] bases accessibles = journal_logitrak, logitrak_phase3_test, test_database
+
 TRACKER_ID      = 3657864
 VEHICLE_ID      = None
 TENANT_ID       = None
 TENANT_NAME     = None
-FIELD_VALIDATED = None  (collection vehicle_private_capabilities ABSENTE ici)
+FIELD_VALIDATED = None
+FOUND_IN_DB     = None
 SOURCE_OF_TRUTH = vehicles.navixy_tracker_id -> vehicles.tenant_id
+                  (+ vehicle_private_capabilities.field_validated)
 RESOLUTION      = NOT_FOUND
 ```
 
-Contexte de l'environnement courant : 6 véhicules de démo (trackers `5000–5005`),
-tous `tenant_id = "default"`. Le tracker pilote `3657864` **n'existe pas** dans
-cette base (données pilote présentes dans l'environnement d'origine/production).
+Le scan a testé plusieurs conventions de champ (`navixy_tracker_id`,
+`tracker_id`, `navixy_id`), en string et en int, dans les 3 bases. Le tracker
+`3657864` **n'existe dans aucune base accessible** depuis ce conteneur. La base
+applicative (`journal_logitrak`) contient 6 véhicules de démo (trackers
+`5000–5005`, tous `tenant_id = "default"`).
+
+**Conclusion** : l'environnement cible/production contenant réellement le tracker
+`3657864` **n'est pas joignable** depuis ce fork (MONGO_URL local et protégé).
 
 **Conséquence (règle fail-closed) :**
 
