@@ -24,8 +24,13 @@ FMC130 781479  : AVL16 NOT_CURRENTLY_EXPOSED ; can_mileage MORT (fige 2022-03-26
 | Trigger Type | 11849 | `0` = External | ____ |  |
 | Private/Business Scenario | 11850 | `1` = Low Priority | ____ |  |
 | **Total Odometer I/O** (AVL 16) | — | **Low / Monitoring (transmis)** | ____ | ⬅️ **à regarder en 1er** |
-| Total Odometer valeur | (11807) | ~140xxx km | ____ |  |
+| Total Odometer valeur | (11807) | (propre au véhicule) | ____ = existe ? valeur cohérente ? |  |
 | AVL ID affiché | — | 16 | ____ |  |
+
+> ⚠️ NE PAS comparer la valeur absolue de `11807` entre FMC130 et FMC003 : chaque
+> véhicule a son propre kilométrage. On vérifie seulement que `11807` **existe** et
+> contient une **valeur cohérente** (odomètre interne actif). Ce qui compte pour
+> l'exposition Navixy, c'est le réglage **Total Odometer I/O** (transmission AVL16).
 
 ## Hypothèse prioritaire
 ```text
