@@ -254,3 +254,134 @@ def test_device_write_gated_by_default(monkeypatch):
     assert pm.device_write_enabled() is False
     monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "1")
     assert pm.device_write_enabled() is True
+
+
+# --------- Phase B : tests de non-fuite de localisation (privacy web) ---------
+def test_trip_is_private_uses_business_marker_not_coords():
+    """Un trajet est privé via marqueur métier explicite, JAMAIS via lat==0."""
+    assert pm.trip_is_private({"private_mode": True}) is True
+    assert pm.trip_is_private({"mode_status": "PRIVATE"}) is True
+    assert pm.trip_is_private({"privacy": "private"}) is True
+    # coords à 0,0 SANS marqueur -> PAS considéré privé (pas de déduction par coords)
+    assert pm.trip_is_private({"start_lat": 0, "start_lng": 0}) is False
+    assert pm.trip_is_private({"classification": "professional"}) is False
+
+
+def test_redact_private_trip_removes_all_location_keeps_business():
+    """Trajet privé : toute localisation retirée (None), champs métier conservés, jamais 0,0."""
+    trip = {
+        "id": "t1", "vehicle_id": "vA", "driver_id": "d1", "private_mode": True,
+        "start_time": "t0", "end_time": "t1", "distance_km": 5.5,
+        "start_lat": 46.5, "start_lng": 6.5, "end_lat": 46.6, "end_lng": 6.6,
+        "start_address": "Lausanne", "end_address": "Genève", "polyline": "abc",
+        "start_zone_type": "office",
+    }
+    red = pm.redact_private_trip(trip)
+    for k in ("start_lat", "start_lng", "end_lat", "end_lng",
+              "start_address", "end_address", "polyline", "start_zone_type"):
+        assert red[k] is None, f"{k} doit être masqué"
+    # jamais 0,0 (None, pas une coordonnée artificielle)
+    assert red["start_lat"] != 0 and red["start_lng"] != 0 or red["start_lat"] is None
+    # champs métier conservés
+    assert red["vehicle_id"] == "vA" and red["driver_id"] == "d1"
+    assert red["distance_km"] == 5.5 and red["start_time"] == "t0"
+    assert red["private_redacted"] is True
+
+
+def test_redact_private_trip_no_op_on_business_trip():
+    """Un trajet Business (non privé) n'est PAS masqué (non-régression)."""
+    trip = {"id": "t2", "classification": "professional", "start_lat": 46.5,
+            "start_lng": 6.5, "start_address": "Lausanne"}
+    red = pm.redact_private_trip(trip)
+    assert red["start_lat"] == 46.5 and red["start_address"] == "Lausanne"
+    assert "private_redacted" not in red
+
+
+def test_business_private_business_segments_preserved():
+    """Cycle BUSINESS->PRIVATE->BUSINESS : segments Business intacts, segment PRIVATE sans GPS,
+    aucune interpolation (le segment privé ne contient simplement pas de coords)."""
+    seg_b1 = {"id": "b1", "classification": "professional", "start_lat": 46.5, "start_lng": 6.5}
+    seg_p = {"id": "p1", "private_mode": True, "start_lat": 46.55, "start_lng": 6.55,
+             "distance_km": 3.0}
+    seg_b2 = {"id": "b2", "classification": "professional", "start_lat": 46.6, "start_lng": 6.6}
+    out = [pm.redact_private_trip(s) for s in (seg_b1, seg_p, seg_b2)]
+    # Business conservés
+    assert out[0]["start_lat"] == 46.5 and out[2]["start_lat"] == 46.6
+    # Private sans coords, mais distance conservée
+    assert out[1]["start_lat"] is None and out[1]["start_lng"] is None
+    assert out[1]["distance_km"] == 3.0
+
+
+
+# ===========================================================================
+# Phase 3 — HARDENING de la rédaction PRIVATE (variantes + récursif).
+# Objectif : PRIVATE_REDACTION_HARDENING = PASS / BUSINESS_NON_REGRESSION = PASS
+# ===========================================================================
+def test_redact_private_field_variants():
+    """Les variantes de champs de localisation sont bien nullifiées en PRIVATE."""
+    trip = {
+        "id": "v1", "private_mode": True, "distance_km": 4.2,
+        "latitude": 46.5, "longitude": 6.5, "lat": 46.5, "lon": 6.5, "lng": 6.5,
+        "start_location": {"lat": 46.5, "lng": 6.5}, "end_location": {"lat": 46.6, "lng": 6.6},
+        "coordinates": [6.5, 46.5], "address": "Rue X", "polyline": "abc",
+        "route": [1, 2], "points": [[6.5, 46.5]],
+    }
+    red = pm.redact_private_trip(trip)
+    for k in ("latitude", "longitude", "lat", "lon", "lng", "start_location",
+              "end_location", "coordinates", "address", "polyline", "route", "points"):
+        assert red[k] is None, f"{k} doit être nullifié"
+    # champ métier conservé, jamais 0,0
+    assert red["distance_km"] == 4.2
+    assert red["private_redacted"] is True
+
+
+def test_redact_private_nested_location_recursive():
+    """Une position IMBRIQUÉE dans un champ métier est retirée récursivement (jamais 0,0)."""
+    trip = {
+        "id": "n1", "mode_status": "PRIVATE", "distance_km": 7.7,
+        "meta": {  # champ métier contenant par erreur une position imbriquée
+            "note": "ok",
+            "last_position": {"lat": 46.5, "lng": 6.5},
+            "waypoints": [{"lat": 46.5, "lng": 6.5}, {"lat": 46.6, "lng": 6.6}],
+        },
+        "segments": [
+            {"label": "a", "start_location": {"lat": 46.5, "lng": 6.5}},
+        ],
+    }
+    red = pm.redact_private_trip(trip)
+    # métier conservé
+    assert red["distance_km"] == 7.7
+    assert red["meta"]["note"] == "ok"
+    # positions imbriquées retirées (None), jamais 0,0
+    assert red["meta"]["last_position"] is None
+    # waypoints n'est pas une clé location -> parcouru; les lat/lng internes nullifiés
+    assert red["meta"]["waypoints"][0]["lat"] is None
+    assert red["meta"]["waypoints"][0]["lng"] is None
+    assert red["meta"]["waypoints"][1]["lat"] is None
+    # segment: start_location nullifié, label métier conservé
+    assert red["segments"][0]["label"] == "a"
+    assert red["segments"][0]["start_location"] is None
+
+
+def test_business_trip_nested_data_not_touched():
+    """NON-RÉGRESSION : un trajet Business garde toutes ses données, même imbriquées."""
+    trip = {
+        "id": "b9", "classification": "professional", "distance_km": 12.0,
+        "start_lat": 46.5, "start_lng": 6.5,
+        "meta": {"last_position": {"lat": 46.5, "lng": 6.5}, "note": "ok"},
+    }
+    red = pm.redact_private_trip(trip)
+    # aucun masquage sur un trajet Business
+    assert red["start_lat"] == 46.5 and red["start_lng"] == 6.5
+    assert red["meta"]["last_position"]["lat"] == 46.5
+    assert "private_redacted" not in red
+
+
+def test_redact_never_introduces_zero_zero():
+    """La rédaction ne remplace JAMAIS une position par 0,0 (toujours None)."""
+    trip = {"id": "z1", "private_mode": True, "start_lat": 46.5, "start_lng": 6.5,
+            "end_lat": 46.6, "end_lng": 6.6}
+    red = pm.redact_private_trip(trip)
+    for k in ("start_lat", "start_lng", "end_lat", "end_lng"):
+        assert red[k] is None
+        assert red[k] != 0

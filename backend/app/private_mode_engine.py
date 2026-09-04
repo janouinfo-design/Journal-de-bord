@@ -301,3 +301,85 @@ def private_trip_dto(state_doc: dict) -> dict:
         "mode_status": state_doc.get("state"),
         # positions volontairement ABSENTES (pas de lat/lng/adresse/polyline)
     }
+
+
+# ---------------------------------------------------------------------------
+# Politique CENTRALE de confidentialité des TRAJETS (Web/API).
+# La source autoritaire = un MARQUEUR MÉTIER explicite du trajet (jamais lat==0/gel).
+# ---------------------------------------------------------------------------
+# Champs de localisation à retirer d'un trajet privé (jamais 0,0 ; absents/None).
+# La liste est volontairement large (rétro-compat + robustesse aux variantes futures).
+# Le matching est insensible à la casse (voir redact).
+_TRIP_LOCATION_FIELDS = (
+    # coordonnées plates
+    "start_lat", "start_lng", "end_lat", "end_lng", "lat", "lng", "lon",
+    "latitude", "longitude",
+    # objets/structures de position imbriquées éventuelles
+    "start_location", "end_location", "location", "last_location",
+    "last_position", "last_known_position", "current_location", "position",
+    "coordinates", "coord", "coords", "geo", "geometry", "bounds",
+    # adresses
+    "start_address", "end_address", "address", "current_address", "last_address",
+    # zones (peuvent trahir une localisation)
+    "start_zone_type", "end_zone_type", "zone", "geofence",
+    # tracés / points / itinéraires
+    "polyline", "points", "route", "path", "breadcrumb", "track", "trail",
+)
+
+
+def trip_is_private(trip: dict) -> bool:
+    """Un trajet est PRIVÉ (device) si un marqueur MÉTIER explicite l'indique.
+    Source autoritaire = champ du trajet (jamais déduit de lat==0 / position gelée).
+    Accepte plusieurs conventions possibles pour rétro-compat."""
+    if not isinstance(trip, dict):
+        return False
+    if trip.get("private_mode") is True:
+        return True
+    if str(trip.get("mode_status") or "").upper() == PRIVATE:
+        return True
+    if trip.get("privacy") == "private":
+        return True
+    return False
+
+
+def _strip_location_deep(value):
+    """Retire récursivement toute donnée de localisation d'une valeur arbitraire.
+
+    - Dans un dict : toute clé (insensible à la casse) présente dans
+      _TRIP_LOCATION_FIELDS est mise à None ; les autres valeurs sont
+      parcourues récursivement (dict/list) pour attraper une position
+      imbriquée dans un champ métier.
+    - Dans une list : chaque élément est parcouru récursivement.
+    - Ne fabrique JAMAIS de coordonnée artificielle (jamais 0,0).
+    - Préserve intégralement les champs métier non liés à la localisation.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if str(k).lower() in _TRIP_LOCATION_FIELDS:
+                out[k] = None
+            else:
+                out[k] = _strip_location_deep(v)
+        return out
+    if isinstance(value, list):
+        return [_strip_location_deep(item) for item in value]
+    return value
+
+
+def redact_private_trip(trip: dict) -> dict:
+    """Masque toute la localisation d'un trajet PRIVÉ (récursivement, à toute
+    profondeur), conserve les champs métier (temps, durée, distance privée,
+    odomètres, véhicule, chauffeur, mode). Jamais 0,0."""
+    if not isinstance(trip, dict) or not trip_is_private(trip):
+        return trip
+    out = _strip_location_deep(trip)
+    out["private_redacted"] = True
+    return out
+
+
+async def is_vehicle_currently_private(db, vehicle_id: Optional[str]) -> bool:
+    """État PRIVATE courant d'un véhicule (source autoritaire = private_mode_state)."""
+    if not vehicle_id:
+        return False
+    st = await get_mode_state(db, vehicle_id)
+    return st.get("state") == PRIVATE

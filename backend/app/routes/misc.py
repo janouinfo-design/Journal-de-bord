@@ -256,7 +256,9 @@ async def list_trips(
         group=group, company=company,
     )
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(limit)
-    trips = [apply_privacy(t, settings, user["role"]) for t in trips]
+    # Confidentialité Phase 1 (classification personal) + Phase 2 (mode PRIVATE device).
+    from app.private_mode_engine import redact_private_trip
+    trips = [redact_private_trip(apply_privacy(t, settings, user["role"])) for t in trips]
     return {"trips": trips, "settings_mode": settings.get("mode")}
 
 
@@ -320,6 +322,12 @@ async def trip_track(
     settings = await db.settings.find_one({"id": "default"}, {"_id": 0}) or {}
     if settings.get("mode") == "masked" and trip.get("classification") == "personal":
         raise HTTPException(403, "Trajet personnel masqué — points GPS non disponibles")
+
+    # Phase 2 : un trajet effectué en mode PRIVATE (device) ne renvoie JAMAIS de points GPS,
+    # indépendamment de sa classification (politique centrale, source = marqueur métier du trajet).
+    from app.private_mode_engine import trip_is_private
+    if trip_is_private(trip):
+        raise HTTPException(403, "Trajet en mode Privé — position masquée")
 
     if not refresh:
         cached = await db.trip_tracks.find_one({"trip_id": trip_id}, {"_id": 0})

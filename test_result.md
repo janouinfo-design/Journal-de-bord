@@ -381,7 +381,7 @@ agent_communication:
       
       CONTEXT: FMC130 downgraded from VEHICLE_CAN to NAVIXY_GPS_CALCULATED with status=BLOCKED and odometer_during_private=NOT_SUPPORTED. Runtime finding: can_mileage sensor exists (id 5411571) but data is stale since 2022-03-26 (2026 history empty) - not usable. Only live source is GPS-calculated odometer.
       
-      TEST RESULTS (against HTTPS preview URL https://fmc130-odo-audit.preview.emergentagent.com):
+      TEST RESULTS (against HTTPS preview URL https://confidentialite-flag.preview.emergentagent.com):
       ✅ login_attempts purged: 0 documents (clean state)
       ✅ Test 1 (test_odometer_capability.py): 7 PASSED
          - FMC130 now source_type=NAVIXY_GPS_CALCULATED (was VEHICLE_CAN)
@@ -415,7 +415,7 @@ agent_communication:
       - New vehicle_private_mode_allowed(model, vc) function for concrete tracker/vehicle resolution
       - Tests updated: added test_fmc003_gate_is_per_vehicle (8th test)
       
-      TEST RESULTS (against HTTPS preview URL https://fmc130-odo-audit.preview.emergentagent.com):
+      TEST RESULTS (against HTTPS preview URL https://confidentialite-flag.preview.emergentagent.com):
       ✅ login_attempts purged: 0 documents (clean state)
       ✅ Test 1 (test_odometer_capability.py): 8 PASSED (was 7, added per-vehicle gate test)
          - All 5 models present: FMC003, FMC130, FMU130, FMC640, FMC650
