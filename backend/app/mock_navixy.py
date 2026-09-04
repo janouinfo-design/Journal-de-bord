@@ -9,7 +9,26 @@ Trips simulate Navixy `history/tracks` + `reports/trips` schema:
 """
 import uuid
 import random
+import os
 from datetime import datetime, timezone, timedelta
+
+
+def dev_private_fixture_enabled() -> bool:
+    """Garde-fou FAIL-CLOSED : la fixture DEV du trajet privé n'est chargée que
+    dans un environnement de développement/preview, JAMAIS en production.
+
+    Règles (toutes doivent être vraies) :
+      - APP_ENV ∈ {development, dev, preview, local}  (défaut si absent = 'production')
+      - ENABLE_DEV_PRIVATE_FIXTURE != 'false'/'0'/'no' (défaut activé en dev)
+
+    En production (APP_ENV non listé), retourne toujours False :
+      PRODUCTION => DEV_PRIVATE_FIXTURE_DISABLED
+    """
+    app_env = os.environ.get("APP_ENV", "production").strip().lower()
+    if app_env not in ("development", "dev", "preview", "local"):
+        return False  # fail-closed : tout ce qui n'est pas explicitement dev/preview = prod
+    flag = os.environ.get("ENABLE_DEV_PRIVATE_FIXTURE", "true").strip().lower()
+    return flag not in ("false", "0", "no", "off")
 
 
 SWISS_ADDRESSES = [
@@ -200,12 +219,20 @@ async def seed_mock_data(force: bool = False):
         await db.trips.insert_many(trips)
 
     # ------------------------------------------------------------------
-    # FIXTURE DEV UNIQUEMENT — 1 trajet marqué PRIVÉ (device) pour valider
-    # l'UI web « Position masquée — Mode Privé ». NE JAMAIS utiliser en prod.
+    # FIXTURE DEV / PREVIEW ONLY — 1 trajet marqué PRIVÉ (device) pour valider
+    # l'UI web « Position masquée — Mode Privé ». ⛔ NE JAMAIS EN PRODUCTION.
+    # Garde-fou FAIL-CLOSED : dev_private_fixture_enabled() -> False en prod.
     # Le trajet est stocké AVEC coordonnées réelles ; le backend les REDACTE
     # à la lecture API (private_mode_engine.redact_private_trip), exactement
     # comme en production. Marqueur métier autoritaire : private_mode=True.
     # ------------------------------------------------------------------
+    if not dev_private_fixture_enabled():
+        import logging
+        logging.getLogger("mock_navixy").info(
+            "DEV_PRIVATE_FIXTURE_DISABLED (APP_ENV=%s) — fixture non chargée.",
+            os.environ.get("APP_ENV", "production"),
+        )
+        return
     try:
         if vehicles and drivers:
             v0 = vehicles[0]
