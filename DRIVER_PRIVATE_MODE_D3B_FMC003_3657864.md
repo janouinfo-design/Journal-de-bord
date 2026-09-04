@@ -3,6 +3,34 @@
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
 ## ============================================================================
+## BESOIN PRODUIT (DÉFINITIF) + rétractation hypothèse "bouton physique"
+## ============================================================================
+```
+L'APP est LE déclencheur Privé/Pro, À DISTANCE (aucun bouton physique).
+Chaîne : Driver App -> LOGITRAK backend -> Navixy raw_command (privatemode ON/OFF) -> device.
+PRO   : positions GPS visibles.
+PRIVÉ : positions MASQUÉES (0,0) + tracker ONLINE + km du trajet privé récupérés via AVL16.
+Par trajet privé : private_distance = AVL16_fin - AVL16_debut.
+```
+RÉTRACTATION : « Trigger External = bouton physique » est FAUX. Doc Teltonika (Private/Business
+Driving Mode) : `Trigger Type = External (11849=0)` est le mode qui AUTORISE le contrôle à distance
+par commande GPRS/SMS/app ; `Weekly Schedule (1)` le bloque. => notre config 11849=0 est CORRECTE
+pour le pilotage par l'app. Le blocage du masquage vient donc d'AILLEURS.
+
+PISTES RESTANTES (à vérifier, aucune exécutée) :
+  P1 (prioritaire). Le SCÉNARIO Private/Business est-il ACTIVÉ ? (panneau Configurator
+      "Private/Business Mode Settings -> Scenario Settings" = Low/High Priority, PAS Disable).
+      Si Disable -> privatemode ON n'a aucun effet (explique le non-masquage). À CONFIRMER sur 3657864.
+  P2. La commande est-elle réellement LIVRÉE/EXÉCUTÉE par le device ? -> lire la RÉPONSE device à
+      `privatemode ?` (UI Navixy / app Teltonika affichent les réponses aux commandes GPRS).
+  P3. Cas connu Teltonika « private/business mode doesn't mask GPS data » -> vérifier fil support.
+  P4. Si besoin : question support Teltonika/Navixy avec le .cfg 3657864.
+
+ACQUIS : AVL16 = km privés OK. Il ne manque QUE le déclenchement effectif du masquage par commande.
+STATUT : field_validated=FALSE ; PRIVATE_MODE_PRODUCTION=DISABLED.
+
+
+## ============================================================================
 ## RÉSULTAT FERME (2026-09-04) — privatemode NE MASQUE PAS le GPS sur ce device
 ## ============================================================================
 Test propre refait : `privatemode ON` envoyé (success:True Navixy) PUIS lecture position réelle
