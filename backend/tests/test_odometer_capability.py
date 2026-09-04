@@ -174,10 +174,11 @@ def test_legacy_model_gate_still_false_by_default():
     assert private_mode_allowed(None) is False
 
 
-def test_pilot_3657864_runtime_verified_but_gate_still_false():
-    """Le pilote 3657864 est runtime+cumulative+scale validé, MAIS D3-B non fait
-    -> private_increment_verified=False, field_validated=False -> gate = False."""
-    from app.odometer_capability import get_pilot_capability
+def test_pilot_3657864_field_validated_d3b_pass():
+    """D3-B PASS COMPLET (2026-09-04) : le pilote 3657864 est FIELD_VALIDATED.
+    -> la gate PAR TRACKER l'autorise ; MAIS la gate PRODUCTION GLOBALE reste False
+    (rollout = décision séparée ; aucun modèle marqué verified/VALIDATED au niveau REGISTRY)."""
+    from app.odometer_capability import get_pilot_capability, CAP_FIELD_VALIDATED
     vc = get_pilot_capability(3657864)
     assert vc is not None
     assert vc.private_distance_source == SOURCE_TELTONIKA_TOTAL_ODOMETER
@@ -185,8 +186,20 @@ def test_pilot_3657864_runtime_verified_but_gate_still_false():
     assert vc.runtime_verified is True
     assert vc.cumulative_verified is True
     assert vc.scale_status == SCALE_VERIFIED
-    # D3-B pas encore fait -> pas autorisé en prod
-    assert vc.private_increment_verified is False
-    assert vc.field_validated is False
-    assert vehicle_private_mode_allowed(vc.device_model, vc) is False
+    assert vc.private_increment_verified is True   # D3-B: AVL16 continue en privé
+    assert vc.field_validated is True              # D3-B PASS complet
+    assert vc.capability == CAP_FIELD_VALIDATED
+    # Gate PAR TRACKER : autorisée pour CE tracker validé
+    assert vehicle_private_mode_allowed("FMC003", vc) is True
+    # Gate PRODUCTION GLOBALE : reste DISABLED (décision rollout séparée)
     assert private_mode_production_allowed() is False
+
+
+def test_pilot_validation_does_not_generalize():
+    """Le PASS de 3657864 ne valide PAS les autres FMC003 ni le FMC130 (validation par tracker)."""
+    from app.odometer_capability import get_pilot_capability
+    # un autre tracker non enregistré = pas de capability -> gate False
+    assert get_pilot_capability(999999) is None
+    # au niveau modèle, rien n'est verified -> gate modèle reste False
+    assert private_mode_allowed("FMC003") is False
+    assert private_mode_allowed("FMC130") is False

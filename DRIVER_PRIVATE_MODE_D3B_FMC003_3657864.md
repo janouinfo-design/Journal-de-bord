@@ -3,6 +3,33 @@
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
 ## ============================================================================
+## 🏁 D3-B PASS COMPLET (2026-09-04) — tracker 3657864 FMC003 FIELD_VALIDATED
+## ============================================================================
+Cycle complet prouvé en conditions réelles :
+```
+before/privé   : position GPS GELEE (11:03) en roulant + AVL16 frais qui incrémente -> MASKED
+private incrément : AVL16 +km réels comptés en privé (sans coordonnées)
+retour Business : privatemode OFF -> position GPS FRAICHE (11:22:01) en roulant (speed 34) -> trace REPRISE
+```
+Critères D3-B — TOUS PASS :
+```
+PRIVATE_ACTIVATION_CONFIRMED = PASS   (device: "Privatemode ON")
+PRIVATE_GPS_MASKING          = PASS   (position gelée en roulant ; aucune trace privée exploitable)
+TRACKER_ONLINE_PRIVATE       = PASS
+AVL16_AVAILABLE_PRIVATE      = PASS
+AVL16_PRIVATE_INCREMENT      = PASS   (km privés via AVL16)
+PRIVATE_DISTANCE_COMPUTABLE  = PASS   (= AVL16_end - AVL16_start)
+BUSINESS_RESTORE             = PASS   (privatemode OFF -> position fraîche 11:22:01)
+BUSINESS_GPS_NORMAL          = PASS   (trace GPS reprend en temps réel)
+```
+=> field_validated = TRUE **pour CE tracker uniquement** (3657864, FMC003, FW 04.02, config
+Private/Business: scénario Low + 11813=1 + 11849=0 External + 11815=1 + 11806=0 GNSS).
+Ne PAS généraliser à tous les FMC003 (validation par tracker). FMC130 = D3 séparé.
+
+PRIVATE_MODE_PRODUCTION reste DISABLED (décision de rollout séparée, à valider explicitement).
+
+
+## ============================================================================
 ## ✅✅ D3-B RÉUSSI (2026-09-04) — MASQUAGE CONFIRMÉ (position GELÉE) + AVL16 compte
 ## ============================================================================
 Config réunie : `getparam 11813 = 1` (Data Sent As Zero) + `privatemode ? = ON` (Air Console).

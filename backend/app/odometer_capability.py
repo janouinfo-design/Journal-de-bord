@@ -398,9 +398,7 @@ def private_mode_production_allowed() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Capacités PILOTES validées RUNTIME (par tracker) — traçabilité des preuves réelles.
-# `field_validated` reste False (D3-B mode Privé non encore prouvé) -> gate = False.
-# Ces entrées documentent l'état atteint ; elles n'autorisent PAS le mode privé prod.
+# Capacités PILOTES validées (par tracker) — traçabilité des preuves réelles.
 # ---------------------------------------------------------------------------
 PILOT_VEHICLE_CAPABILITIES: dict[int, VehicleOdometerCapability] = {
     3657864: VehicleOdometerCapability(
@@ -409,22 +407,24 @@ PILOT_VEHICLE_CAPABILITIES: dict[int, VehicleOdometerCapability] = {
         raw_avl_id=AVL_TOTAL_ODOMETER, navixy_input="avl_io_16", navixy_sensor_id=5570680,
         raw_unit="m", normalized_unit="km", multiplier=1.0, divider=1000.0,
         scale_status=SCALE_VERIFIED,
-        last_value_km=140264.62, last_timestamp="2026-09-03 14:53:39", fresh=True,
-        runtime_verified=True,        # avl_io_16 reçu via l'API ✅
-        cumulative_verified=True,     # +5.3 km prouvé en roulant ✅
-        private_increment_verified=False,  # D3-B non exécuté
-        field_validated=False,        # pas de PASS terrain mode Privé
-        capability=CAP_AVL16_CUMULATIVE_VERIFIED,
-        source_type=SOURCE_TELTONIKA_TOTAL_ODOMETER, unit="km", last_value=140264.62,
-        notes=("Pilote V2. Chaîne AVL16 validée runtime: sensor 'ODO TOTAL' avl_io_16 mult=1 div=1000 "
-               "km ; API_READABLE ; +5.3 km en roulage ; 140264.62 ≈ 140268 tableau de bord (Audi, "
-               "écart = roulage 14:53->15:00). RESTE D3-B (GPS=0,0 + AVL16 continue) avant prod."),
+        last_value_km=140273.61, last_timestamp="2026-09-04 11:22:01", fresh=True,
+        runtime_verified=True,             # avl_io_16 reçu via l'API ✅
+        cumulative_verified=True,          # incrément prouvé en roulant ✅
+        private_increment_verified=True,   # D3-B : AVL16 continue en privé (position gelée) ✅
+        field_validated=True,              # D3-B PASS COMPLET (masquage + km + retour Business) ✅
+        capability=CAP_FIELD_VALIDATED,
+        source_type=SOURCE_TELTONIKA_TOTAL_ODOMETER, unit="km", last_value=140273.61,
+        notes=("D3-B PASS COMPLET (2026-09-04) pour CE tracker. Preuves: 'Privatemode ON' device ; "
+               "position GPS GELEE en roulant (masquée) ; AVL16 incrémente en privé (km comptés) ; "
+               "'Privatemode OFF' -> position fraîche 11:22:01 (trace reprise). Config: scénario "
+               "Private/Business=Low, 11813=1, 11849=0(External), 11815=1, 11806=0(GNSS). "
+               "NE PAS généraliser aux autres FMC003 ni au FMC130 (validation par tracker)."),
     ),
 }
 
 
 def get_pilot_capability(tracker_id: Optional[int]) -> Optional[VehicleOdometerCapability]:
-    """Capacité pilote runtime pour un tracker (traçabilité). None si non enregistré."""
+    """Capacité pilote validée pour un tracker (traçabilité). None si non enregistré."""
     if tracker_id is None:
         return None
     return PILOT_VEHICLE_CAPABILITIES.get(int(tracker_id))
