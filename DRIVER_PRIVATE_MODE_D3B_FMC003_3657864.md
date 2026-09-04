@@ -3,6 +3,33 @@
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
 ## ============================================================================
+## ⚡ CAUSE RACINE TROUVÉE (2026-09-04) — "Private mode is not configured"
+## ============================================================================
+Réponse RÉELLE du device (Air Console, 09:58:58) à la commande `privatemode ?` :
+```
+privatemode ?
+-> "Private mode is not configured"
+```
+=> Le mode Privé/Business n'est PAS activé dans la config du device 3657864. La commande
+`privatemode ON/OFF` est acceptée par Navixy (success:True) mais REJETÉE par le device -> d'où
+l'absence de masquage. CAUSE 100% identifiée (Piste P1 confirmée).
+
+Ce n'est NI un problème de mécanisme, NI de trigger, NI de l'app : il manque l'ACTIVATION du
+SCÉNARIO Private/Business dans la config Teltonika (probablement "Scenario Settings = Disable").
+
+CORRECTION REQUISE (opérateur, Configurator/FOTA — écriture config) :
+  - Private/Business Mode Settings -> Scenario Settings = Low Priority (ou High), PAS Disable.
+  - Conserver : GPS Data Masking=Data Sent As Zero (11813=1), Trigger=External (11849=0),
+    Odometer Calculation=Enable (11815=1), Odometer Source=GNSS (11806=0).
+  - Écrire dans le device (Save to device / FOTA), puis `privatemode ?` doit répondre ON/OFF
+    (plus "not configured").
+Ensuite : refaire le test D3-B (privatemode ON -> GPS_MASKED=True -> rouler -> AVL16 continue -> OFF).
+
+ACQUIS intacts : AVL16 = km privés OK ; canal Navixy OK ; trigger External OK.
+STATUT : field_validated=FALSE ; PRIVATE_MODE_PRODUCTION=DISABLED.
+
+
+## ============================================================================
 ## BESOIN PRODUIT (DÉFINITIF) + rétractation hypothèse "bouton physique"
 ## ============================================================================
 ```
