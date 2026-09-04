@@ -5,6 +5,49 @@
 > 📌 REPRISE : test terrain reporté à **demain** (2026-09-04). Tout est prêt (`D3B_READY = YES`).
 > Il ne reste qu'à exécuter la séquence terrain sur GO explicite. Voir « PLAN D'EXÉCUTION DEMAIN » ci-dessous.
 
+## ============================================================================
+## ⚡ D3-B EXÉCUTÉ (2026-09-04) — PREUVE MASQUAGE + INCRÉMENT AVL16 EN PRIVÉ
+## ============================================================================
+> Sur GO explicite opérateur. Bascule via Navixy raw_command (`privatemode`), option (a) terminal.
+> Compte 121349, tracker 3657864 (Audi). Mesures via d3b_snapshot.py (READ-ONLY).
+
+Snapshots pendant roulage réel EN MODE PRIVÉ (GPS masqué) :
+```
+private_start : online=True  gps_masked=True(0,0)  AVL16=140310.36 km @ 09:27:03
+private_end   : online=True  gps_masked=True(0,0)  AVL16=140311.94 km @ 09:28:33  (véhicule à 49 km/h)
+PRIVATE_DISTANCE_KM = 140311.94 - 140310.36 = +1.58 km   (INCREMENT OK, Y>X)
+```
+**Triple preuve simultanée (exigence produit) :**
+```
+GPS_COORDINATES = MASKED               (lat/lng = None/0,0 même en roulant)
+TRACKER = ONLINE                       (connection=active, données fraîches)
+PRIVATE_DISTANCE = CONTINUES_TO_INCREMENT  (+1.58 km via AVL16, sans aucune coordonnée GPS)
+```
+Distance privée calculée EXCLUSIVEMENT via AVL16 (Total Odometer). GPS Navixy odo = REFERENCE,
+non utilisé (140310.37, EXCLU).
+
+Critères D3-B (§G) :
+```
+PRIVATE_GPS_MASKING       = PASS  (0,0 en roulant)
+TRACKER_ONLINE_PRIVATE    = PASS
+AVL16_AVAILABLE_PRIVATE   = PASS  (timestamps s'actualisent)
+AVL16_PRIVATE_INCREMENT   = PASS  (+1.58 km)
+PRIVATE_DISTANCE_COMPUTABLE = PASS
+```
+RESTE à confirmer pour clôturer le PASS complet :
+```
+BUSINESS_RESTORE          = PENDING  (privatemode OFF envoyé, GPS pas encore revenu -> à confirmer)
+BUSINESS_GPS_NORMAL       = PENDING
+```
+> Tant que le retour Professionnel (GPS normal restauré) n'est pas CONFIRMÉ par relecture,
+> field_validated reste FALSE (protocole §17 rollback : ne jamais déclarer BUSINESS sans preuve).
+
+Mécanisme remote confirmé : Navixy `tracker/raw_command/send` accepte `privatemode ON/OFF/?`
+(success:True). ⚠️ ACK Navixy ≠ application device (la bascule s'applique via la file reliable).
+
+## ============================================================================
+
+
 
 ## ============================================================================
 ## FINAL PRECHECK (2026-09-03) — mécanisme remote + verrouillage config
