@@ -1,16 +1,27 @@
 # Driver Private Mode — Pilot Feature Flag (PREPARATION ONLY)
 
-> **Statut : DOCUMENT DE PRÉPARATION — AUCUNE IMPLÉMENTATION.**
-> Ce document définit les règles de rollout du pilote. Il ne code rien, n'active
-> rien, n'envoie aucune commande device. Validation requise avant toute
-> implémentation.
+> **Statut : ARCHITECTURE VALIDÉE (sur le principe) — AUCUNE IMPLÉMENTATION.**
+> Décision utilisateur : **option (a)**. La divergence de base est acceptée comme
+> une différence d'environnement. **Aucun seed fictif** pour `3657864`, **aucun
+> substitut `tenant_id="default"`**. Implémentation bloquée jusqu'à résolution du
+> vrai tenant dans l'environnement contenant réellement le tracker.
 
 ```
-PRIVATE_MODE_GLOBAL        = DISABLED
-REAL_DEVICE_COMMANDS       = MOCK / SIMULATION
-PILOT_ROLLOUT              = NOT ENABLED
-NEXT_ACTION                = WAIT_FOR_EXPLICIT_PILOT_GO
+PRIVATE_MODE_GLOBAL               = DISABLED
+REAL_DEVICE_COMMANDS              = MOCK / SIMULATION
+PILOT_TARGETING                   = tenant_id + tracker_id
+FAIL_CLOSED                       = TRUE
+PILOT_TENANT_ID                   = UNRESOLVED_IN_THIS_FORK
+PILOT_FEATURE_FLAG_IMPLEMENTATION = BLOCKED
+NEXT_ACTION                       = RESOLVE_REAL_PILOT_TENANT_IN_TARGET_ENVIRONMENT
 ```
+
+**Règles verrouillées pour la résolution du tenant (environnement cible, READ-ONLY) :**
+Déterminer `TRACKER_ID`, `VEHICLE_ID`, `TENANT_ID`, `TENANT_NAME`, `SOURCE_OF_TRUTH`,
+`RESOLUTION`. Seul `RESOLUTION = VERIFIED` autorise à renseigner l'allowlist pilote.
+Ne pas utiliser de placeholder de production, ne pas fallback sur `default`, ne pas
+déduire le tenant depuis le seul compte Navixy si le mapping canonique backend est
+obtenable.
 
 ---
 
