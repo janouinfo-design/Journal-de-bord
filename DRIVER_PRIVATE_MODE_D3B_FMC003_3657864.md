@@ -3,6 +3,36 @@
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
 ## ============================================================================
+## RÉSULTAT FERME (2026-09-04) — privatemode NE MASQUE PAS le GPS sur ce device
+## ============================================================================
+Test propre refait : `privatemode ON` envoyé (success:True Navixy) PUIS lecture position réelle
+via `state.gps.location`. Résultat opérateur : **rien n'est masqué** — la position reste RÉELLE
+(ex. 46.54/6.59), signal=100, même en roulant.
+
+CONCLUSION (confirmée) :
+```
+privatemode ON/OFF via Navixy raw_command : ACCEPTÉ (success:True) mais SANS EFFET de masquage
+GPS Data Masking effectif                 : NON (position transmise reste réelle)
+=> Le mode Privé Teltonika ne s'active PAS via la commande GPRS `privatemode` sur ce
+   device/config, OU le masquage 11813 ne s'applique pas comme attendu.
+```
+Config connue (.cfg 3657864) : 11813=1 (Data Sent As Zero), 11849=0 (External), 11815=1, 11806=0.
+Malgré ça, la commande ne déclenche pas le masquage. Hypothèses restantes (À INVESTIGUER, aucune
+exécutée) :
+  H1. `Trigger External` attend une SOURCE EXTERNE réelle (entrée physique / DIN) ; la commande
+      `privatemode` seule ne suffit pas à faire ENTRER en privé sur cette config.
+  H2. La commande atteint Navixy mais n'est pas réellement livrée/exécutée par le device
+      (vérifier la RÉPONSE device asynchrone à `privatemode ?`).
+  H3. Un paramètre de scénario Private/Business (activation du scénario / priorité) n'est pas
+      réellement actif, donc le mode ne s'enclenche pas.
+  H4. Firmware/profil : comportement spécifique à confirmer avec support Teltonika/Navixy.
+
+ACQUIS INDÉPENDANT (reste vrai) : AVL16 = source distance fiable, incrémente, lisible API.
+STATUT : D3-B masquage = FAIL ; field_validated=FALSE ; PRIVATE_MODE_PRODUCTION=DISABLED.
+DÉCISION PRODUIT REQUISE : voir options ci-dessous.
+
+
+## ============================================================================
 ## NUANCE (2026-09-04) — diagnostic "masquage KO" était NON CONCLUANT
 ## ============================================================================
 Erreur de méthode (due au faux positif gps_masked) : on a surtout envoyé `privatemode OFF`
