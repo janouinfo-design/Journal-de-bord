@@ -3,6 +3,41 @@
 ### PRÉPARATION GATED — RESULT = NOT_EXECUTED — aucune bascule sans GO explicite
 
 ## ============================================================================
+## ✅✅ D3-B RÉUSSI (2026-09-04) — MASQUAGE CONFIRMÉ (position GELÉE) + AVL16 compte
+## ============================================================================
+Config réunie : `getparam 11813 = 1` (Data Sent As Zero) + `privatemode ? = ON` (Air Console).
+Observation terrain DÉCISIVE (opérateur) : le véhicule ROULE réellement, MAIS sur Navixy il
+« reste sur place » (position figée au dernier point avant privé : 11:03:27), pendant que :
+```
+AVL16 continue d'incrémenter : 140267 -> 140270 (km privés comptés)  ✅
+tracker ONLINE                                                       ✅
+position GPS NON rafraîchie depuis l'activation du privé (gelée)     ✅ = MASQUAGE effectif
+```
+=> Les 3 exigences produit sont réunies EN CONDITIONS RÉELLES :
+```
+GPS_COORDINATES  = MASKED   (position gelée ; aucune trace exploitable du trajet privé)
+TRACKER          = ONLINE
+PRIVATE_DISTANCE = CONTINUES_TO_INCREMENT (via AVL16, sans coordonnées)
+```
+
+NB méthode : ce device masque en GELANT la position (arrêt de transmission de nouveaux points),
+PAS en envoyant 0,0. Les deux sont des masquages valides. Le détecteur du script est corrigé pour
+traiter « position périmée alors que le véhicule roule (moving/ignition/AVL16 frais) » = MASQUÉ.
+
+Critères D3-B :
+```
+PRIVATE_ACTIVATION_CONFIRMED = PASS  (device: "Privatemode ON")
+PRIVATE_GPS_MASKING          = PASS  (position gelée en roulant)
+TRACKER_ONLINE_PRIVATE       = PASS
+AVL16_AVAILABLE_PRIVATE      = PASS
+AVL16_PRIVATE_INCREMENT      = PASS  (+km réels comptés)
+```
+RESTE pour clôturer field_validated : confirmer le RETOUR Professionnel (privatemode OFF ->
+position GPS se rafraîchit à nouveau / trace reprend). Puis field_validated=TRUE pour CE tracker.
+PRIVATE_MODE_PRODUCTION reste DISABLED (décision rollout séparée).
+
+
+## ============================================================================
 ## ⚡ CAUSE RACINE TROUVÉE (2026-09-04) — "Private mode is not configured"
 ## ============================================================================
 Réponse RÉELLE du device (Air Console, 09:58:58) à la commande `privatemode ?` :

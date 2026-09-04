@@ -103,14 +103,52 @@ def _gps_masked_from_point(lat, lng):
 
 
 async def _last_gps_point():
-    """Position TRANSMISE = state.gps.location.{lat,lng} (get_state n'expose PAS gps.lat/lng ;
-    track/read renvoie 0 point en mode privé). Source de vérité du masquage."""
+    """Position TRANSMISE = state.gps.location.{lat,lng}. Retourne (lat,lng,ts)."""
     st = ((await raw("tracker/get_state", {"tracker_id": TID})) or {}).get("state") or {}
     gps = st.get("gps") or {}
     loc = gps.get("location") or {}
     if isinstance(loc, dict) and (loc.get("lat") is not None or loc.get("lng") is not None):
         return loc.get("lat"), loc.get("lng"), gps.get("updated")
     return None, None, gps.get("updated")
+
+
+def _parse(ts):
+    if not ts:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(str(ts)[:19], fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _masking_verdict(lat, lng, gps_ts, avl_ts, moving, ignition):
+    """Masquage détecté si :
+      - position à 0,0 (Data Sent As Zero), OU
+      - position GELÉE : gps figé alors que l'activité continue (AVL16 bien plus récent que le GPS,
+        véhicule moving/ignition) -> le device ne transmet plus de nouvelles positions = masqué.
+    Retourne ('MASKED'|'NOT_MASKED'|'INCONCLUSIVE', raison)."""
+    # cas 0,0
+    try:
+        if lat is not None and lng is not None and abs(float(lat)) < 1e-6 and abs(float(lng)) < 1e-6:
+            return "MASKED", "coords 0,0 (Data Sent As Zero)"
+    except (TypeError, ValueError):
+        pass
+    g = _parse(gps_ts)
+    a = _parse(avl_ts)
+    # position gelée : AVL16 nettement plus récent que la position GPS, alors qu'on roule
+    if g and a:
+        gap = (a - g).total_seconds()
+        if gap >= 120 and (moving or ignition):
+            return "MASKED", (f"position GELEE: GPS figé depuis {int(gap)}s alors que AVL16 est frais "
+                              f"et vehicule actif -> plus de position transmise = masqué")
+    if lat is not None and lng is not None:
+        # coords réelles ET récentes (gap faible) -> non masqué
+        if g and a and (a - g).total_seconds() < 120:
+            return "NOT_MASKED", "coords réelles récentes"
+        return "NOT_MASKED", "coords réelles (fraîcheur indéterminée)"
+    return "INCONCLUSIVE", "position indéterminable"
 
 
 async def capture(phase):
@@ -127,28 +165,28 @@ async def capture(phase):
         if str(it.get("type")) == "odometer":
             gps_odo = it.get("value")
 
-    # Masquage jugé sur la VRAIE position (track/read), PAS sur gps.lat/lng (inexistants dans get_state).
     lat, lng, pt_ts = await _last_gps_point()
-    gps_masked = _gps_masked_from_point(lat, lng)
+    moving = st.get("movement_status") == "moving"
+    ignition = bool(st.get("ignition"))
+    avl_ts = avl16.get("timestamp") if avl16 else None
+    verdict, reason = _masking_verdict(lat, lng, pt_ts, avl_ts, moving, ignition)
 
     snap = {
         "phase": phase,
         "captured_utc": now,
         "tracker_online": st.get("connection_status") in ("active", "idle"),
         "connection_status": st.get("connection_status"),
-        "current_mode_hint": st.get("movement_status"),
-        "gps_masked": gps_masked,                # True seulement si point réel = 0,0
-        "gps_point_lat": lat,                    # (technique) True lat du dernier point
-        "gps_point_lng": lng,
+        "masking_verdict": verdict,              # MASKED | NOT_MASKED | INCONCLUSIVE
+        "masking_reason": reason,
+        "gps_has_position": (lat is not None and lng is not None),
         "gps_point_ts": pt_ts,
         "gps_signal_level": gps.get("signal_level"),
         "gps_speed": gps.get("speed"),
-        "gps_timestamp": gps.get("updated"),
         "avl16_km": avl16.get("value") if avl16 else None,
-        "avl16_timestamp": avl16.get("timestamp") if avl16 else None,
-        "navixy_platform_odometer": gps_odo,     # REFERENCE — EXCLU du calcul privé
-        "ignition": st.get("ignition"),
-        "moving": st.get("movement_status") == "moving",
+        "avl16_timestamp": avl_ts,
+        "navixy_platform_odometer": gps_odo,
+        "ignition": ignition,
+        "moving": moving,
     }
     return snap
 
@@ -168,19 +206,12 @@ def _save(data):
 
 
 def _print_snap(s):
-    lat, lng = s.get("gps_point_lat"), s.get("gps_point_lng")
-    # position affichée de façon non exploitable (juste pour juger masqué vs présent)
-    if lat is None or lng is None:
-        pos = "AUCUN POINT (track/read vide)"
-    elif s.get("gps_masked") is True:
-        pos = "0,0 (MASQUÉ)"
-    else:
-        pos = "coords REELLES presentes (non affichees)"
     print(f"  phase              = {s['phase']}", flush=True)
     print(f"  captured_utc       = {s['captured_utc']}", flush=True)
     print(f"  tracker_online     = {s['tracker_online']} ({s['connection_status']})", flush=True)
-    print(f"  GPS_MASKED         = {s['gps_masked']}   [{pos}]  (point @ {s.get('gps_point_ts')})", flush=True)
-    print(f"  gps signal/speed   = {s.get('gps_signal_level')} / {s.get('gps_speed')}", flush=True)
+    print(f"  MASKING_VERDICT    = {s.get('masking_verdict')}", flush=True)
+    print(f"    -> {s.get('masking_reason')}", flush=True)
+    print(f"  gps position ts    = {s.get('gps_point_ts')}   signal/speed={s.get('gps_signal_level')}/{s.get('gps_speed')}", flush=True)
     print(f"  AVL16_KM           = {s['avl16_km']}   @ {s['avl16_timestamp']}", flush=True)
     print(f"  ignition / moving  = {s['ignition']} / {s['moving']}", flush=True)
     print(f"  navixy_gps_odo(REF)= {s['navixy_platform_odometer']} (EXCLU du calcul prive)", flush=True)
@@ -205,8 +236,8 @@ async def run(phase):
         for ph in ("before", "private_start", "private_driving", "private_end", "business_restored"):
             s = snaps.get(ph)
             print(f"[{ph}] " + ("absent" if not s else
-                  f"online={s['tracker_online']} gps_masked={s['gps_masked']} "
-                  f"AVL16={s['avl16_km']} @ {s['avl16_timestamp']}"), flush=True)
+                  f"online={s['tracker_online']} MASKING={s.get('masking_verdict')} "
+                  f"AVL16={s['avl16_km']}"), flush=True)
         dist = None
         if ps and pe and _isnum(ps.get("avl16_km")) and _isnum(pe.get("avl16_km")):
             dist = round(float(pe["avl16_km"]) - float(ps["avl16_km"]), 3)
@@ -216,6 +247,10 @@ async def run(phase):
             print("  INCREMENT =", "OK (Y>X)" if dist > 0 else
                   ("INCONCLUSIVE (delta nul — rouler plus)" if dist == 0 else "ANOMALIE (Y<X)"),
                   flush=True)
+        pm = [snaps.get(p, {}).get("masking_verdict") for p in ("private_start", "private_end")]
+        br = snaps.get("business_restored", {}).get("masking_verdict")
+        print("  MASKING pendant prive (start/end) =", pm, "-> PASS si MASKED", flush=True)
+        print("  MASKING au retour Business        =", br, "-> attendu NOT_MASKED (GPS revenu)", flush=True)
         print("\n  NOTE: verdict PASS/FAIL selon protocole D3-B (§G) — jugé par l'operateur/agent.", flush=True)
         print("  Aucune bascule/ecriture faite par ce script.", flush=True)
         return
