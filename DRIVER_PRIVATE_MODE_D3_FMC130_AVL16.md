@@ -14,6 +14,61 @@
 
 ---
 
+## RÉSULTATS DE PRÉCHECK (terrain réel — VPS journal_backend, 2026-09-04)
+
+Précheck exécuté via `scripts/d3_fmc130_snapshot.py precheck` (READ-ONLY, resolver
+multi-tenant, aucun credential affiché, aucune commande device).
+
+```text
+FMC003_3657864_D3           = PASS / FIELD_VALIDATED (déjà validé ; re-confirmé)
+FMC130_781479_D3_PRECHECK   = BLOCKED_OFFLINE
+FMC130_781479_D3_EXECUTION  = NOT_STARTED
+```
+
+### FMC003 `3657864` — PRÉCHECK = PASS (re-confirmation)
+```text
+MODEL = telfmb003_fmc003            TENANT_ID = default     CRED_SOURCE = TENANT
+TRACKER_ONLINE = True               GPS_NORMAL = True (coords réelles récentes)
+AVL16_PRESENT = True                AVL16_RAW_VALUE = 140289.52 km
+AVL16_TIMESTAMP = 2026-09-04 16:52:33   AVL16_RECENT = True   AVL16_API_READABLE = True
+SENSOR_DEFINED = True   SENSOR_ID = 5570680   SENSOR_INPUT = avl_io_16
+SENSOR_MULTIPLIER = 1.0   SENSOR_DIVIDER = 1000.0   SENSOR_UNIT = kilometre
+AVL16_SCALE_VERIFIED = True         FMC130_D3_PRECHECK = PASS
+```
+→ Mapping V2 confirmé terrain : `avl_io_16 · mult=1 · div=1000 · unit=km`.
+
+### FMC130 `781479` — PRÉCHECK = BLOCKED (device offline)
+```text
+MODEL = telfmu130_fmc130            TENANT_ID = default     CRED_SOURCE = TENANT
+TRACKER_ONLINE = False (connection_status="offline", ignition=false, movement=stopped)
+AVL16_PRESENT = False   SENSOR_DEFINED = False   AVL16_SCALE_VERIFIED = False
+FMC130_D3_PRECHECK = BLOCKED
+BLOCKING_REASON = TRACKER_OFFLINE (→ AVL16 non lisible en direct)
+```
+Note : device sain (batterie 100%, GSM Swisscom, dernière position 46.545/6.589),
+simplement en veille moteur coupé. Le blocage = état terrain, pas un défaut.
+
+### Ordre des prochaines actions (décidé avec l'opérateur)
+```text
+1. (fait) Consigner ces résultats — READ-ONLY.
+2. Relancer le précheck FMC130 781479 UNIQUEMENT quand le tracker sera ONLINE
+   (véhicule démarré, ~2 min de remontée GSM) :
+       docker exec -e TID=781479 -e PYTHONPATH=/app -w /app \
+         journal_backend python3 scripts/d3_fmc130_snapshot.py precheck
+   Si SENSOR_DEFINED=False alors que device online -> créer le sensor AVL16 côté
+   Navixy (action séparée, sur GO explicite).
+3. Test terrain réel (privatemode ON) : SEULEMENT après un précheck FMC130 PASS
+   ET un nouveau GO explicite. Aucun device write d'ici là.
+```
+
+```text
+PRIVATE_MODE_GLOBAL  = DISABLED
+REAL_DEVICE_COMMANDS = MOCK/SIMULATION
+```
+
+---
+
+
 ## 0. Pourquoi ce document (remplace la version CAN périmée)
 
 L'ancien protocole `DRIVER_PRIVATE_MODE_D3_PROTOCOL.md` reposait sur le sensor
