@@ -1,8 +1,8 @@
-# Runbook — Précheck D3 FMC130 (tracker 781479) — READ-ONLY
+# Runbook — Précheck D3 FMC130 (tracker 781479) — READ-ONLY, resolver multi-tenant
 
-> **À exécuter VOUS-MÊME sur le VPS de production** (l'environnement réel qui
-> contient le tracker 781479 + l'accès Navixy). Ce fork n'a **ni** le tracker
-> **ni** de credential Navixy → le précheck ne peut pas y être exécuté.
+> **À exécuter VOUS-MÊME sur le VPS réel** (celui qui contient 781479 + l'intégration
+> Navixy du tenant). Ce fork n'a ni le tracker ni le credential → précheck non
+> exécutable ici (résultat `BLOCKED / TENANT_UNRESOLVED`, ce qui est normal).
 >
 > ```
 > STEP                 = FMC130_D3_PRECHECK (READ-ONLY)
@@ -10,34 +10,23 @@
 > PRIVATE_MODE_GLOBAL  = DISABLED
 > REAL_DEVICE_COMMANDS = MOCK / SIMULATION
 > ```
->
-> READ-ONLY strict : **aucun** `privatemode`, **aucun** `setparam`, **aucune**
-> modification de sensor Navixy, **aucune** écriture device, **aucune** activation
-> production. Le script ne fait que LIRE.
 
-## Objectif
+## Nouveauté : plus besoin d'`AUDIT_NAVIXY_HASH`
 
-```text
-TRACKER_ID        = 781479
-MODEL             = FMC130
-TRACKER_ONLINE    =
-GPS_NORMAL        =
-AVL16_PRESENT     =
-AVL16_RAW_VALUE   =
-AVL16_VALUE_KM    =
-AVL16_TIMESTAMP   =
-AVL16_RECENT      =
-AVL16_API_READABLE=
-```
-
-Et vérifier le **mapping Navixy** du sensor AVL16 :
+Le script résout désormais le credential via le **resolver multi-tenant** de
+l'application (aucune clé manuelle, aucun secret affiché) :
 
 ```text
-INPUT      = avl_io_16   (ou hw_mileage)
-MULTIPLIER = 1
-DIVIDER    = 1000
-UNIT       = km
+tracker 781479
+  -> vehicle (vehicles.navixy_tracker_id)
+  -> tenant_id (vehicles.tenant_id)
+  -> get_integration_credential(tenant_id, "NAVIXY")   (fail-closed, jamais cross-tenant)
+  -> client Navixy READ-ONLY
 ```
+
+Si le tenant ne se résout pas → `BLOCKED / TENANT_UNRESOLVED`.
+Si le tenant n'a pas de credential → `BLOCKED / NAVIXY_CREDENTIAL_MISSING`
+(aucun emprunt du credential d'un autre tenant).
 
 ## Étapes
 
@@ -46,72 +35,74 @@ UNIT       = km
 ```bash
 docker ps
 docker exec -it <NOM_CONTENEUR_BACKEND> bash
-cd /app/backend          # adapter si besoin
+cd /app/backend
 ```
 
-### 2. Précheck « before » (état + AVL16 + GPS + online) — READ-ONLY
+### 2. Lancer le précheck READ-ONLY (bloc complet)
 
 ```bash
-docker exec -e AUDIT_NAVIXY_HASH="$KEY_COMPTE_781479" -e TID=781479 <conteneur> \
-  python3 scripts/d3_fmc130_snapshot.py before
+docker exec -e TID=781479 <NOM_CONTENEUR_BACKEND> \
+  python3 scripts/d3_fmc130_snapshot.py precheck
 ```
 
-Relever depuis la sortie :
-- `tracker_online`, `MASKING_VERDICT` (attendu NOT_MASKED en Business = GPS normal),
-- `AVL16_KM`, `AVL16_timestamp`, `gps position ts`, `ignition/moving`.
+> `precheck` produit le bloc complet (état + AVL16 + mapping). Les alias
+> `before` et `mapping` produisent le même bloc. **Aucune clé à passer.**
 
-### 3. Vérification du mapping AVL16 — READ-ONLY
-
-```bash
-docker exec -e AUDIT_NAVIXY_HASH="$KEY_COMPTE_781479" -e TID=781479 <conteneur> \
-  python3 scripts/d3_fmc130_snapshot.py mapping
-```
-
-Relever : `INPUT_NAME`, `MULTIPLIER`, `DIVIDER`, `UNIT`, `MAPPING_MATCHES_EXPECTED`.
-
-> `AUDIT_NAVIXY_HASH` = clé du **compte Navixy qui possède 781479**. Le script ne
-> l'affiche jamais. **Ne collez pas la clé dans le chat.**
-
-### 4. Me renvoyer UNIQUEMENT ce bloc rempli
+### 3. Me renvoyer le bloc affiché
 
 ```text
-TRACKER_ID        = 781479
-MODEL             = FMC130
-TRACKER_ONLINE    = ...
-GPS_NORMAL        = ...        (NOT_MASKED = GPS normal en Business)
-AVL16_PRESENT     = ...
-AVL16_RAW_VALUE   = ...        (valeur brute avl_io_16 si visible)
-AVL16_VALUE_KM    = ...        (= AVL16_KM affiché)
-AVL16_TIMESTAMP   = ...
-AVL16_RECENT      = ...        (timestamp proche de maintenant ?)
-AVL16_API_READABLE= ...
---- mapping ---
-INPUT             = ...        (attendu avl_io_16 / hw_mileage)
-MULTIPLIER        = ...        (attendu 1)
-DIVIDER           = ...        (attendu 1000)
-UNIT              = ...        (attendu km)
-MAPPING_MATCHES_EXPECTED = YES/NO
+TRACKER_ID = 781479
+MODEL = ...
+TENANT_ID = ...
+CRED_SOURCE = ...            (TENANT attendu ; valeur jamais affichée)
+TRACKER_ONLINE = ...
+GPS_NORMAL = ...             (NOT_MASKED = GPS normal en Business)
+
+AVL16_PRESENT = ...
+AVL16_RAW_VALUE = ...
+AVL16_TIMESTAMP = ...
+AVL16_RECENT = ...
+
+SENSOR_DEFINED = ...
+SENSOR_ID = ...
+SENSOR_INPUT = ...           (attendu avl_io_16 / hw_mileage)
+SENSOR_MULTIPLIER = ...      (attendu 1)
+SENSOR_DIVIDER = ...         (attendu 1000)
+SENSOR_UNIT = ...            (attendu km)
+SENSOR_VALUE_KM = ...
+
+AVL16_API_READABLE = ...
+AVL16_SCALE_VERIFIED = ...
+
+FMC130_D3_PRECHECK = PASS / BLOCKED
+BLOCKING_REASON = ...
 ```
 
-## Verdict (je le calcule à réception)
+## Verdict (calculé par le script, confirmé par moi à réception)
 
 ```text
-Si AVL16 présent + récent + API readable + mapping cohérent (mult=1, div=1000, unit=km):
-   FMC130_D3_PRECHECK = PASS
-Sinon:
-   FMC130_D3_PRECHECK = BLOCKED
-   BLOCKING_REASON = ...
+PASS  si : tracker online + GPS normal + AVL16 présent + récent + API readable
+           + mapping observé cohérent (input avl_io_16, mult=1, div=1000, unit=km)
+BLOCKED sinon, avec BLOCKING_REASON parmi :
+  TENANT_UNRESOLVED | NAVIXY_CREDENTIAL_MISSING | NAVIXY_AUTH_FAILED |
+  TRACKER_OFFLINE | GPS_NOT_NORMAL | AVL16_ABSENT | AVL16_STALE |
+  AVL16_NOT_READABLE | MAPPING_NOT_VERIFIED
 ```
 
-> ⚠️ Ce précheck ne déclenche **pas** le test terrain Private Mode. Le D3 terrain
-> (bascule Privé/Pro) reste une action GATÉE, sur GO explicite séparé.
+> Le mapping est **observé et vérifié**, jamais forcé. `AVL16_SCALE_VERIFIED = True`
+> uniquement si les valeurs réelles correspondent à l'attendu.
 
 ## Garanties
 
 ```text
-WRITE_OPERATIONS   = NONE
-DEVICE_COMMANDS    = NONE (aucun privatemode / setparam)
-SENSOR_CHANGES     = NONE
-SECRETS_PRINTED    = NONE (AUDIT_NAVIXY_HASH jamais affiché)
+CREDENTIAL_RESOLUTION = resolver multi-tenant (aucun AUDIT_NAVIXY_HASH manuel)
+SECRETS_PRINTED       = NONE (seul CRED_SOURCE — un label — est affiché)
+CROSS_TENANT_FALLBACK = NONE (fail-closed)
+WRITE_OPERATIONS      = NONE
+DEVICE_COMMANDS       = NONE (aucun privatemode / setparam)
+SENSOR_CHANGES        = NONE
 PRODUCTION_ACTIVATION = NONE
 ```
+
+> Ce précheck ne déclenche PAS le test terrain Private Mode. Le D3 terrain reste
+> GATÉ, sur GO explicite séparé.
