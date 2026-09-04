@@ -91,17 +91,31 @@ def _find_avl16(readings):
     return None
 
 
-def _gps_masked(gps):
-    """Heuristique : coordonnées considérées 'masquées' si (0,0) ou absentes."""
-    if not gps:
+def _gps_masked_from_point(lat, lng):
+    """Retourne True si la position (lat,lng) est réellement à 0,0 (masquée),
+    False si coordonnées réelles, None si indéterminable."""
+    if lat is None or lng is None:
         return None
-    lat, lng = gps.get("lat"), gps.get("lng")
-    if lat is None and lng is None:
-        return True
     try:
         return abs(float(lat)) < 1e-6 and abs(float(lng)) < 1e-6
     except (TypeError, ValueError):
         return None
+
+
+async def _last_gps_point():
+    """Lit la DERNIÈRE position réelle via track/read (get_state n'expose pas lat/lng directs).
+    Retourne (lat, lng, ts) ou (None, None, None)."""
+    from datetime import timedelta
+    now = datetime.utcnow()
+    d_from = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    d_to = now.strftime("%Y-%m-%d %H:%M:%S")
+    r = await raw("track/read", {"tracker_id": TID, "from": d_from, "to": d_to,
+                                 "simplify": False, "point_limit": 5})
+    pts = r.get("list") or []
+    if not pts:
+        return None, None, None
+    p = pts[-1]
+    return p.get("lat"), p.get("lng"), p.get("get_time") or p.get("time")
 
 
 async def capture(phase):
@@ -118,15 +132,24 @@ async def capture(phase):
         if str(it.get("type")) == "odometer":
             gps_odo = it.get("value")
 
+    # Masquage jugé sur la VRAIE position (track/read), PAS sur gps.lat/lng (inexistants dans get_state).
+    lat, lng, pt_ts = await _last_gps_point()
+    gps_masked = _gps_masked_from_point(lat, lng)
+
     snap = {
         "phase": phase,
         "captured_utc": now,
         "tracker_online": st.get("connection_status") in ("active", "idle"),
         "connection_status": st.get("connection_status"),
-        "current_mode_hint": st.get("movement_status"),  # état device (pas le mode privé applicatif)
-        "gps_masked": _gps_masked(gps),          # True si 0,0 (indice de masquage) — NON persisté ailleurs
+        "current_mode_hint": st.get("movement_status"),
+        "gps_masked": gps_masked,                # True seulement si point réel = 0,0
+        "gps_point_lat": lat,                    # (technique) True lat du dernier point
+        "gps_point_lng": lng,
+        "gps_point_ts": pt_ts,
+        "gps_signal_level": gps.get("signal_level"),
+        "gps_speed": gps.get("speed"),
         "gps_timestamp": gps.get("updated"),
-        "avl16_km": avl16.get("value") if avl16 else None,   # sensor renvoie déjà km normalisés
+        "avl16_km": avl16.get("value") if avl16 else None,
         "avl16_timestamp": avl16.get("timestamp") if avl16 else None,
         "navixy_platform_odometer": gps_odo,     # REFERENCE — EXCLU du calcul privé
         "ignition": st.get("ignition"),
@@ -150,10 +173,19 @@ def _save(data):
 
 
 def _print_snap(s):
+    lat, lng = s.get("gps_point_lat"), s.get("gps_point_lng")
+    # position affichée de façon non exploitable (juste pour juger masqué vs présent)
+    if lat is None or lng is None:
+        pos = "AUCUN POINT (track/read vide)"
+    elif s.get("gps_masked") is True:
+        pos = "0,0 (MASQUÉ)"
+    else:
+        pos = "coords REELLES presentes (non affichees)"
     print(f"  phase              = {s['phase']}", flush=True)
     print(f"  captured_utc       = {s['captured_utc']}", flush=True)
     print(f"  tracker_online     = {s['tracker_online']} ({s['connection_status']})", flush=True)
-    print(f"  gps_masked (0,0?)  = {s['gps_masked']}   gps_ts={s['gps_timestamp']}", flush=True)
+    print(f"  GPS_MASKED         = {s['gps_masked']}   [{pos}]  (point @ {s.get('gps_point_ts')})", flush=True)
+    print(f"  gps signal/speed   = {s.get('gps_signal_level')} / {s.get('gps_speed')}", flush=True)
     print(f"  AVL16_KM           = {s['avl16_km']}   @ {s['avl16_timestamp']}", flush=True)
     print(f"  ignition / moving  = {s['ignition']} / {s['moving']}", flush=True)
     print(f"  navixy_gps_odo(REF)= {s['navixy_platform_odometer']} (EXCLU du calcul prive)", flush=True)

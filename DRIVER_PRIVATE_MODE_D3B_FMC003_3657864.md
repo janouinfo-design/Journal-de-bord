@@ -6,8 +6,37 @@
 > Il ne reste qu'à exécuter la séquence terrain sur GO explicite. Voir « PLAN D'EXÉCUTION DEMAIN » ci-dessous.
 
 ## ============================================================================
-## ⚡ D3-B EXÉCUTÉ (2026-09-04) — PREUVE MASQUAGE + INCRÉMENT AVL16 EN PRIVÉ
+## ⚠️ RÉTRACTATION (2026-09-04) — FAUX POSITIF gps_masked DANS d3b_snapshot.py
 ## ============================================================================
+> BUG confirmé + corrigé : l'ancien `_gps_masked` lisait `state.gps.lat/lng` (INEXISTANTS dans
+> `tracker/get_state` -> toujours None -> toujours "masqué"). L'opérateur confirme : le GPS n'a
+> JAMAIS été masqué pendant le test. Fix : masquage jugé via `track/read` (vraies coords).
+> Vérifié testing_agent : 4/4 PASS.
+
+**Les conclusions "GPS masqué" du bloc D3-B EXÉCUTÉ ci-dessous sont INVALIDES et rétractées.**
+Ce qui RESTE valide :
+```
+✅ AVL16 incrémente en roulant (+1.58 km 09:27->09:28) — source distance fonctionne
+✅ Navixy raw_command/send accepte privatemode ON/OFF/? (success:True) — canal remote OK
+```
+Ce qui est NON prouvé (et croyait à tort prouvé) :
+```
+❌ PRIVATE_GPS_MASKING  = NON PROUVÉ (jamais masqué réellement)
+❌ privatemode bascule réellement CE device = NON PROUVÉ (device probablement jamais entré en Privé)
+   -> hypothèse : Trigger=External(11849=0) attend peut-être un déclencheur physique/entrée,
+      OU le device n'exécute pas la commande privatemode dans cette config -> À INVESTIGUER.
+```
+Statut D3-B réel :
+```
+AVL16_PRIVATE_INCREMENT   = NON CONCLUANT (increment observé mais PAS en état masqué prouvé)
+PRIVATE_GPS_MASKING       = FAIL/UNPROVEN
+D3B_RESULT                = INVALIDÉ (à refaire avec le script corrigé + masquage réel prouvé)
+field_validated           = FALSE   (inchangé)
+PRIVATE_MODE_PRODUCTION   = DISABLED
+```
+
+## ============================================================================
+
 > Sur GO explicite opérateur. Bascule via Navixy raw_command (`privatemode`), option (a) terminal.
 > Compte 121349, tracker 3657864 (Audi). Mesures via d3b_snapshot.py (READ-ONLY).
 
