@@ -51,6 +51,43 @@ Correction (à PROPOSER, jamais appliquer sans GO) :
 - Toute écriture = décision opérateur, sur GO EXPLICITE. LOGITRAK n'écrit rien.
 ```
 
+## RÉSULTAT DU RELEVÉ (captures Configurator FMC130 781479, 2026-09-04)
+
+Comparatif final :
+```text
+PARAMÈTRE                  FMC003 VALIDÉ        FMC130 781479        ÉTAT
+11806 Source               GNSS                 GNSS                 = OK
+11813 GPS masking          Data Sent As Zero    Normal               ⚠️ À CORRIGER
+11815 Private odometer      Enable               Enable               = OK
+11849 Trigger              External             External             = OK
+11850 Scenario             Low                  Low                  = OK
+Total Odometer I/O         Low / Monitoring     Priority = None      ❌ CAUSE AVL16 ABSENT
+```
+
+CAUSE RACINE (confirmée par capture onglet I/O) :
+```text
+Total Odometer -> Priority = None  => l'element AVL 16 n'est PAS transmis dans la trame.
+L'odometre interne calcule bien (valeur visible), le sensor Navixy AVL16 existe,
+mais le device n'emet jamais avl_io_16 -> absent chez Navixy. = NOT_CURRENTLY_EXPOSED expliqué.
+```
+
+CORRECTIONS REQUISES (device — à exécuter par l'opérateur, sur GO EXPLICITE ; LOGITRAK n'écrit rien) :
+```text
+#1 (débloque AVL16)  I/O -> Total Odometer : Priority = Low, Operand = Monitoring
+                     -> AVL 16 commence à être transmis à Navixy.
+#2 (mode Privé)      Private/Business -> GPS Data Masking = Data Sent As Zero (11813 : 0 -> 1)
+                     -> sinon les vraies coordonnées seraient transmises en Privé (fuite).
+ROLLBACK : re-mettre Total Odometer Priority=None et 11813=0 (Normal) si besoin.
+APRÈS #1/#2 : re-lancer d3_fmc130_snapshot.py precheck -> viser FMC130_D3_PRECHECK = PASS.
+```
+
+```text
+PRIVATE_MODE_GLOBAL  = DISABLED
+REAL_DEVICE_COMMANDS = MOCK/SIMULATION
+D3_FMC130_EXECUTION  = NOT_STARTED
+NEXT_ACTION          = OPÉRATEUR applique #1 (+#2) sur GO -> re-precheck AVL16
+```
+
 ```text
 PRIVATE_MODE_GLOBAL  = DISABLED
 REAL_DEVICE_COMMANDS = MOCK/SIMULATION
