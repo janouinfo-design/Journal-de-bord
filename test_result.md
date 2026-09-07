@@ -9,6 +9,17 @@ user_problem_statement: |
   Données réelles uniquement, N/A si champ absent.
 
 backend:
+  - task: "Privacy redaction in report exports"
+    implemented: true
+    working: true
+    file: "backend/app/routes/reports.py, backend/app/reports.py, backend/app/private_mode_engine.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "PRIVACY REDACTION VALIDATION COMPLETE - All 16 tests PASSED (2026-09-07). Verified that trips performed in Private Mode (device) have their addresses/coordinates REDACTED in CSV/PDF/XLSX exports, even if classified as 'professional'. Test results: (1) CSV Export ✓ - Private addresses 'Lausanne (DEV fixture)' and 'Genève (DEV fixture)' NOT found in CSV, redaction label 'Privé — position masquée' present, business data (62.3 km) preserved, 858 real addresses from non-private trips present (business trips not over-redacted). (2) XLSX Export ✓ - No private addresses in raw bytes (34,295 bytes), valid XLSX format. (3) PDF Export ✓ - No private addresses in raw bytes (82,748 bytes), valid PDF format. (4) Swiss Tax Report ✓ - HTTP 200, correct PDF content-type, valid PDF (2,658 bytes). (5) Trips Endpoint ✓ - 500 trips returned (1 private, 499 non-private), private trip has null coordinates (start_lat/start_lng/start_address/end_address all null), non-private trips keep coordinates. DEV fixture trip 'DEV-PRIVATE-FIXTURE-0001' verified: private_redacted=true, classification=professional, distance_km=62.3, addresses null. NO PRIVACY LEAKS DETECTED. Credentials: admin@logitrak.ch. Backend URL: https://confidentialite-flag.preview.emergentagent.com."
   - task: "Private Mode fail-closed ordering fix - driver endpoints"
     implemented: true
     working: true

@@ -32,7 +32,7 @@ def trips_to_csv(trips, classification_label: str) -> bytes:
         w.writerow([
             _fmt_dt(t["start_time"]), _fmt_dt(t["end_time"]),
             t.get("driver_name", ""), t.get("vehicle_plate", ""),
-            t.get("start_address", ""), t.get("end_address", ""),
+            (t.get("start_address") or ""), (t.get("end_address") or ""),
             t.get("distance_km", 0), t.get("duration_min", 0),
             t.get("fuel_l", 0), t.get("avg_speed", 0), t.get("max_speed", 0),
             classification_label,
@@ -69,7 +69,7 @@ def trips_to_xlsx(trips, classification_label: str, title: str) -> bytes:
         ws.append([
             _fmt_dt(t["start_time"]), _fmt_dt(t["end_time"]),
             t.get("driver_name", ""), t.get("vehicle_plate", ""),
-            t.get("start_address", ""), t.get("end_address", ""),
+            (t.get("start_address") or ""), (t.get("end_address") or ""),
             t.get("distance_km", 0), t.get("duration_min", 0),
             t.get("fuel_l", 0), t.get("avg_speed", 0), t.get("max_speed", 0),
             classification_label,
@@ -161,8 +161,8 @@ def trips_to_pdf(trips, classification_label: str, title: str, subtitle: str = "
             P(_fmt_dt(t.get("start_time", ""))),
             P(t.get("driver_name", "")),
             P(t.get("vehicle_plate", "")),
-            P(t.get("start_address", ""), addr_style),
-            P(t.get("end_address", ""), addr_style),
+            P((t.get("start_address") or ""), addr_style),
+            P((t.get("end_address") or ""), addr_style),
             P(f"{t.get('distance_km', 0):.1f}"),
             P(f"{t.get('duration_min', 0)} min"),
             P(f"{t.get('fuel_l', 0):.2f}"),
