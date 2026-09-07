@@ -26,6 +26,8 @@ import { bleScanner, ScannerState } from '@/ble/scanner';
 import { showLocalNotification } from '@/utils/notifications';
 import { Vehicle } from '@/api/ble';
 import { deriveRecentVehicles } from '@/utils/recentVehicles';
+import { isManualMode } from '@/config/appMode';
+import DriverScreenManual from '@/screens/DriverScreenManual';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -60,6 +62,15 @@ function formatTime(iso?: string | null): string {
 }
 
 export function DriverScreen() {
+  // Mode MANUEL (défaut, sans Bluetooth) : UI épurée dédiée. Le mode BLE historique reste
+  // disponible si EXPO_PUBLIC_VEHICLE_SELECTION_MODE='ble'.
+  if (isManualMode()) {
+    return <DriverScreenManual />;
+  }
+  return <DriverScreenBle />;
+}
+
+function DriverScreenBle() {
   const nav = useNavigation<Nav>();
   const {
     session,

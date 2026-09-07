@@ -9,6 +9,28 @@ user_problem_statement: |
   Données réelles uniquement, N/A si champ absent.
 
 backend:
+  - task: "Driver manual UX - GET /api/livre/driver/my-vehicles"
+    implemented: true
+    working: true
+    file: "backend/app/routes/identification.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/my-vehicles returns ONLY vehicles assigned to the driver (via assignments table), NOT the whole fleet. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) Correct structure: returns {vehicles:[{id,plate,model},...]} with ONLY id/plate/model fields (no GPS, no secrets) ✓. (3) Scoping verified: driver has 0 assigned vehicles initially, fleet has 6 total vehicles → driver sees 0 (correct scoping) ✓. After creating assignment → driver sees 1 vehicle (the assigned one) ✓. (4) Empty assignments: returns {vehicles:[]} (200, not error) ✓. (5) Security: NO secrets (navixy_hash/api_key/token/navixy_tracker_id) ✓, NO GPS coordinates (lat/lng/address) ✓. Credentials: chauffeur@logitrak.ch / chauffeur123, admin@logitrak.ch / admin123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+  - task: "Driver manual UX - GET /api/livre/driver/km-summary"
+    implemented: true
+    working: true
+    file: "backend/app/routes/identification.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/km-summary?period=today|month returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) No active session: returns {available:false, vehicle_id:null, pro_km:null, private_km:null} (honest, not fake 0) ✓. (3) With active session: returns {available:true, vehicle_id:..., pro_km:0, private_km:0} for today (no trips today) ✓, {pro_km:380.3, private_km:51.8} for month (real trip data) ✓. (4) Period validation: period=today ✓, period=month ✓, period=week → 422 (regex validation) ✓. (5) Scoping: km values scoped to driver's ACTIVE vehicle only (verified vehicle_id matches current session) ✓. (6) Security: NO secrets ✓, NO GPS coordinates (lat/lng/address) ✓. (7) Non-regression: /auth/me, /driver/private-mode, /driver/my-vehicle, /livre/dashboard all 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Privacy redaction in report exports"
     implemented: true
     working: true
@@ -213,8 +235,8 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "3.1"
-  test_sequence: 4
+  version: "3.2"
+  test_sequence: 5
   run_ui: true
 
 test_plan:
@@ -224,6 +246,79 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      DRIVER MANUAL UX ENDPOINTS VALIDATION COMPLETE (2026-09-08)
+      
+      CONTEXT: Validated 2 NEW driver endpoints for manual (no-BLE) driver UX. These endpoints support vehicle selection and km tracking without BLE hardware.
+      
+      TEST RESULTS (backend_test_driver_manual_ux.py + backend_test_driver_manual_ux_extended.py against https://confidentialite-flag.preview.emergentagent.com):
+      ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
+      
+      DETAILED VERIFICATION:
+      
+      ✅ NEW ENDPOINT 1: GET /api/livre/driver/my-vehicles
+         (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓
+         (2) Returns ONLY assigned vehicles (NOT whole fleet):
+             - Driver initially has 0 assigned vehicles, fleet has 6 total → driver sees 0 ✓
+             - After creating assignment → driver sees 1 vehicle (the assigned one) ✓
+             - Correct scoping verified: driver cannot see unassigned vehicles ✓
+         (3) Response structure: {vehicles:[{id,plate,model},...]} ✓
+             - Each vehicle has ONLY id/plate/model fields ✓
+             - NO GPS fields (lat/lng/address/coordinates) ✓
+             - NO secrets (navixy_tracker_id/navixy_hash/api_key/token) ✓
+         (4) Empty assignments: returns {vehicles:[]} (200, not error) ✓
+         (5) Security: NO forbidden strings in response ✓
+      
+      ✅ NEW ENDPOINT 2: GET /api/livre/driver/km-summary?period=today|month
+         (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓
+         (2) No active session scenario:
+             - Returns {available:false, vehicle_id:null, pro_km:null, private_km:null} ✓
+             - Honest null values (NOT fake 0) ✓
+         (3) With active session scenario:
+             - Returns {available:true, vehicle_id:..., pro_km:..., private_km:...} ✓
+             - period=today: pro_km=0, private_km=0 (no trips today) ✓
+             - period=month: pro_km=380.3, private_km=51.8 (real trip data) ✓
+             - km values are numbers (>=0), never null when available=true ✓
+         (4) Period validation:
+             - period=today → 200 ✓
+             - period=month → 200 ✓
+             - period=week (invalid) → 422 (regex validation) ✓
+         (5) Scoping verified:
+             - km values scoped to driver's ACTIVE vehicle only ✓
+             - vehicle_id in response matches current session vehicle_id ✓
+             - NO cross-vehicle km leaks ✓
+         (6) Security: NO GPS coordinates (lat/lng/address) ✓, NO secrets ✓
+      
+      ✅ SECURITY VERIFICATION (ALL CHECKS PASSED):
+         - NO secrets found in ANY response: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓
+         - NO GPS coordinates in driver responses: lat, lng, latitude, longitude, address, coordinates, position, location ✓
+         - NO cross-vehicle data leaks: my-vehicles returns only assigned vehicles, km-summary returns only active vehicle km ✓
+         - All responses checked across 16 tests, 0 security issues found ✓
+      
+      ✅ NON-REGRESSION (ALL ENDPOINTS WORKING):
+         - GET /api/auth/me (driver) → 200 ✓
+         - GET /api/auth/me (admin) → 200 ✓
+         - GET /api/livre/driver/private-mode → 200 ✓
+         - GET /api/livre/driver/my-vehicle → 200 ✓
+         - GET /api/livre/dashboard → 200 ✓
+      
+      CREDENTIALS TESTED:
+         - Driver: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12)
+         - Admin: admin@logitrak.ch / admin123
+      
+      TEST SCENARIOS COVERED:
+         1. my-vehicles with no assignments (empty array)
+         2. my-vehicles with 1 assignment (after creating assignment)
+         3. my-vehicles scoping (driver sees 1 vehicle, not all 6 from fleet)
+         4. km-summary with no active session (available=false, null km)
+         5. km-summary with active session (available=true, real km data)
+         6. km-summary period validation (today/month valid, week invalid)
+         7. Security checks (no secrets, no GPS, no cross-vehicle leaks)
+         8. Non-regression (existing endpoints still working)
+      
+      CONCLUSION:
+      Both NEW driver manual UX endpoints working correctly. my-vehicles returns ONLY assigned vehicles (not whole fleet), with only id/plate/model fields (no GPS, no secrets). km-summary returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. When no active session, returns available=false with honest null km values (not fake 0). Period validation works (today/month valid, others 422). Security verified: no secrets, no GPS coords, no cross-vehicle leaks. Non-regression verified: all existing endpoints working. NO ISSUES FOUND.
   - agent: "testing"
     message: |
       PRIVATE MODE REAL CONFIRMATION FIX VALIDATION COMPLETE (2026-09-08)

@@ -234,6 +234,77 @@ async def driver_my_vehicle(user=Depends(get_current_user)):
                 "active_driver", "mobile_override", "confidence")}}
 
 
+@router.get("/driver/my-vehicles")
+async def driver_my_vehicles(user=Depends(get_current_user)):
+    """Véhicules AFFECTÉS au chauffeur (sélection manuelle, mode sans BLE).
+    Ne retourne JAMAIS toute la flotte — uniquement les véhicules assignés au chauffeur,
+    dans son tenant. Champs non sensibles seulement (aucune position)."""
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    from app.assignments import driver_vehicle_ids
+    ids = await driver_vehicle_ids(db, driver_id)
+    if not ids:
+        return {"vehicles": []}
+    rows = await db.vehicles.find(
+        {"id": {"$in": ids}, "tenant_id": tenant_id},
+        {"_id": 0, "id": 1, "plate": 1, "model": 1},
+    ).to_list(500)
+    # ordre stable par plaque
+    rows.sort(key=lambda v: (v.get("plate") or ""))
+    return {"vehicles": rows}
+
+
+
+@router.get("/driver/km-summary")
+async def driver_km_summary(
+    period: str = Query("today", regex="^(today|month)$"),
+    user=Depends(get_current_user),
+):
+    """Km Pro / Km Privé du chauffeur pour SON véhicule actif, sur la période demandée.
+
+    - Source = trajets réels (`trips`), agrégés par classification. AUCUN calcul GPS mobile.
+    - Scoping strict : véhicule de la session active du chauffeur + son tenant.
+    - Si pas de véhicule actif -> valeurs None (l'app affiche « — », jamais une fausse valeur).
+    Retour : {period, vehicle_id, pro_km, private_km, available}.
+    """
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+
+    sess = await ble_engine.get_current_session(db, driver_id)
+    vehicle_id = sess.get("vehicle_id") if sess else None
+    if not vehicle_id:
+        return {"period": period, "vehicle_id": None,
+                "pro_km": None, "private_km": None, "available": False}
+
+    # Bornes de période (UTC).
+    now = datetime.now(timezone.utc)
+    if period == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:  # month
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start_iso = start.isoformat()
+
+    # Trajets du VÉHICULE ACTIF, tenant scmapé, sur la période.
+    q = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
+    trips = await db.trips.find(
+        q, {"_id": 0, "distance_km": 1, "classification": 1}).limit(20000).to_list(20000)
+
+    pro = round(sum((t.get("distance_km") or 0) for t in trips
+                    if t.get("classification") == "professional"), 1)
+    priv = round(sum((t.get("distance_km") or 0) for t in trips
+                     if t.get("classification") == "personal"), 1)
+    return {"period": period, "vehicle_id": vehicle_id,
+            "pro_km": pro, "private_km": priv, "available": True}
+
+
+
+
 @router.get("/driver/vehicle/odometer")
 async def driver_vehicle_odometer(
     vehicle_id: Optional[str] = Query(default=None),

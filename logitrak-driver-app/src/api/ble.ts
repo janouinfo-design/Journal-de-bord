@@ -120,6 +120,26 @@ export async function getVehicles(): Promise<Vehicle[]> {
   return (Array.isArray(data) ? data : []) as Vehicle[];
 }
 
+// Véhicules AFFECTÉS au chauffeur (sélection manuelle, mode sans BLE).
+export async function getMyVehicles(): Promise<Vehicle[]> {
+  const { data } = await apiClient.get('/api/livre/driver/my-vehicles');
+  return (data?.vehicles ?? []) as Vehicle[];
+}
+
+export type KmSummary = {
+  period: 'today' | 'month';
+  vehicle_id: string | null;
+  pro_km: number | null;
+  private_km: number | null;
+  available: boolean;
+};
+
+// Km Pro / Km Privé du véhicule actif (source backend uniquement — jamais calcul GPS mobile).
+export async function getKmSummary(period: 'today' | 'month' = 'today'): Promise<KmSummary> {
+  const { data } = await apiClient.get('/api/livre/driver/km-summary', { params: { period } });
+  return data as KmSummary;
+}
+
 export async function getFleetTags(): Promise<FleetTag[]> {
   const { data } = await apiClient.get('/api/livre/driver/fleet-tags');
   return (Array.isArray(data) ? data : []) as FleetTag[];
