@@ -88,6 +88,63 @@ D3_FMC130_EXECUTION  = NOT_STARTED
 NEXT_ACTION          = OPÉRATEUR applique #1 (+#2) sur GO -> re-precheck AVL16
 ```
 
+## VERDICT FINAL (2026-09-04) — device OK, il manque le SENSOR NAVIXY
+
+Preuves croisées :
+```text
+Air Console (device)  : avl_io_16 = 56268543  -> le DEVICE émet bien l'AVL 16 ✅
+                        (=> Total Odometer I/O correctement activé côté device)
+API Navixy sensor/list: AUCUN sensor avl_io_16 (18 sensors : obd_*, can_*, ble_*, mais pas AVL16)
+API Navixy readings   : avl_io_16 ABSENT des 30 inputs remontés
+```
+
+CAUSE RACINE FINALE :
+```text
+Le SENSOR Navixy "Total Odometer" (input avl_io_16) n'a JAMAIS été créé pour le 781479.
+Navixy ne remonte pas un IO brut tant qu'aucun sensor ne le référence.
+(Sur le FMC003, ce sensor existe : "ODO TOTAL" id 5570680 -> d'où l'exposition.)
+```
+
+ACTION REQUISE (écriture Navixy — sur GO EXPLICITE ; LOGITRAK ne crée rien sans autorisation) :
+```text
+Créer dans Navixy, pour le tracker 781479, un sensor identique au FMC003 :
+  Type       = Odometer / Mileage (metering)
+  Input      = AVL IO 16  (avl_io_16)
+  Multiplier = 1
+  Divider    = 1000
+  Unit       = km
+  Nom        = "ODO TOTAL" (ou équivalent)
+Valeur brute 56268543 -> normalisée ~56268.5 km.
+Puis re-lancer d3_fmc130_snapshot.py precheck (véhicule en ligne) -> viser PASS.
+```
+
+Note config #2 (GPS Data Masking = Data Sent As Zero) : reste requise pour le TEST TERRAIN
+Privé (masquage), mais PAS pour ce précheck AVL16.
+
+## ✅ RÉSOLU (2026-09-07) — FMC130 781479 PRÉCHECK = PASS
+
+Après création du sensor Navixy AVL16, précheck relancé (véhicule en ligne) :
+```text
+TRACKER_ONLINE = True     GPS_NORMAL = True (coords réelles récentes)
+AVL16_PRESENT = True      AVL16_RAW_VALUE = 56273.74 km   AVL16_TIMESTAMP = 2026-09-07 10:33:26 (récent)
+SENSOR_DEFINED = True     SENSOR_ID = 5577108   SENSOR_INPUT = avl_io_16
+SENSOR_MULTIPLIER = 1.0   SENSOR_DIVIDER = 1000.0   SENSOR_UNIT = kilometre
+AVL16_SCALE_VERIFIED = True
+FMC130_D3_PRECHECK = PASS
+```
+Incrément cohérent vs Air Console (56268543 -> 56273.74 km = ~+5 km de roulage) -> AVL16 s'incrémente.
+
+Mapping V2 confirmé terrain, IDENTIQUE au FMC003 : avl_io_16 / mult=1 / div=1000 / km.
+
+```text
+FMC130_781479_D3_PRECHECK = PASS
+FMC130_781479_D3_EXECUTION = NOT_STARTED (test terrain Privé = étape séparée, sur GO)
+RESTE avant test terrain : config #2 (GPS Data Masking = Data Sent As Zero, 11813=1) + GO explicite.
+PRIVATE_MODE_GLOBAL = DISABLED
+```
+
+
+
 ```text
 PRIVATE_MODE_GLOBAL  = DISABLED
 REAL_DEVICE_COMMANDS = MOCK/SIMULATION
