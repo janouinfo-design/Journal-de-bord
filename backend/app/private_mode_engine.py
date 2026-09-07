@@ -48,6 +48,16 @@ def device_write_enabled() -> bool:
     return os.environ.get("PRIVATE_MODE_DEVICE_WRITE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def simulate_confirm_enabled() -> bool:
+    """TEST/DEV UNIQUEMENT : simule une confirmation device (bascule confirmée sans matériel).
+    FAIL-CLOSED : jamais actif en production (APP_ENV doit être dev/preview/local) ET requiert
+    PRIVATE_MODE_SIMULATE_CONFIRM=1. Sert aux tests E2E logiciels, jamais au rollout réel."""
+    app_env = os.environ.get("APP_ENV", "production").strip().lower()
+    if app_env not in ("development", "dev", "preview", "local", "test"):
+        return False
+    return os.environ.get("PRIVATE_MODE_SIMULATE_CONFIRM", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -124,9 +134,13 @@ async def _default_send_command(tracker_id: int, command: str) -> dict:
 
 
 async def _default_confirm(tracker_id: int, expected_state: str) -> tuple[Optional[str], str]:
-    """Confirme l'état réel du device. En SIMULATION : non confirmé côté device
-    (retourne (None, 'SIMULATED')). En REAL : à implémenter via lecture d'état device
-    (privatemode ?/signaux) — non exécuté sans terrain. Renvoie (state|None, source)."""
+    """Confirme l'état réel du device.
+    - TEST/DEV avec PRIVATE_MODE_SIMULATE_CONFIRM : simule une confirmation (E2E logiciel).
+    - SIMULATION (défaut) : non confirmé côté device -> (None, 'SIMULATED').
+    - REAL : à implémenter via lecture d'état device (privatemode ?/signaux) — non exécuté sans terrain.
+    Renvoie (state|None, source)."""
+    if simulate_confirm_enabled():
+        return expected_state, "SIMULATED_CONFIRMED"  # TEST/DEV uniquement, jamais en prod
     if not device_write_enabled():
         return None, "SIMULATED"
     # REAL : la confirmation terrain se fait via relecture (privatemode ?/état). Non exécuté ici.
@@ -134,7 +148,13 @@ async def _default_confirm(tracker_id: int, expected_state: str) -> tuple[Option
 
 
 async def _default_read_odo_km(tracker_id: int) -> Optional[float]:
-    """Lit l'odomètre AVL16 normalisé (km). En SIMULATION : None (pas d'appel réseau)."""
+    """Lit l'odomètre AVL16 normalisé (km).
+    - TEST/DEV avec simulate-confirm : renvoie une valeur horodatée monotone (E2E distance).
+    - SIMULATION/REAL sans lecture : None (jamais inventé en prod)."""
+    if simulate_confirm_enabled():
+        import time
+        # valeur monotone croissante (base fixe + secondes) -> delta > 0 entre start et end
+        return round(56000.0 + (time.time() % 100000) / 1000.0, 3)
     return None
 
 

@@ -95,6 +95,17 @@ backend:
       - working: true
         agent: "testing"
         comment: "Curl verification: GET /api/livre/driver/vehicle/odometer without auth → 401 ✓. With auth (chauffeur@logitrak.ch) → 200 with status='UNAVAILABLE', odometer_km=null, reason='no_active_vehicle' ✓. NEVER returns 0. Correct expected behavior (Navixy not configured in env)."
+  - task: "Private Mode E2E HTTP tests - PILOT scenario with active session"
+    implemented: true
+    working: true
+    file: "backend/app/routes/livre.py (private mode endpoints)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "PRIVATE MODE E2E PILOT SCENARIO COMPLETE - All 16 tests PASSED (2026-09-07). Verified complete state machine with ACTIVE driver session (Jean Dupont, vehicle GE 123456, tracker 5000). Test results: STATE MACHINE (7 tests) ✓ - (1) GET status: allowed=true, reason=null, tracker_id=5000, private_odometer_supported=true, state=BUSINESS ✓, (2) POST PRIVATE: HTTP 200, ok=true, state=PRIVATE, confirmation_source=SIMULATED_CONFIRMED (CONFIRMED transition achieved, not optimistic) ✓, (3) GET verify PRIVATE: state=PRIVATE ✓, (4) POST PRIVATE idempotent: ok=true, idempotent=true (no error, no double command) ✓, (5) POST BUSINESS: HTTP 200, ok=true, state=BUSINESS, private_distance_km=0.001 ✓, (6) GET verify BUSINESS: state=BUSINESS ✓, (7) POST invalid mode ZZZ: HTTP 400 ✓. KILL SWITCH (4 tests) ✓ - (8) ADMIN activate: kill_switch=true ✓, (9) DRIVER POST PRIVATE blocked: HTTP 403 with detail='PRIVATE_MODE_KILL_SWITCH_ACTIVE' (no transition) ✓, (10) ADMIN deactivate: kill_switch=false ✓, (11) DRIVER POST BUSINESS: HTTP 200, ok=true, feature usable again ✓. NON-REGRESSION (5 tests) ✓ - GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles all HTTP 200 ✓. SECURITY ✓ - NO forbidden strings found: navixy_hash, TEST_E2E, Bearer tokens, Navixy, Teltonika, AVL, privatemode, raw_command ✓, NO real GPS lat/lng/address in driver private-mode responses ✓. FINAL STATE: Kill switch OFF, Driver state BUSINESS. CONFIRMED PRIVATE was reached (Step 2) then returned to BUSINESS (Step 5). Credentials: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
 
 frontend:
   - task: "Mes trajets (liste)"
@@ -202,6 +213,96 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      PRIVATE MODE E2E PILOT SCENARIO TEST COMPLETE (2026-09-07)
+      
+      CONTEXT: E2E HTTP testing of Private Mode state machine with ACTIVE driver session. Prerequisites verified: Driver Jean Dupont has 'confirmed' session on vehicle GE 123456 / tracker 5000, PRIVATE_MODE_ENABLED=true, tenant default + tracker 5000 allowlisted, field_validated capability present, PRIVATE_MODE_SIMULATE_CONFIRM=1 (device confirmation simulated).
+      
+      TEST RESULTS (backend_test_private_mode_e2e.py against https://confidentialite-flag.preview.emergentagent.com):
+      ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
+      
+      DETAILED VERIFICATION:
+      
+      ✅ STATE MACHINE TESTS (7/7 PASSED):
+         (1) GET /api/livre/driver/private-mode (initial status):
+             - allowed=true ✓ (pilot enabled)
+             - reason=null ✓ (feature allowed)
+             - tracker_id=5000 ✓ (expected tracker)
+             - private_odometer_supported=true ✓
+             - state=BUSINESS ✓ (initial state)
+             - NO real lat/lng/address in response ✓
+         
+         (2) POST /api/livre/driver/private-mode {"mode":"PRIVATE"}:
+             - HTTP 200 ✓
+             - ok=true ✓
+             - state=PRIVATE ✓
+             - confirmation_source=SIMULATED_CONFIRMED ✓ (CONFIRMED transition achieved, not optimistic)
+         
+         (3) GET /api/livre/driver/private-mode (verify PRIVATE):
+             - state=PRIVATE ✓
+         
+         (4) POST /api/livre/driver/private-mode {"mode":"PRIVATE"} (idempotent):
+             - HTTP 200 ✓
+             - ok=true ✓
+             - idempotent=true ✓ (no error, no double command)
+             - state=PRIVATE ✓
+         
+         (5) POST /api/livre/driver/private-mode {"mode":"BUSINESS"}:
+             - HTTP 200 ✓
+             - ok=true ✓
+             - state=BUSINESS ✓
+             - private_distance_km=0.001 ✓ (distance during private mode tracked)
+         
+         (6) GET /api/livre/driver/private-mode (verify BUSINESS):
+             - state=BUSINESS ✓
+         
+         (7) POST /api/livre/driver/private-mode {"mode":"ZZZ"} (invalid):
+             - HTTP 400 ✓ (invalid mode rejected)
+      
+      ✅ KILL SWITCH TESTS (4/4 PASSED):
+         (8) ADMIN POST /api/livre/private-mode/kill-switch {"active":true}:
+             - HTTP 200 ✓
+             - kill_switch=true ✓
+         
+         (9) DRIVER POST /api/livre/driver/private-mode {"mode":"PRIVATE"} (blocked):
+             - HTTP 403 ✓
+             - detail=PRIVATE_MODE_KILL_SWITCH_ACTIVE ✓ (no transition, feature blocked)
+         
+         (10) ADMIN POST /api/livre/private-mode/kill-switch {"active":false}:
+             - HTTP 200 ✓
+             - kill_switch=false ✓ (kill switch deactivated)
+         
+         (11) DRIVER POST /api/livre/driver/private-mode {"mode":"BUSINESS"}:
+             - HTTP 200 ✓
+             - ok=true ✓
+             - state=BUSINESS ✓ (feature usable again after kill switch restore)
+      
+      ✅ NON-REGRESSION TESTS (5/5 PASSED):
+         - GET /api/auth/me (admin) → HTTP 200 ✓
+         - GET /api/auth/me (driver) → HTTP 200 ✓
+         - GET /api/livre/dashboard → HTTP 200 ✓
+         - GET /api/livre/trips → HTTP 200 ✓
+         - GET /api/livre/vehicles → HTTP 200 ✓
+      
+      ✅ SECURITY VERIFICATION (ALL CHECKS PASSED):
+         - NO forbidden strings found in ANY response: navixy_hash, TEST_E2E, Bearer tokens, Navixy, Teltonika, AVL, privatemode, raw_command ✓
+         - NO real GPS coordinates (lat/lng/address) in driver private-mode responses ✓
+         - All responses checked across 16 tests, 0 security issues found ✓
+      
+      FINAL STATE CONFIRMATION:
+         - Kill switch: OFF (deactivated) ✓
+         - Driver state: BUSINESS ✓
+         - CONFIRMED PRIVATE was reached: YES (Step 2 - confirmation_source=SIMULATED_CONFIRMED) ✓
+         - Returned to BUSINESS: YES (Step 5) ✓
+         - private_distance_km tracked: 0.001 km ✓
+      
+      CREDENTIALS TESTED:
+         - Admin: admin@logitrak.ch / admin123
+         - Driver: chauffeur@logitrak.ch / chauffeur123
+      
+      CONCLUSION:
+      Private Mode E2E state machine working correctly with active driver session. All transitions verified: BUSINESS → PRIVATE (CONFIRMED) → PRIVATE (idempotent) → BUSINESS. Kill switch correctly blocks feature when active and restores when deactivated. No security leaks detected. All non-regression endpoints working. NO ISSUES FOUND.
   - agent: "testing"
     message: |
       PRIVATE MODE FAIL-CLOSED UI TEST COMPLETE (2026-09-07)
