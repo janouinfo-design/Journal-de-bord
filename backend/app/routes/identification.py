@@ -125,31 +125,50 @@ async def driver_stop(user=Depends(get_current_user)):
 @router.get("/driver/private-mode")
 async def driver_private_mode_get(user=Depends(get_current_user)):
     """État courant Privé/Professionnel du véhicule de la session du chauffeur.
-    Retour : {state, allowed, reason, vehicle_id, tracker_id, last_transition_at}.
-    Aucune position exposée. Backend autoritaire."""
+    Retour : {state, allowed, reason, vehicle_id, tracker_id, last_transition_at, capability}.
+    Aucune position exposée. Backend autoritaire (gate centrale fail-closed)."""
     from app import private_mode_engine as pm
+    from app import private_mode_gate as gate
+    from app.tenant_context import get_tenant_doc
     db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    # Fail-closed niveau 1/2 : feature globale + kill switch AVANT toute résolution.
+    if not gate.feature_enabled():
+        return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_FEATURE_DISABLED,
+                "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
+                "private_odometer_supported": False}
+    if await gate.kill_switch_active(db):
+        return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_KILL_SWITCH,
+                "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
+                "private_odometer_supported": False}
     sess = await ble_engine.get_current_session(db, driver_id)
     if not sess or not sess.get("vehicle_id"):
-        return {"state": pm.UNKNOWN, "allowed": False, "reason": "no_active_vehicle",
-                "vehicle_id": None, "tracker_id": None, "last_transition_at": None}
+        return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_NO_VEHICLE,
+                "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
+                "private_odometer_supported": False}
     vehicle_id = sess["vehicle_id"]
-    vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": "default"}, {"_id": 0}) or {}
+    vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0}) or {}
     tracker_id = vehicle.get("navixy_tracker_id")
     model = pm.resolve_model(vehicle.get("model"))
     vc = await pm.resolve_vehicle_capability(db, tracker_id, model)
-    allowed = bool(tracker_id) and pm.vehicle_private_mode_allowed(model, vc)
+    decision = await gate.can_use_private_mode(
+        db, tenant_id=tenant_id, tenant_doc=get_tenant_doc(tenant_id),
+        vehicle_doc=vehicle, capability=vc,
+    )
     st = await pm.get_mode_state(db, vehicle_id)
+    # capacité odomètre privé : field_validated -> km privés garantis (jamais inventés)
+    private_odo_ok = bool(vc and getattr(vc, "field_validated", False))
     return {
         "state": st.get("state", pm.UNKNOWN),
-        "allowed": allowed,
-        "reason": None if allowed else ("no_tracker" if not tracker_id
-                                        else "capability_not_field_validated"),
+        "allowed": decision["allowed"],
+        "reason": decision["reason"],
         "vehicle_id": vehicle_id,
         "tracker_id": tracker_id,
+        "vehicle_plate": vehicle.get("plate"),
+        "private_odometer_supported": private_odo_ok,
         "last_transition_at": st.get("updated_at"),
     }
 
@@ -175,8 +194,12 @@ async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(get_curre
     async def _resolve_session(_db, _drv):
         return await ble_engine.get_current_session(_db, _drv)
 
+    tenant_id = user.get("tenant_id") or "default"
     res = await pm.request_mode(db, driver_id, mode, actor=user.get("email", "?"),
-                                resolve_session=_resolve_session)
+                                resolve_session=_resolve_session, tenant_id=tenant_id)
+    # Refus d'autorisation -> code HTTP explicite (jamais un simple 500).
+    if res.get("ok") is False and res.get("allowed") is False and res.get("http"):
+        raise HTTPException(res["http"], res.get("reason") or "PRIVATE_MODE_NOT_ALLOWED")
     # jamais de secret/raw device dans la réponse ; statuts métier uniquement
     return res
 

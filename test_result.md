@@ -9,6 +9,17 @@ user_problem_statement: |
   Données réelles uniquement, N/A si champ absent.
 
 backend:
+  - task: "Private Mode fail-closed ordering fix - driver endpoints"
+    implemented: true
+    working: true
+    file: "backend/app/routes/*.py (private mode endpoints)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "FAIL-CLOSED ORDERING FIX VERIFIED - All 16 tests PASSED. Feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch now checked BEFORE session/vehicle resolution. Test results: (1) GET /api/livre/driver/private-mode with default env returns allowed=false + reason='PRIVATE_MODE_FEATURE_DISABLED' (NOT 'PRIVATE_MODE_NO_VEHICLE') ✓, (2) POST /api/livre/driver/private-mode mode=PRIVATE refused with HTTP 403 + detail='PRIVATE_MODE_FEATURE_DISABLED' (NOT 200 with no_active_vehicle, NOT 500) ✓, (3) POST mode=BUSINESS also HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX returns HTTP 400 (invalid mode) ✓, (5) Kill switch flow: activate (200 kill_switch=true) ✓, status confirms kill_switch_active=true ✓, deactivate (200 kill_switch=false) ✓, driver cannot access admin endpoints (403) ✓, (6) SECURITY: NO secrets (navixy_hash/api_key/credential/token) in ANY response ✓, NO GPS coordinates (lat/lng/address/coordinates) in ANY response ✓, (7) NON-REGRESSION: GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles, /api/livre/drivers all return 200 ✓. Credentials tested: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Phase D2: odometer_capability module (READ-ONLY registry)"
     implemented: true
     working: true
@@ -177,6 +188,60 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      PRIVATE MODE FAIL-CLOSED ORDERING FIX VERIFICATION COMPLETE (2026-09-03)
+      
+      CONTEXT: Re-test of FIXED Private Mode driver endpoints after fail-closed ordering fix. The fix ensures GLOBAL feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch are checked BEFORE session/vehicle resolution.
+      
+      TEST RESULTS (backend_test.py against https://confidentialite-flag.preview.emergentagent.com):
+      ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
+      
+      DETAILED VERIFICATION:
+      
+      ✅ (1) GET /api/livre/driver/private-mode (driver auth):
+         - With default env (PRIVATE_MODE_ENABLED not set): Returns allowed=false ✓
+         - Reason: "PRIVATE_MODE_FEATURE_DISABLED" (NOT "PRIVATE_MODE_NO_VEHICLE") ✓
+         - Even though driver has no active vehicle session, feature flag checked FIRST ✓
+         - No lat/lng/address/coordinates in response ✓
+         - No secrets in response ✓
+      
+      ✅ (2) POST /api/livre/driver/private-mode {"mode":"PRIVATE"} (driver auth):
+         - HTTP 403 (NOT 200, NOT 500) ✓
+         - Detail: "PRIVATE_MODE_FEATURE_DISABLED" (NOT no_active_vehicle) ✓
+      
+      ✅ (3) POST /api/livre/driver/private-mode {"mode":"BUSINESS"} (driver auth):
+         - HTTP 403 ✓
+         - Detail: "PRIVATE_MODE_FEATURE_DISABLED" ✓
+      
+      ✅ (4) POST /api/livre/driver/private-mode {"mode":"XXX"} (driver auth):
+         - HTTP 400 (invalid mode validation) ✓
+      
+      ✅ (5) Kill switch flow (admin auth):
+         - POST /api/livre/private-mode/kill-switch {"active": true} → 200 {kill_switch:true} ✓
+         - GET /api/livre/private-mode/status → 200 {feature_enabled:false, kill_switch_active:true} ✓
+         - POST /api/livre/private-mode/kill-switch {"active": false} → 200 {kill_switch:false} ✓
+         - Driver cannot access admin endpoints: GET status → 403 ✓, POST kill-switch → 403 ✓
+      
+      ✅ (6) SECURITY VERIFICATION:
+         - NO secrets exposed: navixy_hash, api_key, credential, token, password, secret ✓
+         - NO GPS coordinates exposed: lat, lng, latitude, longitude, address, coordinates, position ✓
+         - All responses checked, 0 security issues found ✓
+      
+      ✅ (7) NON-REGRESSION:
+         - GET /api/auth/me (admin) → 200 ✓
+         - GET /api/auth/me (driver) → 200 ✓
+         - GET /api/livre/dashboard → 200 ✓
+         - GET /api/livre/trips → 200 ✓
+         - GET /api/livre/vehicles → 200 ✓
+         - GET /api/livre/drivers → 200 ✓
+      
+      CREDENTIALS TESTED:
+      - Admin: admin@logitrak.ch / admin123
+      - Driver: chauffeur@logitrak.ch / chauffeur123
+      
+      CONCLUSION:
+      The fail-closed ordering fix is working correctly. Feature flag and kill switch are now checked BEFORE session/vehicle resolution, ensuring proper security posture. With default env (PRIVATE_MODE_ENABLED not set), all driver requests correctly return "PRIVATE_MODE_FEATURE_DISABLED" instead of "PRIVATE_MODE_NO_VEHICLE". No secrets or GPS coordinates exposed. All non-regression endpoints working. NO ISSUES FOUND.
   - agent: "testing"
     message: |
       PHASE 2 CONFIDENTIALITÉ VALIDATION COMPLETE (React Native/Expo App)

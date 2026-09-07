@@ -47,10 +47,42 @@ class _DB:
         self.private_mode_state = _Coll()
         self.vehicle_private_capabilities = _Coll()
         self.audit_log = _Coll()
+        self.feature_flags = _Coll()
+        self.tenants = _Coll()
 
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+# --------- Setup pilote pour la gate centrale (fail-closed) ---------
+# La gate exige : feature ON + tenant allowlisté + véhicule pilote + capability
+# field_validated + intégration Navixy dispo. On configure ces conditions via env
+# + un stub d'intégration (aucun secret réel, aucun appel réseau).
+import os as _os  # noqa: E402
+from app import private_mode_gate as _gate  # noqa: E402
+from app import integrations as _integrations  # noqa: E402
+
+_ORIG_GET_CRED = _integrations.get_integration_credential
+
+
+def setup_module(_module):
+    _os.environ["PRIVATE_MODE_ENABLED"] = "1"
+    _os.environ["PRIVATE_MODE_PILOT_TENANTS"] = "default"
+    _os.environ["PRIVATE_MODE_PILOT_TRACKERS"] = "3657864"
+    # Stub intégration : credential présent pour 'default' uniquement (fail-closed ailleurs).
+    def _stub_cred(tenant_id=None, provider="NAVIXY"):
+        if tenant_id == "default" and provider == "NAVIXY":
+            return {"credential": "STUB", "source": "TENANT", "api_url": None}
+        return None
+    _integrations.get_integration_credential = _stub_cred
+    _gate.get_integration_credential = _stub_cred  # au cas où importé par référence
+
+
+def teardown_module(_module):
+    for k in ("PRIVATE_MODE_ENABLED", "PRIVATE_MODE_PILOT_TENANTS", "PRIVATE_MODE_PILOT_TRACKERS"):
+        _os.environ.pop(k, None)
+    _integrations.get_integration_credential = _ORIG_GET_CRED
 
 
 # --------- Fixtures / helpers ---------
@@ -66,7 +98,8 @@ def _db_with_vehicle(tracker_id=3657864, model="telfmb003_fmc003", capability=No
     db = _DB()
     _run(db.vehicles.update_one({"id": "vA"},
          {"$set": {"id": "vA", "tenant_id": "default", "model": model,
-                   "navixy_tracker_id": tracker_id, "plate": "GE-TEST"}}, upsert=True))
+                   "navixy_tracker_id": tracker_id, "plate": "GE-TEST",
+                   "private_mode_pilot": True}}, upsert=True))
     if capability is not None:
         _run(pm.upsert_vehicle_capability(db, capability))
     return db
@@ -110,7 +143,8 @@ def test_gate_blocks_non_validated_tracker():
                read_odo_km=_mock_odo([100.0])))
     assert res["ok"] is False
     assert res["allowed"] is False
-    assert res["reason"] == "capability_not_field_validated"
+    # La gate centrale refuse au niveau hardware (capability non field_validated).
+    assert res["reason"] == _gate.R_NOT_SUPPORTED
 
 
 def test_business_to_private_confirmed():

@@ -145,6 +145,7 @@ async def request_mode(
     db, driver_id: str, target_mode: str, actor: str,
     *,
     resolve_session: Callable[..., Awaitable[Optional[dict]]],
+    tenant_id: Optional[str] = None,
     send_command: Callable[[int, str], Awaitable[dict]] = _default_send_command,
     confirm: Callable[[int, str], Awaitable[tuple]] = _default_confirm,
     read_odo_km: Callable[[int], Awaitable[Optional[float]]] = _default_read_odo_km,
@@ -152,10 +153,22 @@ async def request_mode(
     """Traite une intention métier PRIVATE|BUSINESS pour le véhicule de la session du chauffeur.
 
     - `resolve_session(db, driver_id)` -> session courante (doit contenir vehicle_id).
+    - `tenant_id` : tenant réel de l'utilisateur (isolation multi-tenant). Défaut "default".
     Retour : {ok, state, allowed, reason, vehicle_id, tracker_id, private_distance_km?, ...}
     """
     if target_mode not in (PRIVATE, BUSINESS):
         return {"ok": False, "reason": "invalid_mode", "state": UNKNOWN}
+
+    tid = tenant_id or _TENANT
+
+    # --- Fail-closed niveau 1/2 : feature globale + kill switch AVANT toute résolution ---
+    from app import private_mode_gate as gate
+    if not gate.feature_enabled():
+        return {"ok": False, "allowed": False, "reason": gate.R_FEATURE_DISABLED,
+                "http": gate.HTTP_BY_REASON[gate.R_FEATURE_DISABLED], "state": UNKNOWN}
+    if await gate.kill_switch_active(db):
+        return {"ok": False, "allowed": False, "reason": gate.R_KILL_SWITCH,
+                "http": gate.HTTP_BY_REASON[gate.R_KILL_SWITCH], "state": UNKNOWN}
 
     sess = await resolve_session(db, driver_id)
     if not sess or not sess.get("vehicle_id"):
@@ -163,19 +176,26 @@ async def request_mode(
     vehicle_id = sess["vehicle_id"]
 
     vehicle = await db.vehicles.find_one(
-        {"id": vehicle_id, "tenant_id": _TENANT}, {"_id": 0}) or {}
+        {"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
     tracker_id = vehicle.get("navixy_tracker_id")
     model = resolve_model(vehicle.get("model"))
 
-    # --- GATE capability (par tracker) ---
+    # --- GATE CENTRALE d'autorisation (fail-closed, une seule source de vérité) ---
+    from app.tenant_context import get_tenant_doc
     vc = await resolve_vehicle_capability(db, tracker_id, model)
-    allowed = bool(tracker_id) and vehicle_private_mode_allowed(model, vc)
+    decision = await gate.can_use_private_mode(
+        db, tenant_id=tid, tenant_doc=get_tenant_doc(tid),
+        vehicle_doc=vehicle, capability=vc,
+    )
+    allowed = decision["allowed"]
     if not allowed:
-        reason = "capability_not_field_validated" if tracker_id else "no_tracker"
+        reason = decision["reason"]
         await _audit(db, {"driver_id": driver_id, "vehicle_id": vehicle_id,
                           "tracker_id": tracker_id, "requested_mode": target_mode,
-                          "result": "refused", "reason": reason})
+                          "result": "refused", "reason": reason, "tenant_id": tid,
+                          "gate_level": decision.get("level")})
         return {"ok": False, "allowed": False, "reason": reason,
+                "http": decision.get("http", 403),
                 "state": (await get_mode_state(db, vehicle_id)).get("state", UNKNOWN),
                 "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
@@ -193,7 +213,7 @@ async def request_mode(
                 "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
     requested_state = PRIVATE_REQUESTED if target_mode == PRIVATE else BUSINESS_REQUESTED
-    base = {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": _TENANT,
+    base = {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
             "driver_id": driver_id, "previous_state": cur_state}
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
