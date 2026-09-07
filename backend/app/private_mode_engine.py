@@ -34,8 +34,16 @@ BUSINESS = "BUSINESS"
 PRIVATE_REQUESTED = "PRIVATE_REQUESTED"
 PRIVATE = "PRIVATE"
 BUSINESS_REQUESTED = "BUSINESS_REQUESTED"
+PENDING_CONFIRMATION = "PENDING_CONFIRMATION"  # commande envoyée, confirmation device pas encore prouvée
 FAILED = "FAILED"
 UNKNOWN = "UNKNOWN"
+
+# Sources de confirmation (provenance de la preuve).
+SRC_DEVICE_RESPONSE = "DEVICE_RESPONSE"       # réponse explicite du device (non dispo actuellement)
+SRC_DEVICE_STATE_READ = "DEVICE_STATE_READ"   # lecture d'état explicite (non dispo actuellement)
+SRC_TELEMETRY = "TELEMETRY_CONFIRMED"         # dérivé télémétrie (position gelée/reprise) — profil validé
+SRC_SIMULATED = "SIMULATED_CONFIRMED"         # TEST/DEV uniquement, jamais en prod
+SRC_UNCONFIRMED = "UNCONFIRMED"               # commande envoyée, pas encore de preuve
 
 _TENANT = "default"
 
@@ -60,6 +68,27 @@ def simulate_confirm_enabled() -> bool:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse(ts):
+    """Parse un timestamp ISO ou 'YYYY-MM-DD HH:MM:SS' en datetime aware (UTC). None si invalide."""
+    if not ts:
+        return None
+    s = str(ts).strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(s)
+    except Exception:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                d = datetime.strptime(s[:19], fmt)
+                break
+            except Exception:
+                d = None
+        if d is None:
+            return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -134,17 +163,108 @@ async def _default_send_command(tracker_id: int, command: str) -> dict:
 
 
 async def _default_confirm(tracker_id: int, expected_state: str) -> tuple[Optional[str], str]:
-    """Confirme l'état réel du device.
+    """Confirmation IMMÉDIATE (synchrone) au moment de l'envoi.
+
     - TEST/DEV avec PRIVATE_MODE_SIMULATE_CONFIRM : simule une confirmation (E2E logiciel).
-    - SIMULATION (défaut) : non confirmé côté device -> (None, 'SIMULATED').
-    - REAL : à implémenter via lecture d'état device (privatemode ?/signaux) — non exécuté sans terrain.
+    - Sinon : PAS de confirmation immédiate. La confirmation RÉELLE se fait de façon
+      ASYNCHRONE via la télémétrie (resolve_pending_confirmation), car aucune réponse
+      device synchrone n'est disponible via l'API Navixy actuelle. On retourne donc
+      (None, UNCONFIRMED) -> l'état deviendra PENDING_CONFIRMATION, jamais FAILED.
     Renvoie (state|None, source)."""
     if simulate_confirm_enabled():
-        return expected_state, "SIMULATED_CONFIRMED"  # TEST/DEV uniquement, jamais en prod
-    if not device_write_enabled():
-        return None, "SIMULATED"
-    # REAL : la confirmation terrain se fait via relecture (privatemode ?/état). Non exécuté ici.
-    return None, "REAL_PENDING"
+        return expected_state, SRC_SIMULATED  # TEST/DEV uniquement, jamais en prod
+    return None, SRC_UNCONFIRMED
+
+
+# ---------------------------------------------------------------------------
+# Confirmation TÉLÉMÉTRIQUE (Niveau C) — READ-ONLY, bornée, profil validé uniquement.
+# Preuve terrain FMC003 : en PRIVÉ la position transmise GÈLE (gps.updated ne progresse
+# plus) alors que le véhicule est actif ; au retour BUSINESS la position REPREND
+# (gps.updated progresse à nouveau après l'envoi de la commande OFF).
+# ---------------------------------------------------------------------------
+def _model_supports_telemetry_confirm(capability) -> bool:
+    """La confirmation télémétrique n'est autorisée que pour un profil FIELD_VALIDATED
+    (aujourd'hui : FMC003 prouvé terrain). Jamais généralisée à un modèle non validé."""
+    if not capability:
+        return False
+    model = getattr(capability, "device_model", None)
+    return bool(getattr(capability, "field_validated", False)) and str(model).upper() == "FMC003"
+
+
+async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
+    """Lit l'état GPS transmis (READ-ONLY) via le credential du tenant. None si indispo.
+    Ne logge/expose jamais le credential."""
+    from app.integrations import get_integration_credential
+    cred = get_integration_credential(tenant_id, "NAVIXY")
+    if not cred or not cred.get("credential"):
+        return None
+    import httpx
+    base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+            or "https://api.navixy.com/v2").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{base}/tracker/get_state",
+                             json={"hash": cred["credential"], "tracker_id": int(tracker_id)})
+            st = (r.json() or {}).get("state") or {}
+    except Exception:
+        return None
+    gps = st.get("gps") or {}
+    loc = gps.get("location") or {}
+    return {
+        "connection_status": st.get("connection_status"),
+        "movement_status": st.get("movement_status"),
+        "ignition": bool(st.get("ignition")),
+        "gps_updated": gps.get("updated"),
+        "speed": gps.get("speed"),
+        "lat": loc.get("lat"), "lng": loc.get("lng"),
+    }
+
+
+def _is_zero(lat, lng) -> bool:
+    try:
+        return lat is not None and lng is not None and abs(float(lat)) < 1e-6 and abs(float(lng)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
+async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: str,
+                            command_sent_at_iso: Optional[str], capability) -> tuple[Optional[str], str]:
+    """Tente de confirmer l'état RÉEL du device par télémétrie (Niveau C).
+
+    Retour (confirmed_state|None, source) :
+      - (PRIVATE,  TELEMETRY_CONFIRMED) si position GELÉE (ou 0,0) alors que device actif,
+        et le gel est APOSTÉRIEUR à l'envoi de la commande.
+      - (BUSINESS, TELEMETRY_CONFIRMED) si position REPRISE (gps.updated > command_sent_at).
+      - (None, UNCONFIRMED) si pas de preuve suffisante (reste PENDING).
+    Gated : profil field_validated (FMC003). Anti-stale : compare à command_sent_at.
+    """
+    if not _model_supports_telemetry_confirm(capability):
+        return None, SRC_UNCONFIRMED
+    st = await _fetch_gps_state(tenant_id, tracker_id)
+    if not st:
+        return None, SRC_UNCONFIRMED
+    sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
+    gps_upd = _parse(st.get("gps_updated"))
+    active = (st.get("movement_status") == "moving") or st.get("ignition")
+
+    if requested_state == PRIVATE:
+        # Preuve PRIVATE : position 0,0 (masquée) OU position gelée depuis l'envoi (gps_updated
+        # antérieur/égal à l'envoi) alors que le device est actif (roule/contact).
+        if _is_zero(st.get("lat"), st.get("lng")):
+            return PRIVATE, SRC_TELEMETRY
+        if sent and gps_upd and gps_upd <= sent and active:
+            # la position n'a pas progressé depuis la commande, mais le véhicule bouge -> gel = masqué
+            return PRIVATE, SRC_TELEMETRY
+        return None, SRC_UNCONFIRMED
+
+    if requested_state == BUSINESS:
+        # Preuve BUSINESS : position reprise -> gps_updated STRICTEMENT postérieur à l'envoi OFF,
+        # avec coordonnées réelles (pas 0,0).
+        if sent and gps_upd and gps_upd > sent and not _is_zero(st.get("lat"), st.get("lng")):
+            return BUSINESS, SRC_TELEMETRY
+        return None, SRC_UNCONFIRMED
+
+    return None, SRC_UNCONFIRMED
 
 
 async def _default_read_odo_km(tracker_id: int) -> Optional[float]:
@@ -227,8 +347,8 @@ async def request_mode(
         return {"ok": True, "allowed": True, "state": cur_state, "idempotent": True,
                 "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
-    # --- Anti-concurrence : une transition est déjà en cours ---
-    if cur_state in (PRIVATE_REQUESTED, BUSINESS_REQUESTED):
+    # --- Anti-concurrence : une transition est déjà en cours (requested ou pending) ---
+    if cur_state in (PRIVATE_REQUESTED, BUSINESS_REQUESTED, PENDING_CONFIRMATION):
         return {"ok": False, "allowed": True, "state": cur_state, "reason": "transition_in_progress",
                 "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
@@ -249,14 +369,34 @@ async def request_mode(
     cmd = _CMD[target_mode]
     cmd_res = await send_command(int(tracker_id), cmd)
 
-    # --- Confirmation RÉELLE (jamais optimiste) ---
+    # --- Confirmation IMMÉDIATE (jamais optimiste) ---
     confirmed_state, confirm_source = await confirm(int(tracker_id), target_mode)
 
     if confirmed_state != target_mode:
-        # Non confirmé -> état honnête (ne PAS afficher succès)
-        final = FAILED if cmd_res.get("mode") == "REAL" else PRIVATE_REQUESTED if target_mode == PRIVATE else BUSINESS_REQUESTED
+        # Pas de confirmation immédiate. On distingue :
+        #  - commande RÉELLE envoyée (mode REAL) -> PENDING_CONFIRMATION (honnête : envoyée,
+        #    confirmation télémétrique à venir de façon asynchrone). JAMAIS FAILED d'office.
+        #  - simulation/off -> reste en REQUESTED (aucune commande réelle partie).
+        if cmd_res.get("mode") == "REAL":
+            pend = {**cur, **base, "state": PENDING_CONFIRMATION,
+                    "requested_target": target_mode, "last_command": cmd,
+                    "command_sent_at": _now(), "confirmation_source": SRC_UNCONFIRMED,
+                    "navixy_command_id": cmd_res.get("navixy_command_id")}
+            await _save_mode_state(db, pend)
+            await _audit(db, {**base, "requested_mode": target_mode,
+                              "resulting_state": PENDING_CONFIRMATION, "result": "sent_pending",
+                              "confirmation_source": SRC_UNCONFIRMED,
+                              "command_mode": "REAL",
+                              "navixy_command_id": cmd_res.get("navixy_command_id")})
+            return {"ok": True, "allowed": True, "state": PENDING_CONFIRMATION,
+                    "pending": True, "reason": "pending_confirmation",
+                    "confirmation_source": SRC_UNCONFIRMED,
+                    "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+        # Non-REAL (simulation off / navixy non configuré) : état transitoire honnête.
+        final = PRIVATE_REQUESTED if target_mode == PRIVATE else BUSINESS_REQUESTED
         await _save_mode_state(db, {**cur, **base, "state": final,
-                                    "last_command": cmd, "confirmation_source": confirm_source})
+                                    "requested_target": target_mode, "last_command": cmd,
+                                    "confirmation_source": confirm_source})
         await _audit(db, {**base, "requested_mode": target_mode, "resulting_state": final,
                           "result": "not_confirmed", "confirmation_source": confirm_source,
                           "command_mode": cmd_res.get("mode")})
@@ -301,6 +441,69 @@ def _private_distance(start_km, end_km) -> Optional[float]:
     if y < x:
         return None  # anomalie -> non fournie
     return round(y - x, 3)
+
+
+# Fenêtre max d'attente d'une confirmation télémétrique avant de basculer en UNKNOWN.
+PENDING_TIMEOUT_S = int(os.environ.get("PRIVATE_MODE_PENDING_TIMEOUT_S", "300"))
+
+
+async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[str] = None,
+                                       *, read_odo_km=_default_read_odo_km) -> dict:
+    """Résout (best-effort, READ-ONLY) un état PENDING_CONFIRMATION via la télémétrie.
+
+    - Confirme -> CONFIRMED PRIVATE/BUSINESS (source TELEMETRY_CONFIRMED) + calcule la distance
+      privée au retour Business.
+    - Si pas de preuve ET timeout dépassé -> UNKNOWN (honnête, jamais faux succès/échec).
+    - Sinon reste PENDING_CONFIRMATION.
+    Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
+    """
+    st = await get_mode_state(db, vehicle_id)
+    if st.get("state") != PENDING_CONFIRMATION:
+        return st
+    tid = tenant_id or st.get("tenant_id") or _TENANT
+    tracker_id = st.get("tracker_id")
+    requested = st.get("requested_target")
+    if not tracker_id or requested not in (PRIVATE, BUSINESS):
+        return st
+
+    # capability (gate télémétrie : profil field_validated uniquement)
+    vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
+    vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
+
+    confirmed, source = await telemetry_confirm(
+        tid, int(tracker_id), requested, st.get("command_sent_at"), vc)
+
+    if confirmed == requested:
+        new_doc = {**st, "state": requested, "confirmation_source": source,
+                   "confirmed_at": _now()}
+        new_doc.pop("requested_target", None)
+        # distance privée au retour Business (jamais inventée)
+        if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
+            odo_end = await read_odo_km(int(tracker_id))
+            new_doc["private_end_time"] = _now()
+            new_doc["private_end_odometer_km"] = odo_end
+            new_doc["private_distance_km"] = _private_distance(
+                st.get("private_start_odometer_km"), odo_end)
+        await _save_mode_state(db, new_doc)
+        await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
+                          "requested_mode": requested, "resulting_state": requested,
+                          "result": "confirmed_async", "confirmation_source": source})
+        return new_doc
+
+    # pas de preuve -> timeout ?
+    sent = _parse(st.get("command_sent_at"))
+    if sent:
+        from datetime import datetime, timezone
+        age = (datetime.now(timezone.utc) - sent).total_seconds()
+        if age >= PENDING_TIMEOUT_S:
+            unk = {**st, "state": UNKNOWN, "confirmation_source": SRC_UNCONFIRMED,
+                   "pending_timeout_at": _now()}
+            await _save_mode_state(db, unk)
+            await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
+                              "requested_mode": requested, "resulting_state": UNKNOWN,
+                              "result": "pending_timeout"})
+            return unk
+    return st  # toujours PENDING
 
 
 # ---------------------------------------------------------------------------

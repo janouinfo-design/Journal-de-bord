@@ -8,6 +8,7 @@ export type PrivateModeState =
   | 'PRIVATE_REQUESTED'
   | 'PRIVATE'
   | 'BUSINESS_REQUESTED'
+  | 'PENDING_CONFIRMATION'
   | 'FAILED'
   | 'UNKNOWN';
 
@@ -15,10 +16,13 @@ export interface PrivateModeStatus {
   state: PrivateModeState;
   allowed: boolean;
   reason?: string | null;
+  pending?: boolean;
+  confirmation_source?: string | null;
   vehicle_id?: string | null;
   tracker_id?: number | null;
   vehicle_plate?: string | null;
   private_odometer_supported?: boolean;
+  private_distance_km?: number | null;
   last_transition_at?: string | null;
 }
 

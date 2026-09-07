@@ -239,4 +239,37 @@ describe('usePrivateMode', () => {
       }
     }
   });
+
+  it('bascule PRIVATE -> PENDING_CONFIRMATION (jamais succès optimiste)', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
+    (api.setPrivateMode as jest.Mock).mockResolvedValue({ ok: true, state: 'PENDING_CONFIRMATION', pending: true });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    // le refresh post-bascule renvoie encore PENDING (confirmation pas encore prouvée)
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true });
+    await act(async () => { await ref.current!.requestMode('PRIVATE'); });
+    await flush();
+    expect(ref.current?.status.state).toBe('PENDING_CONFIRMATION');
+    expect(ref.current?.status.state).not.toBe('PRIVATE');   // jamais affiché confirmé sans preuve
+    expect(ref.current?.pending).toBe(true);
+    tree.unmount();
+  });
+
+  it('PENDING -> confirmation tardive PRIVATE via refresh serveur', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.status.state).toBe('PENDING_CONFIRMATION');
+    // plus tard, le backend confirme PRIVATE (télémétrie)
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'PRIVATE', allowed: true, vehicle_id: 'vA', pending: false });
+    await act(async () => { await ref.current!.refresh(); });
+    await flush();
+    expect(ref.current?.status.state).toBe('PRIVATE');
+    expect(ref.current?.pending).toBe(false);
+    tree.unmount();
+  });
 });

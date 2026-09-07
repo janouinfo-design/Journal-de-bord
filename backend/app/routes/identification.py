@@ -159,16 +159,22 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         vehicle_doc=vehicle, capability=vc,
     )
     st = await pm.get_mode_state(db, vehicle_id)
+    # Si une bascule est en attente de confirmation, tenter de la résoudre (télémétrie, READ-ONLY).
+    if st.get("state") == pm.PENDING_CONFIRMATION:
+        st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
     # capacité odomètre privé : field_validated -> km privés garantis (jamais inventés)
     private_odo_ok = bool(vc and getattr(vc, "field_validated", False))
     return {
         "state": st.get("state", pm.UNKNOWN),
+        "pending": st.get("state") == pm.PENDING_CONFIRMATION,
+        "confirmation_source": st.get("confirmation_source"),
         "allowed": decision["allowed"],
         "reason": decision["reason"],
         "vehicle_id": vehicle_id,
         "tracker_id": tracker_id,
         "vehicle_plate": vehicle.get("plate"),
         "private_odometer_supported": private_odo_ok,
+        "private_distance_km": st.get("private_distance_km"),
         "last_transition_at": st.get("updated_at"),
     }
 

@@ -62,7 +62,11 @@ export function usePrivateMode(pollMs = 15000) {
       }));
       try {
         const res = await setPrivateMode(mode);
-        if (res.ok) {
+        if (res.ok && res.state === 'PENDING_CONFIRMATION') {
+          // Commande envoyée, confirmation device en cours (télémétrie async).
+          // PAS un succès affiché : état "en cours de confirmation", on continue à relire.
+          setStatus((prev) => ({ ...prev, state: 'PENDING_CONFIRMATION' }));
+        } else if (res.ok) {
           setStatus((prev) => ({ ...prev, state: res.state }));
           if (typeof res.private_distance_km === 'number') {
             setLastDistanceKm(res.private_distance_km);
@@ -71,9 +75,8 @@ export function usePrivateMode(pollMs = 15000) {
           // non confirmé / refusé -> message honnête (code HTTP prioritaire, sinon reason)
           setError(reasonToMessage(res.reason, res.http_status));
           // Retour Pro non confirmé : on NE bascule PAS optimiste vers Professionnel.
-          // On relit la vérité serveur ci-dessous.
         }
-        await refresh(); // resynchronise avec la vérité backend
+        await refresh(); // resynchronise avec la vérité backend (résout aussi le PENDING)
       } catch {
         // réseau/timeout/5xx inattendu : état incertain -> UNKNOWN, jamais de fausse confirmation.
         setStatus((prev) => ({ ...prev, state: 'UNKNOWN' }));
@@ -108,6 +111,7 @@ export function usePrivateMode(pollMs = 15000) {
     busy,
     error,
     lastDistanceKm,
+    pending: status.state === 'PENDING_CONFIRMATION',
     privateOdometerSupported: !!status.private_odometer_supported,
     requestMode,
     refresh,
