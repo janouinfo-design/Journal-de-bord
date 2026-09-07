@@ -174,6 +174,9 @@ frontend:
       - working: true
         agent: "testing"
         comment: "Phase 2 Confidentialité validation COMPLETE. Hook tests: 6/6 PASSED (non-optimistic state management, backend authoritative, no jargon in error messages, anti-concurrence, UNKNOWN fallback). Full regression: 7 suites / 41 tests PASSED. Typecheck: PASS. Static audit: ALL 6 criteria PASSED - (a) all states handled (BUSINESS/PRIVATE/REQUESTED/UNKNOWN), (b) section gated by allowed flag, (c) buttons disabled during busy+REQUESTED, (d) ZERO technical jargon (no AVL/Navixy/Teltonika/privatemode/raw_command), (e) all testIDs present (private-mode-section/state/business/private/error), (f) no position data exposed when PRIVATE. Implementation is production-ready. NO ISSUES FOUND."
+      - working: true
+        agent: "testing"
+        comment: "FAIL-CLOSED UI TEST PASSED (2026-09-07) - Driver Mobile App (Expo web, mobile viewport 390x844). Verified PRIVATE_MODE_ENABLED feature flag NOT set (fail-closed by design). Test results: (1) Login successful with chauffeur@logitrak.ch / chauffeur123 ✓, (2) Driver screen rendered correctly (Jean Dupont, no active session, vehicle search, PRO/PRIVÉ mobile override buttons) ✓, (3) CRITICAL: private-mode-section (testID) NOT present ✓ (expected - feature disabled), (4) private-mode-unavailable (testID) NOT present ✓ (expected - FEATURE_DISABLED reason is intentionally hidden/discreet), (5) No console errors (only 2 deprecation warnings: pointerEvents, shadow* props) ✓, (6) SECURITY: NO forbidden strings found in DOM or console (Navixy, Teltonika, privatemode, AVL, 11813, 11000, raw_command, navixy_hash, api_key, Bearer, INTEGRATION_ENCRYPTION_KEY) ✓. Fail-closed behavior verified: when feature flag is OFF, driver cannot see or toggle Private mode. UI is discreet (no error message, no unavailable notice). App renders without crashes. Screenshot captured. NO ISSUES FOUND."
 
 metadata:
   created_by: "main_agent"
@@ -188,6 +191,50 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      PRIVATE MODE FAIL-CLOSED UI TEST COMPLETE (2026-09-07)
+      
+      CONTEXT: UI verification of Private Mode fail-closed behavior in Driver Mobile App (Expo web). Feature flag PRIVATE_MODE_ENABLED is NOT set (fail-closed by design), backend returns allowed=false with reason PRIVATE_MODE_FEATURE_DISABLED.
+      
+      TEST RESULTS (Playwright mobile viewport 390x844 against https://confidentialite-flag.preview.emergentagent.com):
+      ✅ ALL CHECKS PASSED (0 FAILED, 0 SECURITY ISSUES, 0 CRITICAL ERRORS)
+      
+      DETAILED VERIFICATION:
+      
+      ✅ (1) Login successful:
+         - Credentials: chauffeur@logitrak.ch / chauffeur123 ✓
+         - Driver screen loaded (testID driver-scroll found) ✓
+         - User name displayed: "Jean Dupont" ✓
+      
+      ✅ (2) CRITICAL - private-mode-section NOT present:
+         - testID "private-mode-section" count = 0 ✓
+         - Expected behavior: when feature flag OFF, section is completely hidden ✓
+         - Fail-closed verified: driver cannot see or toggle Private mode ✓
+      
+      ✅ (3) private-mode-unavailable NOT present:
+         - testID "private-mode-unavailable" count = 0 ✓
+         - Expected behavior: FEATURE_DISABLED reason is intentionally hidden/discreet ✓
+         - No error message, no unavailable notice shown to driver ✓
+      
+      ✅ (4) Non-regression - Driver screen rendered correctly:
+         - Vehicle/session area: "Aucune session active" (no active session) ✓
+         - Vehicle search button present ✓
+         - Recent vehicles section present (GE 123456 Mercedes Sprinter) ✓
+         - PRO/PRIVÉ mobile override buttons present (testID driver-mode-pro, driver-mode-perso) ✓
+         - Bottom tabs: Conduite, Mes trajets, Profil, Réglages ✓
+      
+      ✅ (5) Console logs clean:
+         - 0 critical errors ✓
+         - Only 2 deprecation warnings (pre-existing): pointerEvents, shadow* props ✓
+      
+      ✅ (6) SECURITY - NO forbidden strings found:
+         - Checked DOM and console for: Navixy, Teltonika, privatemode, AVL, 11813, 11000, raw_command, navixy_hash, api_key, Bearer, INTEGRATION_ENCRYPTION_KEY ✓
+         - 0 forbidden strings found ✓
+         - No technical jargon or secrets exposed ✓
+      
+      CONCLUSION:
+      Fail-closed behavior verified correctly. When PRIVATE_MODE_ENABLED feature flag is NOT set, the UI is discreet: NO private-mode section, NO unavailable notice, NO error message. Driver cannot see or interact with Private Mode feature. App renders without crashes. Security verified: no jargon or secrets exposed. Screenshot captured. NO ISSUES FOUND.
   - agent: "testing"
     message: |
       PRIVATE MODE FAIL-CLOSED ORDERING FIX VERIFICATION COMPLETE (2026-09-03)

@@ -132,4 +132,111 @@ describe('usePrivateMode', () => {
     expect(ref.current?.status.state).toBe('UNKNOWN');
     tree.unmount();
   });
+
+  // --- Scénario CLÉ : relaunch en Privé -> retrouve PRIVATE depuis le backend ---
+  it('relaunch : Privé restauré depuis le backend (aucun état local supposé)', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PRIVATE', allowed: true, vehicle_id: 'v1', private_odometer_supported: true,
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); }); // "relaunch"
+    await flush();
+    expect(ref.current?.status.state).toBe('PRIVATE');
+    expect(ref.current?.privateOdometerSupported).toBe(true);
+    tree.unmount();
+  });
+
+  it('allowed=false -> requestMode ne déclenche aucun appel + message', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'UNKNOWN', allowed: false, reason: 'PRIVATE_MODE_NOT_SUPPORTED', vehicle_id: 'v1',
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    await act(async () => { await ref.current!.requestMode('PRIVATE'); });
+    await flush();
+    expect(api.setPrivateMode).not.toHaveBeenCalled();
+    expect(ref.current?.error).toBeTruthy();
+    tree.unmount();
+  });
+
+  it('private_odometer_supported=false -> aucune promesse de km', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PRIVATE', allowed: true, vehicle_id: 'v1', private_odometer_supported: false,
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.privateOdometerSupported).toBe(false);
+    tree.unmount();
+  });
+
+  it('refus 409 -> message conflit, pas de PRIVATE', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'v1' });
+    (api.setPrivateMode as jest.Mock).mockResolvedValue({
+      ok: false, allowed: true, state: 'UNKNOWN', reason: null, http_status: 409,
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    await act(async () => { await ref.current!.requestMode('PRIVATE'); });
+    await flush();
+    expect(ref.current?.status.state).not.toBe('PRIVATE');
+    expect((ref.current?.error ?? '').toLowerCase()).toContain('état du véhicule'.toLowerCase());
+    tree.unmount();
+  });
+
+  it('refus 503 -> message indisponibilité temporaire', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'v1' });
+    (api.setPrivateMode as jest.Mock).mockResolvedValue({
+      ok: false, allowed: true, state: 'UNKNOWN', reason: 'PRIVATE_MODE_INTEGRATION_UNAVAILABLE', http_status: 503,
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    await act(async () => { await ref.current!.requestMode('PRIVATE'); });
+    await flush();
+    expect((ref.current?.error ?? '').toLowerCase()).toContain('indisponible');
+    tree.unmount();
+  });
+
+  it('changement de véhicule -> reset (pas de contamination d\'état)', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
+    (api.setPrivateMode as jest.Mock).mockResolvedValue({ ok: true, state: 'BUSINESS', private_distance_km: 12.3 });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    // simulate a distance recorded on vehicle A
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'PRIVATE', allowed: true, vehicle_id: 'vA' });
+    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
+    await flush();
+    expect(ref.current?.lastDistanceKm).toBe(12.3);
+    // now vehicle changes to vB -> refresh should reset lastDistanceKm
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vB' });
+    await act(async () => { await ref.current!.refresh(); });
+    await flush();
+    expect(ref.current?.lastDistanceKm).toBeNull();
+    tree.unmount();
+  });
+
+  it('aucun jargon technique dans les messages de raison', async () => {
+    const { reasonToMessage } = require('@/hooks/usePrivateMode');
+    const reasons = [
+      'PRIVATE_MODE_FEATURE_DISABLED', 'PRIVATE_MODE_NOT_SUPPORTED',
+      'PRIVATE_MODE_INTEGRATION_UNAVAILABLE', 'PRIVATE_MODE_KILL_SWITCH_ACTIVE',
+      'not_confirmed', null,
+    ];
+    for (const r of reasons) {
+      const msg = reasonToMessage(r, 409).toLowerCase();
+      for (const bad of ['avl', 'navixy', 'teltonika', 'privatemode', '11813', '11000', 'raw_command', 'tracker']) {
+        expect(msg).not.toContain(bad);
+      }
+    }
+  });
 });

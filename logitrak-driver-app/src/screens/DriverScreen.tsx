@@ -367,16 +367,23 @@ export function DriverScreen() {
                 : privateMode.status.state === 'BUSINESS'
                 ? 'Mode Professionnel activé'
                 : privateMode.status.state === 'PRIVATE_REQUESTED'
-                ? 'Passage en mode Privé…'
+                ? 'Activation du Mode Privé…'
                 : privateMode.status.state === 'BUSINESS_REQUESTED'
                 ? 'Retour en mode Professionnel…'
                 : 'État indéterminé'}
             </Text>
             {privateMode.status.state === 'PRIVATE' ? (
               <Text style={styles.privacyHint}>
-                Votre position n’est pas affichée. Les kilomètres parcourus restent comptabilisés.
+                Votre position n’est pas affichée.
+                {privateMode.privateOdometerSupported
+                  ? ' Les kilomètres parcourus restent comptabilisés.'
+                  : ''}
               </Text>
-            ) : null}
+            ) : (
+              <Text style={styles.privacyHint}>
+                Position utilisée pour le suivi du véhicule.
+              </Text>
+            )}
 
             <View style={styles.modesRow}>
               <ModeButton
@@ -406,6 +413,20 @@ export function DriverScreen() {
                 {privateMode.error}
               </Text>
             ) : null}
+          </View>
+        ) : privateMode.status.reason &&
+          privateMode.status.reason !== 'PRIVATE_MODE_NO_VEHICLE' &&
+          privateMode.status.reason !== 'PRIVATE_MODE_FEATURE_DISABLED' ? (
+          /* Non autorisé pour une raison "utile" à afficher (véhicule non compatible,
+             indisponibilité temporaire). Message simple, sans jargon technique.
+             Si feature globalement OFF ou pas de véhicule -> on n'affiche RIEN (discret). */
+          <View style={styles.privacyCard} testID="private-mode-unavailable">
+            <Text style={styles.privacyTitle}>Confidentialité</Text>
+            <Text style={styles.privacyHint}>
+              {privateMode.status.reason === 'PRIVATE_MODE_NOT_SUPPORTED'
+                ? 'Mode Privé indisponible pour ce véhicule.'
+                : 'Mode Privé temporairement indisponible.'}
+            </Text>
           </View>
         ) : null}
 
