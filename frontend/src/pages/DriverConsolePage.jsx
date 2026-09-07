@@ -27,10 +27,18 @@ export default function DriverConsolePage() {
   const [connected, setConnected] = useState(false);
   const [loadingVehicle, setLoadingVehicle] = useState(true);
 
-  const [pm, setPm] = useState({ state: "UNKNOWN", allowed: false, reason: null, pending: false });
+  const [pm, setPm] = useState({ state: "UNKNOWN", allowed: false, reason: null, pending: false, can_switch: false, can_switch_reason: null });
   const [pmBusy, setPmBusy] = useState(false);
 
-  const [km, setKm] = useState({ pro: null, priv: null, label: "Mois en cours", available: false, loading: true });
+  // KM : état DÉCOUPLÉ du Mode Privé. On conserve la dernière valeur VALIDE pour le
+  // contexte courant (véhicule + période) ; on n'efface JAMAIS sur erreur/refetch/transition.
+  //  - hasValid : au moins une réponse valide reçue pour ce contexte.
+  //  - refreshing : un refetch est en cours (indicateur discret, sans effacer les chiffres).
+  //  - initialLoading : premier chargement sans aucune valeur valide (affiche « … »).
+  const [km, setKm] = useState({
+    pro: null, priv: null, label: "Mois en cours",
+    hasValid: false, initialLoading: true, refreshing: false,
+  });
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [myVehicles, setMyVehicles] = useState([]);
@@ -62,14 +70,25 @@ export default function DriverConsolePage() {
   }, []);
 
   const loadKm = useCallback(async () => {
-    setKm((k) => ({ ...k, loading: true }));
+    // Refetch NON destructif : on marque « refreshing » sans toucher aux chiffres actuels.
+    setKm((k) => ({ ...k, refreshing: true }));
     try {
       const { data } = await api.get("/livre/driver/km-summary", { params: { period: "month" } });
-      setKm({ pro: data.available ? data.pro_km : null, priv: data.available ? data.private_km : null,
-              label: data.period_label || "Mois en cours",
-              available: !!data.available, loading: false });
+      const label = data.period_label || "Mois en cours";
+      if (data.available) {
+        // Valeurs réelles (0 km = valeur calculée légitime ; null seulement si absent).
+        setKm({
+          pro: typeof data.pro_km === "number" ? data.pro_km : null,
+          priv: typeof data.private_km === "number" ? data.private_km : null,
+          label, hasValid: true, initialLoading: false, refreshing: false,
+        });
+      } else {
+        // available=false -> aucun véhicule/donnée : état « N/A » honnête (jamais 0 inventé).
+        setKm({ pro: null, priv: null, label, hasValid: false, initialLoading: false, refreshing: false });
+      }
     } catch {
-      setKm({ pro: null, priv: null, label: "Mois en cours", available: false, loading: false });
+      // Erreur/timeout : NE JAMAIS effacer une dernière valeur valide. On sort juste du refresh.
+      setKm((k) => ({ ...k, initialLoading: false, refreshing: false }));
     }
   }, []);
 
@@ -83,11 +102,12 @@ export default function DriverConsolePage() {
     return () => clearInterval(t);
   }, [refreshAll, loadPrivateMode]);
 
-  // reset km quand le véhicule change (pas de contamination A -> B)
+  // reset km quand le véhicule change (pas de contamination A -> B) :
+  // on PURGE la dernière valeur (contexte différent) puis on recharge.
   useEffect(() => {
     const vid = vehicle?.id ?? null;
     if (lastVehicleId.current !== undefined && lastVehicleId.current !== vid) {
-      setKm({ pro: null, priv: null, label: "Mois en cours", available: false, loading: true });
+      setKm({ pro: null, priv: null, label: "Mois en cours", hasValid: false, initialLoading: true, refreshing: false });
     }
     lastVehicleId.current = vid;
     if (vid) loadKm();
@@ -114,6 +134,12 @@ export default function DriverConsolePage() {
 
   const setMode = useCallback(async (mode) => {
     if (pmInFlight.current) return;   // anti double-clic
+    // Garde-fou UX : si le changement n'est pas exécutable (écriture device coupée,
+    // transition en cours, non éligible) -> message immédiat, AUCUN POST, aucun spinner.
+    if (!pm.can_switch) {
+      toast.info(reasonMessage(pm.can_switch_reason, null));
+      return;
+    }
     pmInFlight.current = true;
     setPmBusy(true);
     try {
@@ -127,15 +153,18 @@ export default function DriverConsolePage() {
         // ok=false (ex. non confirmé, transition en cours) -> message honnête, aucun état optimiste
         toast.info(reasonMessage(data.reason, null));
       }
-      // Dans TOUS les cas : on récupère l'état RÉEL du serveur (source de vérité).
-      await loadPrivateMode();
     } catch (e) {
       const st = e?.response?.status;
       const detail = e?.response?.data?.detail;
-      toast.error(reasonMessage(detail, st));
-      await loadPrivateMode();
-    } finally { setPmBusy(false); pmInFlight.current = false; }
-  }, [loadPrivateMode]);
+      toast.info(reasonMessage(detail, st));
+    } finally {
+      setPmBusy(false); pmInFlight.current = false;
+      // Source de vérité serveur : on rafraîchit l'état + les km SÉPARÉMENT (découplés).
+      // Le refetch km est NON destructif : les derniers km valides restent affichés.
+      loadPrivateMode();
+      loadKm();
+    }
+  }, [pm.can_switch, pm.can_switch_reason, loadPrivateMode, loadKm]);
 
   const triggerSos = useCallback(async () => {
     if (sosInFlight.current) return;
@@ -165,8 +194,15 @@ export default function DriverConsolePage() {
   const isBusiness = st === "BUSINESS";
   const isPending = st === "PENDING_CONFIRMATION" || st === "PRIVATE_REQUESTED" || st === "BUSINESS_REQUESTED";
   const hasVehicle = !!vehicle?.id;
-  const canToggle = hasVehicle && pm.allowed && !pmBusy && !isPending;
-  const fmtKm = (v) => (typeof v === "number" ? `${v.toFixed(1)} km` : "—");
+  // canToggle = capacité d'ACTION réelle (can_switch backend), pas seulement l'éligibilité.
+  const canToggle = hasVehicle && pm.can_switch && !pmBusy && !isPending;
+  // Affichage km : « … » au tout premier chargement, « N/A » si aucune donnée valide,
+  // valeur réelle sinon (0 km reste 0 km ; jamais inventé).
+  const kmDisplay = (v) => {
+    if (km.initialLoading && !km.hasValid) return "…";
+    if (typeof v === "number") return `${v.toFixed(1)} km`;
+    return "N/A";
+  };
 
   return (
     <div data-testid="driver-console-page" className="min-h-screen bg-slate-900 text-white flex flex-col">
@@ -244,14 +280,16 @@ export default function DriverConsolePage() {
         {/* Aide contextuelle (sans jargon) */}
         {hasVehicle && pm.allowed ? (
           <p className="text-xs text-slate-400 leading-relaxed" data-testid="driver-mode-help">
-            {isPrivate
+            {isPending
+              ? "Changement en cours de confirmation…"
+              : (pm.can_switch === false && pm.can_switch_reason === "PRIVATE_MODE_DEVICE_WRITE_DISABLED")
+              ? "Le changement de mode est temporairement indisponible."
+              : isPrivate
               ? (pm.private_odometer_supported
                   ? "Mode Privé actif. Votre position est masquée. Vos kilomètres privés continuent d'être comptabilisés."
                   : "Mode Privé actif. Votre position est masquée.")
               : isBusiness
               ? "Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels."
-              : isPending
-              ? "Changement en cours de confirmation…"
               : "Sélectionnez votre mode."}
           </p>
         ) : hasVehicle && !pm.allowed && pm.reason === "PRIVATE_MODE_NOT_SUPPORTED" ? (
@@ -259,17 +297,20 @@ export default function DriverConsolePage() {
         ) : null}
 
         {/* Km Professionnels / Km Privés — mois en cours */}
-        <p className="text-[10px] uppercase tracking-wider text-slate-400">Kilomètres — {km.label}</p>
+        <p className="text-[10px] uppercase tracking-wider text-slate-400">
+          Kilomètres — {km.label}
+          {km.refreshing && !km.initialLoading ? <span className="ml-2 text-slate-500 normal-case" data-testid="driver-km-refreshing">Actualisation…</span> : null}
+        </p>
         <div className="grid grid-cols-2 gap-3">
           <Card className="bg-slate-800 border-slate-700 p-4" data-testid="driver-km-pro">
             <p className="text-xs font-semibold text-slate-100">Km Professionnels</p>
             <p className="text-[10px] text-slate-500 mb-1">{km.label}</p>
-            <p className="text-2xl font-bold text-[#2196F3]">{km.loading ? "…" : fmtKm(km.pro)}</p>
+            <p className="text-2xl font-bold text-[#2196F3]" data-testid="driver-km-pro-value">{kmDisplay(km.pro)}</p>
           </Card>
           <Card className="bg-slate-800 border-slate-700 p-4" data-testid="driver-km-private">
             <p className="text-xs font-semibold text-slate-100">Km Privés</p>
             <p className="text-[10px] text-slate-500 mb-1">{km.label}</p>
-            <p className="text-2xl font-bold text-slate-100">{km.loading ? "…" : fmtKm(km.priv)}</p>
+            <p className="text-2xl font-bold text-slate-100" data-testid="driver-km-private-value">{kmDisplay(km.priv)}</p>
           </Card>
         </div>
 
@@ -331,18 +372,21 @@ function reasonMessage(reason, httpStatus) {
     case "PRIVATE_MODE_KILL_SWITCH_ACTIVE":
     case "PRIVATE_MODE_INTEGRATION_UNAVAILABLE":
       return "Mode Privé temporairement indisponible. Réessayez plus tard.";
+    case "PRIVATE_MODE_DEVICE_WRITE_DISABLED":
+      return "Le changement de mode est temporairement indisponible.";
     case "PRIVATE_MODE_NOT_SUPPORTED":
       return "Le mode Privé n'est pas disponible pour ce véhicule.";
     case "PRIVATE_MODE_NO_TRACKER":
     case "PRIVATE_MODE_NO_VEHICLE":
       return "Aucun véhicule actif.";
-    case "not_confirmed":
-      return "Le changement n'a pas encore été confirmé. Réessayez dans un instant.";
+    case "PRIVATE_MODE_TRANSITION_IN_PROGRESS":
     case "transition_in_progress":
       return "Un changement de mode est déjà en cours…";
+    case "not_confirmed":
+      return "Le changement n'a pas encore été confirmé. Réessayez dans un instant.";
   }
   if (httpStatus === 409) return "Le changement n'a pas pu être effectué car l'état du véhicule a changé.";
-  if (httpStatus === 503) return "Mode Privé temporairement indisponible. Réessayez plus tard.";
+  if (httpStatus === 503) return "Le changement de mode est temporairement indisponible.";
   if (httpStatus === 401 || httpStatus === 403) return "Action non autorisée ou session expirée.";
   return "Action impossible pour le moment.";
 }

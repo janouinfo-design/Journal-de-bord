@@ -344,12 +344,30 @@ async def request_mode(
 
     # --- Idempotence : déjà dans l'état cible -> no-op (aucune commande device) ---
     if cur_state == target_mode:
-        return {"ok": True, "allowed": True, "state": cur_state, "idempotent": True,
-                "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+        return {"ok": True, "allowed": True, "can_switch": True, "state": cur_state,
+                "idempotent": True, "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
     # --- Anti-concurrence : une transition est déjà en cours (requested ou pending) ---
     if cur_state in (PRIVATE_REQUESTED, BUSINESS_REQUESTED, PENDING_CONFIRMATION):
-        return {"ok": False, "allowed": True, "state": cur_state, "reason": "transition_in_progress",
+        return {"ok": False, "allowed": True, "can_switch": False,
+                "state": cur_state, "reason": gate.R_TRANSITION_IN_PROGRESS,
+                "http": gate.HTTP_BY_REASON[gate.R_TRANSITION_IN_PROGRESS],
+                "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+
+    # --- FAIL-FAST : écriture device désactivée (PRIVATE_MODE_DEVICE_WRITE=0) ---
+    # Éligibilité OK (allowed=True) MAIS aucune commande ne peut être envoyée au device.
+    # On REFUSE AVANT toute création d'état transitoire : jamais de PRIVATE_REQUESTED /
+    # BUSINESS_REQUESTED / PENDING_CONFIRMATION, jamais de commande device. L'état confirmé
+    # précédent reste STRICTEMENT INCHANGÉ (BUSINESS->BUSINESS, PRIVATE->PRIVATE, UNKNOWN->UNKNOWN).
+    if not device_write_enabled():
+        await _audit(db, {"driver_id": driver_id, "vehicle_id": vehicle_id,
+                          "tracker_id": tracker_id, "requested_mode": target_mode,
+                          "result": "refused", "reason": gate.R_DEVICE_WRITE_DISABLED,
+                          "tenant_id": tid, "state_preserved": cur_state})
+        return {"ok": False, "allowed": True, "can_switch": False,
+                "reason": gate.R_DEVICE_WRITE_DISABLED,
+                "http": gate.HTTP_BY_REASON[gate.R_DEVICE_WRITE_DISABLED],
+                "state": cur_state,  # INCHANGÉ (aucune transition créée)
                 "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
     requested_state = PRIVATE_REQUESTED if target_mode == PRIVATE else BUSINESS_REQUESTED

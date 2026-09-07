@@ -78,5 +78,5 @@ Doit retourner la ligne `content-security-policy: frame-ancestors …`.
 Configuré via `craco.config.js` → `devServer.headers`. Déjà actif :
 
 ```bash
-curl -sI https://confidentialite-flag.preview.emergentagent.com/ | grep -i content-security
+curl -sI https://private-mode-debug.preview.emergentagent.com/ | grep -i content-security
 ```

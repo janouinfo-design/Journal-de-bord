@@ -138,15 +138,18 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     # Fail-closed niveau 1/2 : feature globale + kill switch AVANT toute résolution.
     if not gate.feature_enabled():
         return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_FEATURE_DISABLED,
+                "can_switch": False, "can_switch_reason": gate.R_FEATURE_DISABLED,
                 "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
                 "private_odometer_supported": False}
     if await gate.kill_switch_active(db):
         return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_KILL_SWITCH,
+                "can_switch": False, "can_switch_reason": gate.R_KILL_SWITCH,
                 "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
                 "private_odometer_supported": False}
     sess = await ble_engine.get_current_session(db, driver_id)
     if not sess or not sess.get("vehicle_id"):
         return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_NO_VEHICLE,
+                "can_switch": False, "can_switch_reason": gate.R_NO_VEHICLE,
                 "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
                 "private_odometer_supported": False}
     vehicle_id = sess["vehicle_id"]
@@ -164,12 +167,32 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
     # capacité odomètre privé : field_validated -> km privés garantis (jamais inventés)
     private_odo_ok = bool(vc and getattr(vc, "field_validated", False))
+
+    # --- can_switch : capacité d'ACTION (distincte de l'éligibilité `allowed`) ---
+    # allowed  = chauffeur/véhicule éligible au pilote (gate fail-closed).
+    # can_switch = le changement de mode est réellement exécutable MAINTENANT.
+    # Il est False si : non éligible, écriture device coupée, ou transition en cours.
+    allowed = decision["allowed"]
+    state_now = st.get("state", pm.UNKNOWN)
+    in_transition = state_now in (pm.PRIVATE_REQUESTED, pm.BUSINESS_REQUESTED, pm.PENDING_CONFIRMATION)
+    device_write = pm.device_write_enabled()
+    can_switch = bool(allowed and device_write and not in_transition)
+    if not allowed:
+        can_switch_reason = decision["reason"]
+    elif in_transition:
+        can_switch_reason = gate.R_TRANSITION_IN_PROGRESS
+    elif not device_write:
+        can_switch_reason = gate.R_DEVICE_WRITE_DISABLED
+    else:
+        can_switch_reason = None
     return {
-        "state": st.get("state", pm.UNKNOWN),
+        "state": state_now,
         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
         "confirmation_source": st.get("confirmation_source"),
-        "allowed": decision["allowed"],
+        "allowed": allowed,
         "reason": decision["reason"],
+        "can_switch": can_switch,
+        "can_switch_reason": can_switch_reason,
         "vehicle_id": vehicle_id,
         "tracker_id": tracker_id,
         "vehicle_plate": vehicle.get("plate"),
@@ -203,9 +226,16 @@ async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(get_curre
     tenant_id = user.get("tenant_id") or "default"
     res = await pm.request_mode(db, driver_id, mode, actor=user.get("email", "?"),
                                 resolve_session=_resolve_session, tenant_id=tenant_id)
-    # Refus d'autorisation -> code HTTP explicite (jamais un simple 500).
+    # Refus d'ÉLIGIBILITÉ (gate) -> code HTTP explicite (jamais un simple 500).
     if res.get("ok") is False and res.get("allowed") is False and res.get("http"):
         raise HTTPException(res["http"], res.get("reason") or "PRIVATE_MODE_NOT_ALLOWED")
+    # Refus de CAPACITÉ D'ACTION : écriture device coupée (DEVICE_WRITE=0). Garde-fou
+    # backend (le frontend désactive normalement déjà le bouton via can_switch=False).
+    # Aucun état transitoire n'a été créé ; l'état confirmé précédent est conservé.
+    from app import private_mode_gate as _gate
+    if res.get("ok") is False and res.get("reason") == _gate.R_DEVICE_WRITE_DISABLED:
+        raise HTTPException(_gate.HTTP_BY_REASON[_gate.R_DEVICE_WRITE_DISABLED],
+                            _gate.R_DEVICE_WRITE_DISABLED)
     # jamais de secret/raw device dans la réponse ; statuts métier uniquement
     return res
 

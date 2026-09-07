@@ -235,6 +235,9 @@ def _full_pilot_env(monkeypatch):
     monkeypatch.setenv("PRIVATE_MODE_ENABLED", "1")
     monkeypatch.setenv("PRIVATE_MODE_PILOT_TENANTS", "default")
     monkeypatch.setenv("PRIVATE_MODE_PILOT_TRACKERS", "3657864")
+    # Ces tests envoient une commande RÉELLE (mock real_send) -> l'écriture device doit
+    # être ouverte, sinon fail-fast avant toute transition.
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "1")
     monkeypatch.delenv("PRIVATE_MODE_SIMULATE_CONFIRM", raising=False)
     from app import integrations
     monkeypatch.setattr(integrations, "get_integration_credential",

@@ -19,7 +19,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/my-vehicles returns ONLY vehicles assigned to the driver (via assignments table), NOT the whole fleet. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) Correct structure: returns {vehicles:[{id,plate,model},...]} with ONLY id/plate/model fields (no GPS, no secrets) ✓. (3) Scoping verified: driver has 0 assigned vehicles initially, fleet has 6 total vehicles → driver sees 0 (correct scoping) ✓. After creating assignment → driver sees 1 vehicle (the assigned one) ✓. (4) Empty assignments: returns {vehicles:[]} (200, not error) ✓. (5) Security: NO secrets (navixy_hash/api_key/token/navixy_tracker_id) ✓, NO GPS coordinates (lat/lng/address) ✓. Credentials: chauffeur@logitrak.ch / chauffeur123, admin@logitrak.ch / admin123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/my-vehicles returns ONLY vehicles assigned to the driver (via assignments table), NOT the whole fleet. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) Correct structure: returns {vehicles:[{id,plate,model},...]} with ONLY id/plate/model fields (no GPS, no secrets) ✓. (3) Scoping verified: driver has 0 assigned vehicles initially, fleet has 6 total vehicles → driver sees 0 (correct scoping) ✓. After creating assignment → driver sees 1 vehicle (the assigned one) ✓. (4) Empty assignments: returns {vehicles:[]} (200, not error) ✓. (5) Security: NO secrets (navixy_hash/api_key/token/navixy_tracker_id) ✓, NO GPS coordinates (lat/lng/address) ✓. Credentials: chauffeur@logitrak.ch / chauffeur123, admin@logitrak.ch / admin123. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Driver manual UX - GET /api/livre/driver/km-summary"
     implemented: true
     working: true
@@ -30,7 +30,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/km-summary?period=today|month returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) No active session: returns {available:false, vehicle_id:null, pro_km:null, private_km:null} (honest, not fake 0) ✓. (3) With active session: returns {available:true, vehicle_id:..., pro_km:0, private_km:0} for today (no trips today) ✓, {pro_km:380.3, private_km:51.8} for month (real trip data) ✓. (4) Period validation: period=today ✓, period=month ✓, period=week → 422 (regex validation) ✓. (5) Scoping: km values scoped to driver's ACTIVE vehicle only (verified vehicle_id matches current session) ✓. (6) Security: NO secrets ✓, NO GPS coordinates (lat/lng/address) ✓. (7) Non-regression: /auth/me, /driver/private-mode, /driver/my-vehicle, /livre/dashboard all 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/km-summary?period=today|month returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) No active session: returns {available:false, vehicle_id:null, pro_km:null, private_km:null} (honest, not fake 0) ✓. (3) With active session: returns {available:true, vehicle_id:..., pro_km:0, private_km:0} for today (no trips today) ✓, {pro_km:380.3, private_km:51.8} for month (real trip data) ✓. (4) Period validation: period=today ✓, period=month ✓, period=week → 422 (regex validation) ✓. (5) Scoping: km values scoped to driver's ACTIVE vehicle only (verified vehicle_id matches current session) ✓. (6) Security: NO secrets ✓, NO GPS coordinates (lat/lng/address) ✓. (7) Non-regression: /auth/me, /driver/private-mode, /driver/my-vehicle, /livre/dashboard all 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Driver emergency SOS - POST /api/livre/driver/sos"
     implemented: true
     working: true
@@ -41,7 +41,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "NEW SOS ENDPOINT VALIDATION COMPLETE - All 7 tests PASSED (2026-09-07). POST /api/livre/driver/sos (driver auth) persists SOS alert to sos_alerts collection, dispatches notification (event 'sos.triggered') to admins/managers, and implements anti-double-send (60s deduplication). Test results: (1) Driver SOS success: POST {note:'test urgence', share_location:true} → HTTP 200, ok=true, sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' (valid UUID), duplicate=false, vehicle_selected=false, message='Alerte SOS envoyée.' ✓. Response contains NO GPS coordinates (lat/lng/address) ✓, NO secrets (navixy_hash/api_key/token/Navixy/Teltonika) ✓. (2) Anti-double-send: Immediate 2nd POST (same driver, <60s) → HTTP 200, ok=true, duplicate=true, SAME sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' ✓ (anti-double-send verified). (3) Admin (no driver record): POST as admin@logitrak.ch → HTTP 400 'Utilisateur non lié à un chauffeur' ✓ (only drivers can trigger SOS). (4) Unauthenticated: POST without token → HTTP 401 ✓. (5) Notification created: GET /api/livre/notifications/inbox as admin → HTTP 200, found notification with event='sos.triggered', title='🆘 Alerte SOS', body='Jean Dupont a déclenché une alerte SOS.', data contains sos_id/driver_id/vehicle_id/has_location ✓. Notification contains NO GPS coords ✓, NO secrets ✓. (6) Security: ALL responses checked across 7 tests, 0 security issues found ✓. NO forbidden strings: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓. NO GPS coordinates: lat, lng, latitude, longitude, address, coordinates, position, location ✓. (7) Non-regression: GET /api/auth/me (driver+admin) → 200 ✓, GET /api/livre/driver/private-mode → 200 ✓, GET /api/livre/driver/km-summary?period=today → 200 ✓, GET /api/livre/dashboard → 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch / admin123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "NEW SOS ENDPOINT VALIDATION COMPLETE - All 7 tests PASSED (2026-09-07). POST /api/livre/driver/sos (driver auth) persists SOS alert to sos_alerts collection, dispatches notification (event 'sos.triggered') to admins/managers, and implements anti-double-send (60s deduplication). Test results: (1) Driver SOS success: POST {note:'test urgence', share_location:true} → HTTP 200, ok=true, sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' (valid UUID), duplicate=false, vehicle_selected=false, message='Alerte SOS envoyée.' ✓. Response contains NO GPS coordinates (lat/lng/address) ✓, NO secrets (navixy_hash/api_key/token/Navixy/Teltonika) ✓. (2) Anti-double-send: Immediate 2nd POST (same driver, <60s) → HTTP 200, ok=true, duplicate=true, SAME sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' ✓ (anti-double-send verified). (3) Admin (no driver record): POST as admin@logitrak.ch → HTTP 400 'Utilisateur non lié à un chauffeur' ✓ (only drivers can trigger SOS). (4) Unauthenticated: POST without token → HTTP 401 ✓. (5) Notification created: GET /api/livre/notifications/inbox as admin → HTTP 200, found notification with event='sos.triggered', title='🆘 Alerte SOS', body='Jean Dupont a déclenché une alerte SOS.', data contains sos_id/driver_id/vehicle_id/has_location ✓. Notification contains NO GPS coords ✓, NO secrets ✓. (6) Security: ALL responses checked across 7 tests, 0 security issues found ✓. NO forbidden strings: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓. NO GPS coordinates: lat, lng, latitude, longitude, address, coordinates, position, location ✓. (7) Non-regression: GET /api/auth/me (driver+admin) → 200 ✓, GET /api/livre/driver/private-mode → 200 ✓, GET /api/livre/driver/km-summary?period=today → 200 ✓, GET /api/livre/dashboard → 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch / admin123. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Privacy redaction in report exports"
     implemented: true
     working: true
@@ -52,7 +52,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "PRIVACY REDACTION VALIDATION COMPLETE - All 16 tests PASSED (2026-09-07). Verified that trips performed in Private Mode (device) have their addresses/coordinates REDACTED in CSV/PDF/XLSX exports, even if classified as 'professional'. Test results: (1) CSV Export ✓ - Private addresses 'Lausanne (DEV fixture)' and 'Genève (DEV fixture)' NOT found in CSV, redaction label 'Privé — position masquée' present, business data (62.3 km) preserved, 858 real addresses from non-private trips present (business trips not over-redacted). (2) XLSX Export ✓ - No private addresses in raw bytes (34,295 bytes), valid XLSX format. (3) PDF Export ✓ - No private addresses in raw bytes (82,748 bytes), valid PDF format. (4) Swiss Tax Report ✓ - HTTP 200, correct PDF content-type, valid PDF (2,658 bytes). (5) Trips Endpoint ✓ - 500 trips returned (1 private, 499 non-private), private trip has null coordinates (start_lat/start_lng/start_address/end_address all null), non-private trips keep coordinates. DEV fixture trip 'DEV-PRIVATE-FIXTURE-0001' verified: private_redacted=true, classification=professional, distance_km=62.3, addresses null. NO PRIVACY LEAKS DETECTED. Credentials: admin@logitrak.ch. Backend URL: https://confidentialite-flag.preview.emergentagent.com."
+        comment: "PRIVACY REDACTION VALIDATION COMPLETE - All 16 tests PASSED (2026-09-07). Verified that trips performed in Private Mode (device) have their addresses/coordinates REDACTED in CSV/PDF/XLSX exports, even if classified as 'professional'. Test results: (1) CSV Export ✓ - Private addresses 'Lausanne (DEV fixture)' and 'Genève (DEV fixture)' NOT found in CSV, redaction label 'Privé — position masquée' present, business data (62.3 km) preserved, 858 real addresses from non-private trips present (business trips not over-redacted). (2) XLSX Export ✓ - No private addresses in raw bytes (34,295 bytes), valid XLSX format. (3) PDF Export ✓ - No private addresses in raw bytes (82,748 bytes), valid PDF format. (4) Swiss Tax Report ✓ - HTTP 200, correct PDF content-type, valid PDF (2,658 bytes). (5) Trips Endpoint ✓ - 500 trips returned (1 private, 499 non-private), private trip has null coordinates (start_lat/start_lng/start_address/end_address all null), non-private trips keep coordinates. DEV fixture trip 'DEV-PRIVATE-FIXTURE-0001' verified: private_redacted=true, classification=professional, distance_km=62.3, addresses null. NO PRIVACY LEAKS DETECTED. Credentials: admin@logitrak.ch. Backend URL: https://private-mode-debug.preview.emergentagent.com."
   - task: "Private Mode fail-closed ordering fix - driver endpoints"
     implemented: true
     working: true
@@ -63,7 +63,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "FAIL-CLOSED ORDERING FIX VERIFIED - All 16 tests PASSED. Feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch now checked BEFORE session/vehicle resolution. Test results: (1) GET /api/livre/driver/private-mode with default env returns allowed=false + reason='PRIVATE_MODE_FEATURE_DISABLED' (NOT 'PRIVATE_MODE_NO_VEHICLE') ✓, (2) POST /api/livre/driver/private-mode mode=PRIVATE refused with HTTP 403 + detail='PRIVATE_MODE_FEATURE_DISABLED' (NOT 200 with no_active_vehicle, NOT 500) ✓, (3) POST mode=BUSINESS also HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX returns HTTP 400 (invalid mode) ✓, (5) Kill switch flow: activate (200 kill_switch=true) ✓, status confirms kill_switch_active=true ✓, deactivate (200 kill_switch=false) ✓, driver cannot access admin endpoints (403) ✓, (6) SECURITY: NO secrets (navixy_hash/api_key/credential/token) in ANY response ✓, NO GPS coordinates (lat/lng/address/coordinates) in ANY response ✓, (7) NON-REGRESSION: GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles, /api/livre/drivers all return 200 ✓. Credentials tested: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "FAIL-CLOSED ORDERING FIX VERIFIED - All 16 tests PASSED. Feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch now checked BEFORE session/vehicle resolution. Test results: (1) GET /api/livre/driver/private-mode with default env returns allowed=false + reason='PRIVATE_MODE_FEATURE_DISABLED' (NOT 'PRIVATE_MODE_NO_VEHICLE') ✓, (2) POST /api/livre/driver/private-mode mode=PRIVATE refused with HTTP 403 + detail='PRIVATE_MODE_FEATURE_DISABLED' (NOT 200 with no_active_vehicle, NOT 500) ✓, (3) POST mode=BUSINESS also HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX returns HTTP 400 (invalid mode) ✓, (5) Kill switch flow: activate (200 kill_switch=true) ✓, status confirms kill_switch_active=true ✓, deactivate (200 kill_switch=false) ✓, driver cannot access admin endpoints (403) ✓, (6) SECURITY: NO secrets (navixy_hash/api_key/credential/token) in ANY response ✓, NO GPS coordinates (lat/lng/address/coordinates) in ANY response ✓, (7) NON-REGRESSION: GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles, /api/livre/drivers all return 200 ✓. Credentials tested: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Phase D2: odometer_capability module (READ-ONLY registry)"
     implemented: true
     working: true
@@ -138,7 +138,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "PRIVATE MODE E2E PILOT SCENARIO COMPLETE - All 16 tests PASSED (2026-09-07). Verified complete state machine with ACTIVE driver session (Jean Dupont, vehicle GE 123456, tracker 5000). Test results: STATE MACHINE (7 tests) ✓ - (1) GET status: allowed=true, reason=null, tracker_id=5000, private_odometer_supported=true, state=BUSINESS ✓, (2) POST PRIVATE: HTTP 200, ok=true, state=PRIVATE, confirmation_source=SIMULATED_CONFIRMED (CONFIRMED transition achieved, not optimistic) ✓, (3) GET verify PRIVATE: state=PRIVATE ✓, (4) POST PRIVATE idempotent: ok=true, idempotent=true (no error, no double command) ✓, (5) POST BUSINESS: HTTP 200, ok=true, state=BUSINESS, private_distance_km=0.001 ✓, (6) GET verify BUSINESS: state=BUSINESS ✓, (7) POST invalid mode ZZZ: HTTP 400 ✓. KILL SWITCH (4 tests) ✓ - (8) ADMIN activate: kill_switch=true ✓, (9) DRIVER POST PRIVATE blocked: HTTP 403 with detail='PRIVATE_MODE_KILL_SWITCH_ACTIVE' (no transition) ✓, (10) ADMIN deactivate: kill_switch=false ✓, (11) DRIVER POST BUSINESS: HTTP 200, ok=true, feature usable again ✓. NON-REGRESSION (5 tests) ✓ - GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles all HTTP 200 ✓. SECURITY ✓ - NO forbidden strings found: navixy_hash, TEST_E2E, Bearer tokens, Navixy, Teltonika, AVL, privatemode, raw_command ✓, NO real GPS lat/lng/address in driver private-mode responses ✓. FINAL STATE: Kill switch OFF, Driver state BUSINESS. CONFIRMED PRIVATE was reached (Step 2) then returned to BUSINESS (Step 5). Credentials: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "PRIVATE MODE E2E PILOT SCENARIO COMPLETE - All 16 tests PASSED (2026-09-07). Verified complete state machine with ACTIVE driver session (Jean Dupont, vehicle GE 123456, tracker 5000). Test results: STATE MACHINE (7 tests) ✓ - (1) GET status: allowed=true, reason=null, tracker_id=5000, private_odometer_supported=true, state=BUSINESS ✓, (2) POST PRIVATE: HTTP 200, ok=true, state=PRIVATE, confirmation_source=SIMULATED_CONFIRMED (CONFIRMED transition achieved, not optimistic) ✓, (3) GET verify PRIVATE: state=PRIVATE ✓, (4) POST PRIVATE idempotent: ok=true, idempotent=true (no error, no double command) ✓, (5) POST BUSINESS: HTTP 200, ok=true, state=BUSINESS, private_distance_km=0.001 ✓, (6) GET verify BUSINESS: state=BUSINESS ✓, (7) POST invalid mode ZZZ: HTTP 400 ✓. KILL SWITCH (4 tests) ✓ - (8) ADMIN activate: kill_switch=true ✓, (9) DRIVER POST PRIVATE blocked: HTTP 403 with detail='PRIVATE_MODE_KILL_SWITCH_ACTIVE' (no transition) ✓, (10) ADMIN deactivate: kill_switch=false ✓, (11) DRIVER POST BUSINESS: HTTP 200, ok=true, feature usable again ✓. NON-REGRESSION (5 tests) ✓ - GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles all HTTP 200 ✓. SECURITY ✓ - NO forbidden strings found: navixy_hash, TEST_E2E, Bearer tokens, Navixy, Teltonika, AVL, privatemode, raw_command ✓, NO real GPS lat/lng/address in driver private-mode responses ✓. FINAL STATE: Kill switch OFF, Driver state BUSINESS. CONFIRMED PRIVATE was reached (Step 2) then returned to BUSINESS (Step 5). Credentials: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Private Mode REAL CONFIRMATION FIX - async telemetry confirmation"
     implemented: true
     working: true
@@ -149,7 +149,18 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "PRIVATE MODE REAL CONFIRMATION FIX VALIDATED - All 16 tests PASSED. Refactored confirmation logic verified: REAL device commands that aren't immediately confirmed become PENDING_CONFIRMATION (NOT FAILED), resolved asynchronously via telemetry. New engine states implemented: PENDING_CONFIRMATION, SRC_TELEMETRY (TELEMETRY_CONFIRMED), SRC_UNCONFIRMED, SRC_SIMULATED (SIMULATED_CONFIRMED). New helper resolve_pending_confirmation() working correctly (lines 450-506 in private_mode_engine.py). GET /driver/private-mode returns new fields: pending (line 169), confirmation_source (line 170), private_distance_km (line 177). Test results: (1) GET /api/livre/driver/private-mode with feature disabled → allowed=false, reason='PRIVATE_MODE_FEATURE_DISABLED' ✓ (fail-closed first, as before), (2) POST /api/livre/driver/private-mode mode=PRIVATE with feature disabled → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' (NOT 500, NOT FAILED) ✓, (3) POST mode=BUSINESS → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX → HTTP 400 (invalid mode) ✓, (5) Admin kill switch: POST /api/livre/private-mode/kill-switch active=true → 200 kill_switch=true ✓, GET /api/livre/private-mode/status → 200 feature_enabled=false kill_switch_active=true ✓, POST active=false → 200 kill_switch=false ✓, driver (non-admin) gets 403 on both endpoints ✓, (6) IMPORT/HEALTH: Backend healthy, no 500 on any private-mode endpoint (imports OK) ✓, (7) SECURITY: NO secrets found (navixy_hash, api_key, credential, token, Bearer, Navixy, Teltonika, AVL, privatemode, raw_command, SIMULATED_CONFIRMED, 11813, 11000, INTEGRATION_ENCRYPTION_KEY) ✓, NO GPS coordinates (lat/lng/address) in driver responses ✓, (8) NON-REGRESSION: GET /api/auth/me (admin+driver) → 200 ✓, GET /api/livre/dashboard → 200 ✓, GET /api/livre/trips → 200 (1 private trip with null coords verified) ✓, GET /api/livre/vehicles → 200 ✓. Test env: PRIVATE_MODE_ENABLED NOT set (fail-closed), DEVICE_WRITE=0 (no real commands). Credentials: admin@logitrak.ch / admin123, chauffeur@logitrak.ch / chauffeur123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "PRIVATE MODE REAL CONFIRMATION FIX VALIDATED - All 16 tests PASSED. Refactored confirmation logic verified: REAL device commands that aren't immediately confirmed become PENDING_CONFIRMATION (NOT FAILED), resolved asynchronously via telemetry. New engine states implemented: PENDING_CONFIRMATION, SRC_TELEMETRY (TELEMETRY_CONFIRMED), SRC_UNCONFIRMED, SRC_SIMULATED (SIMULATED_CONFIRMED). New helper resolve_pending_confirmation() working correctly (lines 450-506 in private_mode_engine.py). GET /driver/private-mode returns new fields: pending (line 169), confirmation_source (line 170), private_distance_km (line 177). Test results: (1) GET /api/livre/driver/private-mode with feature disabled → allowed=false, reason='PRIVATE_MODE_FEATURE_DISABLED' ✓ (fail-closed first, as before), (2) POST /api/livre/driver/private-mode mode=PRIVATE with feature disabled → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' (NOT 500, NOT FAILED) ✓, (3) POST mode=BUSINESS → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX → HTTP 400 (invalid mode) ✓, (5) Admin kill switch: POST /api/livre/private-mode/kill-switch active=true → 200 kill_switch=true ✓, GET /api/livre/private-mode/status → 200 feature_enabled=false kill_switch_active=true ✓, POST active=false → 200 kill_switch=false ✓, driver (non-admin) gets 403 on both endpoints ✓, (6) IMPORT/HEALTH: Backend healthy, no 500 on any private-mode endpoint (imports OK) ✓, (7) SECURITY: NO secrets found (navixy_hash, api_key, credential, token, Bearer, Navixy, Teltonika, AVL, privatemode, raw_command, SIMULATED_CONFIRMED, 11813, 11000, INTEGRATION_ENCRYPTION_KEY) ✓, NO GPS coordinates (lat/lng/address) in driver responses ✓, (8) NON-REGRESSION: GET /api/auth/me (admin+driver) → 200 ✓, GET /api/livre/dashboard → 200 ✓, GET /api/livre/trips → 200 (1 private trip with null coords verified) ✓, GET /api/livre/vehicles → 200 ✓. Test env: PRIVATE_MODE_ENABLED NOT set (fail-closed), DEVICE_WRITE=0 (no real commands). Credentials: admin@logitrak.ch / admin123, chauffeur@logitrak.ch / chauffeur123. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
+  - task: "Private Mode fail-fast when device writes disabled (DEVICE_WRITE=0)"
+    implemented: true
+    working: true
+    file: "backend/app/private_mode_engine.py, backend/app/routes/identification.py, backend/app/private_mode_gate.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "FAIL-FAST DEVICE WRITE FIX VALIDATED - All 54 pytest tests PASSED (2026-09-07). Verified that when PRIVATE_MODE_DEVICE_WRITE=0 (default), NO command is sent to tracker and mode change requests FAIL FAST without creating transitional state. Test results: (1) PYTEST SUITE: 54 PASSED in 0.14s - test_private_mode_phase2.py (26 tests), test_private_mode_confirmation.py (14 tests), test_private_mode_gate.py (14 tests) ✓. (2) NEW FAIL-FAST TESTS (6/6 PASSED): test_failfast_business_to_private_write_off_stays_business ✓ (BUSINESS + write OFF + request PRIVATE → refused, stays BUSINESS, no PRIVATE_REQUESTED), test_failfast_private_to_business_write_off_stays_private ✓ (PRIVATE + write OFF + request BUSINESS → stays PRIVATE, no BUSINESS_REQUESTED), test_failfast_unknown_write_off_stays_unknown ✓ (UNKNOWN + write OFF → stays UNKNOWN, no state invented), test_failfast_double_tap_write_off_no_mutation ✓ (double request write OFF → no pending, no command, no change), test_failfast_idempotent_still_ok_write_off ✓ (idempotent request → ok=true even with write OFF), test_write_on_transition_still_works ✓ (write ON → normal transition preserved, non-regression). (3) ENGINE LOGIC VERIFIED (private_mode_engine.py lines 357-371): When device_write_enabled()=False, request_mode() returns ok=false, allowed=true, can_switch=false, reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED', http=503, state=cur_state (UNCHANGED) ✓. NO document written to private_mode_state collection with PRIVATE_REQUESTED/BUSINESS_REQUESTED/PENDING_CONFIRMATION ✓. Only audit log written (line 363), function returns immediately (line 367), line 384 _save_mode_state() NEVER reached ✓. (4) GET /api/livre/driver/private-mode VERIFIED (identification.py lines 125-202): Returns both 'allowed' and 'can_switch' fields ✓. When eligible but device_write=false: can_switch=false with can_switch_reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED' (lines 178-187) ✓. (5) POST /api/livre/driver/private-mode VERIFIED (identification.py lines 209-240): Raises HTTP 503 with detail 'PRIVATE_MODE_DEVICE_WRITE_DISABLED' when engine returns that reason (lines 236-238) ✓. (6) BACKEND HEALTH: Backend service RUNNING (uptime 0:28:52), no import errors, no 500s ✓. (7) ENV VERIFICATION: PRIVATE_MODE_DEVICE_WRITE NOT set in backend/.env (defaults to '0') ✓. Backend URL: https://private-mode-debug.preview.emergentagent.com. NO ISSUES FOUND."
 
 frontend:
   - task: "Mes trajets (liste)"
@@ -263,7 +274,7 @@ agent_communication:
       
       CONTEXT: Validated 2 NEW driver endpoints for manual (no-BLE) driver UX. These endpoints support vehicle selection and km tracking without BLE hardware.
       
-      TEST RESULTS (backend_test_driver_manual_ux.py + backend_test_driver_manual_ux_extended.py against https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (backend_test_driver_manual_ux.py + backend_test_driver_manual_ux_extended.py against https://private-mode-debug.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -336,7 +347,7 @@ agent_communication:
       
       CONTEXT: Validated refactored confirmation logic where REAL device commands that aren't immediately confirmed become PENDING_CONFIRMATION (NOT FAILED), resolved asynchronously via telemetry. Test env: PRIVATE_MODE_ENABLED NOT set (fail-closed), DEVICE_WRITE=0 (no real device commands).
       
-      TEST RESULTS (backend_test_private_mode_confirmation_fix.py against https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (backend_test_private_mode_confirmation_fix.py against https://private-mode-debug.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -395,7 +406,7 @@ agent_communication:
       
       CONTEXT: E2E HTTP testing of Private Mode state machine with ACTIVE driver session. Prerequisites verified: Driver Jean Dupont has 'confirmed' session on vehicle GE 123456 / tracker 5000, PRIVATE_MODE_ENABLED=true, tenant default + tracker 5000 allowlisted, field_validated capability present, PRIVATE_MODE_SIMULATE_CONFIRM=1 (device confirmation simulated).
       
-      TEST RESULTS (backend_test_private_mode_e2e.py against https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (backend_test_private_mode_e2e.py against https://private-mode-debug.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -485,7 +496,7 @@ agent_communication:
       
       CONTEXT: UI verification of Private Mode fail-closed behavior in Driver Mobile App (Expo web). Feature flag PRIVATE_MODE_ENABLED is NOT set (fail-closed by design), backend returns allowed=false with reason PRIVATE_MODE_FEATURE_DISABLED.
       
-      TEST RESULTS (Playwright mobile viewport 390x844 against https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (Playwright mobile viewport 390x844 against https://private-mode-debug.preview.emergentagent.com):
       ✅ ALL CHECKS PASSED (0 FAILED, 0 SECURITY ISSUES, 0 CRITICAL ERRORS)
       
       DETAILED VERIFICATION:
@@ -529,7 +540,7 @@ agent_communication:
       
       CONTEXT: Re-test of FIXED Private Mode driver endpoints after fail-closed ordering fix. The fix ensures GLOBAL feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch are checked BEFORE session/vehicle resolution.
       
-      TEST RESULTS (backend_test.py against https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (backend_test.py against https://private-mode-debug.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -781,7 +792,7 @@ agent_communication:
       
       CONTEXT: FMC130 downgraded from VEHICLE_CAN to NAVIXY_GPS_CALCULATED with status=BLOCKED and odometer_during_private=NOT_SUPPORTED. Runtime finding: can_mileage sensor exists (id 5411571) but data is stale since 2022-03-26 (2026 history empty) - not usable. Only live source is GPS-calculated odometer.
       
-      TEST RESULTS (against HTTPS preview URL https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (against HTTPS preview URL https://private-mode-debug.preview.emergentagent.com):
       ✅ login_attempts purged: 0 documents (clean state)
       ✅ Test 1 (test_odometer_capability.py): 7 PASSED
          - FMC130 now source_type=NAVIXY_GPS_CALCULATED (was VEHICLE_CAN)
@@ -815,7 +826,7 @@ agent_communication:
       - New vehicle_private_mode_allowed(model, vc) function for concrete tracker/vehicle resolution
       - Tests updated: added test_fmc003_gate_is_per_vehicle (8th test)
       
-      TEST RESULTS (against HTTPS preview URL https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (against HTTPS preview URL https://private-mode-debug.preview.emergentagent.com):
       ✅ login_attempts purged: 0 documents (clean state)
       ✅ Test 1 (test_odometer_capability.py): 8 PASSED (was 7, added per-vehicle gate test)
          - All 5 models present: FMC003, FMC130, FMU130, FMC640, FMC650
@@ -844,11 +855,93 @@ agent_communication:
       NO REGRESSION DETECTED. The refactoring is READ-ONLY (pure data + functions, no DB writes, no Navixy calls, not called by endpoints yet). All existing functionality (multi-tenant Navixy, BLE, auto-assignment, odometer audit) remains fully operational. The business strategies accurately reflect LOGITRAK's multi-model architecture: strategy depends on MODEL, and for FMC003 on VEHICLE. No hardcoded AVL16 universal approach.
   - agent: "testing"
     message: |
+      PRIVATE MODE FAIL-FAST DEVICE WRITE FIX VALIDATION COMPLETE (2026-09-07)
+      
+      CONTEXT: Validated the fail-fast fix for Private Mode when PRIVATE_MODE_DEVICE_WRITE=0 (default). The fix ensures NO command is sent to any tracker and mode change requests FAIL FAST without creating transitional state (no PRIVATE_REQUESTED, BUSINESS_REQUESTED, or PENDING_CONFIRMATION).
+      
+      TEST RESULTS (pytest suite against local backend):
+      ✅ ALL 54 TESTS PASSED (0 FAILED, 0 WARNINGS) in 0.14s
+      
+      DETAILED VERIFICATION:
+      
+      ✅ PYTEST SUITE (54/54 PASSED):
+         - test_private_mode_phase2.py: 26 PASSED (includes 6 NEW fail-fast tests)
+         - test_private_mode_confirmation.py: 14 PASSED
+         - test_private_mode_gate.py: 14 PASSED
+      
+      ✅ NEW FAIL-FAST TESTS (6/6 PASSED - PRIMARY VALIDATION):
+         (1) test_failfast_business_to_private_write_off_stays_business ✓
+             - BUSINESS + write OFF + request PRIVATE → refused
+             - ok=false, allowed=true, can_switch=false
+             - reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED', http=503
+             - state=BUSINESS (UNCHANGED)
+             - NO PRIVATE_REQUESTED document persisted ✓
+         
+         (2) test_failfast_private_to_business_write_off_stays_private ✓
+             - PRIVATE + write OFF + request BUSINESS → refused
+             - state=PRIVATE (UNCHANGED)
+             - NO BUSINESS_REQUESTED document persisted ✓
+         
+         (3) test_failfast_unknown_write_off_stays_unknown ✓
+             - UNKNOWN + write OFF → stays UNKNOWN
+             - NO state invented, NO pending state ✓
+         
+         (4) test_failfast_double_tap_write_off_no_mutation ✓
+             - Double request with write OFF → no pending, no command, no change
+             - Both requests return state=BUSINESS (unchanged) ✓
+         
+         (5) test_failfast_idempotent_still_ok_write_off ✓
+             - Idempotent request (already in target state) → ok=true even with write OFF
+             - No command sent (idempotent path) ✓
+         
+         (6) test_write_on_transition_still_works ✓
+             - write ON (DEVICE_WRITE=1) → normal transition preserved
+             - Non-regression: ok=true, state=PRIVATE ✓
+      
+      ✅ ENGINE LOGIC VERIFIED (private_mode_engine.py lines 357-371):
+         - When device_write_enabled() returns False:
+           * request_mode() returns immediately with:
+             - ok=false
+             - allowed=true (eligibility OK)
+             - can_switch=false (action unavailable)
+             - reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED'
+             - http=503 (service unavailable)
+             - state=cur_state (UNCHANGED - previous state preserved)
+           * Only _audit() called (line 363) - writes to audit_log, NOT private_mode_state ✓
+           * Function returns immediately (line 367) ✓
+           * Line 384 _save_mode_state() NEVER reached (no transitional state created) ✓
+           * NO document written to private_mode_state with PRIVATE_REQUESTED/BUSINESS_REQUESTED/PENDING_CONFIRMATION ✓
+      
+      ✅ GET /api/livre/driver/private-mode VERIFIED (identification.py lines 125-202):
+         - Returns both 'allowed' and 'can_switch' fields ✓
+         - Returns 'can_switch_reason' field ✓
+         - When eligible but device_write=false (lines 178-187):
+           * can_switch=false ✓
+           * can_switch_reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED' ✓
+      
+      ✅ POST /api/livre/driver/private-mode VERIFIED (identification.py lines 209-240):
+         - Lines 236-238: Raises HTTP 503 with detail 'PRIVATE_MODE_DEVICE_WRITE_DISABLED' when engine returns that reason ✓
+         - Defensive guard: frontend should disable button via can_switch=false, but backend also blocks ✓
+      
+      ✅ BACKEND HEALTH:
+         - Backend service: RUNNING (uptime 0:28:52) ✓
+         - No import errors ✓
+         - No 500 errors on private-mode endpoints ✓
+         - Backend logs clean (no errors) ✓
+      
+      ✅ ENV VERIFICATION:
+         - PRIVATE_MODE_DEVICE_WRITE: NOT set in backend/.env (defaults to '0') ✓
+         - Backend URL: https://private-mode-debug.preview.emergentagent.com
+      
+      CONCLUSION:
+      Private Mode fail-fast device write fix working correctly. When PRIVATE_MODE_DEVICE_WRITE=0 (default), mode change requests are refused with HTTP 503 BEFORE creating any transitional state. The previous confirmed state (BUSINESS/PRIVATE/UNKNOWN) is preserved unchanged. NO command is sent to tracker. NO document is written to private_mode_state collection with PRIVATE_REQUESTED/BUSINESS_REQUESTED/PENDING_CONFIRMATION. GET endpoint returns can_switch=false with can_switch_reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED'. POST endpoint raises HTTP 503. All 54 pytest tests passed, including 6 NEW fail-fast tests. Backend healthy. NO ISSUES FOUND.
+  - agent: "testing"
+    message: |
       NEW SOS ALERT ENDPOINT VALIDATION COMPLETE (2026-09-07)
       
       CONTEXT: Validated NEW driver emergency SOS endpoint POST /api/livre/driver/sos. This endpoint allows drivers to trigger emergency alerts that are persisted to sos_alerts collection and dispatched as notifications to admins/managers. Includes anti-double-send protection (60s deduplication).
       
-      TEST RESULTS (backend_test_sos.py against https://confidentialite-flag.preview.emergentagent.com):
+      TEST RESULTS (backend_test_sos.py against https://private-mode-debug.preview.emergentagent.com):
       ✅ ALL 7 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:

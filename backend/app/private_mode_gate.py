@@ -34,6 +34,11 @@ R_NO_TRACKER = "PRIVATE_MODE_NO_TRACKER"
 R_NOT_SUPPORTED = "PRIVATE_MODE_NOT_SUPPORTED"          # hardware non field_validated
 R_INTEGRATION_UNAVAILABLE = "PRIVATE_MODE_INTEGRATION_UNAVAILABLE"
 R_NO_VEHICLE = "PRIVATE_MODE_NO_VEHICLE"
+# Éligibilité OK mais action momentanément indisponible (écriture device coupée).
+# NB : ce n'est PAS un refus d'éligibilité (allowed peut rester True) — c'est un
+# verrou de CAPACITÉ D'ACTION (can_switch=False). Distinct de allowed.
+R_DEVICE_WRITE_DISABLED = "PRIVATE_MODE_DEVICE_WRITE_DISABLED"
+R_TRANSITION_IN_PROGRESS = "PRIVATE_MODE_TRANSITION_IN_PROGRESS"
 
 # Codes HTTP recommandés par raison (pour les endpoints).
 HTTP_BY_REASON = {
@@ -45,6 +50,8 @@ HTTP_BY_REASON = {
     R_NOT_SUPPORTED: 409,
     R_INTEGRATION_UNAVAILABLE: 503,
     R_NO_VEHICLE: 409,
+    R_DEVICE_WRITE_DISABLED: 503,   # service indisponible (écriture device coupée)
+    R_TRANSITION_IN_PROGRESS: 409,
 }
 
 

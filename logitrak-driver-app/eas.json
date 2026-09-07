@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://confidentialite-flag.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://private-mode-debug.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,7 +25,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://confidentialite-flag.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://private-mode-debug.preview.emergentagent.com"
       }
     },
     "production": {

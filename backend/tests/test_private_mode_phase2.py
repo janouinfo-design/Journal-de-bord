@@ -70,6 +70,9 @@ def setup_module(_module):
     _os.environ["PRIVATE_MODE_ENABLED"] = "1"
     _os.environ["PRIVATE_MODE_PILOT_TENANTS"] = "default"
     _os.environ["PRIVATE_MODE_PILOT_TRACKERS"] = "3657864"
+    # Ces tests valident la MACHINE À ÉTATS de transition avec des hooks device MOCKÉS.
+    # L'écriture device doit donc être « ouverte » (sinon fail-fast avant transition).
+    _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "1"
     # Stub intégration : credential présent pour 'default' uniquement (fail-closed ailleurs).
     def _stub_cred(tenant_id=None, provider="NAVIXY"):
         if tenant_id == "default" and provider == "NAVIXY":
@@ -80,7 +83,8 @@ def setup_module(_module):
 
 
 def teardown_module(_module):
-    for k in ("PRIVATE_MODE_ENABLED", "PRIVATE_MODE_PILOT_TENANTS", "PRIVATE_MODE_PILOT_TRACKERS"):
+    for k in ("PRIVATE_MODE_ENABLED", "PRIVATE_MODE_PILOT_TENANTS", "PRIVATE_MODE_PILOT_TRACKERS",
+              "PRIVATE_MODE_DEVICE_WRITE"):
         _os.environ.pop(k, None)
     _integrations.get_integration_credential = _ORIG_GET_CRED
 
@@ -288,6 +292,107 @@ def test_device_write_gated_by_default(monkeypatch):
     assert pm.device_write_enabled() is False
     monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "1")
     assert pm.device_write_enabled() is True
+
+
+# ===========================================================================
+# DEVICE_WRITE=0 — FAIL-FAST (aucune transition, état confirmé conservé).
+# Critère : DEVICE_WRITE=0 rend toute transition IMPOSSIBLE immédiatement et ne
+# produit JAMAIS un état REQUESTED/PENDING ni aucune commande device.
+# ===========================================================================
+def _forbid_command():
+    """Hook send_command qui ÉCHOUE le test s'il est appelé (aucune commande attendue)."""
+    async def _c(tid, cmd):
+        raise AssertionError("send_command ne doit JAMAIS être appelé avec DEVICE_WRITE=0")
+    return _c
+
+
+def test_failfast_business_to_private_write_off_stays_business(monkeypatch):
+    """T1 — BUSINESS + write OFF + demande PRIVATE -> refus, reste BUSINESS, aucun pending."""
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "0")
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    _run(db.private_mode_state.update_one({"vehicle_id": "vA"},
+         {"$set": {"vehicle_id": "vA", "state": pm.BUSINESS}}, upsert=True))
+    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+               send_command=_forbid_command(), confirm=_mock_confirm("ok"),
+               read_odo_km=_mock_odo([1])))
+    assert res["ok"] is False
+    assert res["allowed"] is True          # éligible...
+    assert res["can_switch"] is False       # ...mais action indisponible
+    assert res["reason"] == _gate.R_DEVICE_WRITE_DISABLED
+    assert res["http"] == 503
+    assert res["state"] == pm.BUSINESS      # INCHANGÉ
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["state"] == pm.BUSINESS       # aucun PRIVATE_REQUESTED persisté
+
+
+def test_failfast_private_to_business_write_off_stays_private(monkeypatch):
+    """T2 — PRIVATE + write OFF + demande BUSINESS -> reste PRIVATE, aucun BUSINESS_REQUESTED."""
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "0")
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    _run(db.private_mode_state.update_one({"vehicle_id": "vA"},
+         {"$set": {"vehicle_id": "vA", "state": pm.PRIVATE}}, upsert=True))
+    res = _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
+               send_command=_forbid_command(), confirm=_mock_confirm("ok"),
+               read_odo_km=_mock_odo([1])))
+    assert res["ok"] is False and res["can_switch"] is False
+    assert res["reason"] == _gate.R_DEVICE_WRITE_DISABLED
+    assert res["state"] == pm.PRIVATE       # INCHANGÉ
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["state"] == pm.PRIVATE        # aucun BUSINESS_REQUESTED persisté
+
+
+def test_failfast_unknown_write_off_stays_unknown(monkeypatch):
+    """T3 — UNKNOWN + write OFF -> reste UNKNOWN, aucun état inventé, aucun pending."""
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "0")
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)  # pas d'état initial -> UNKNOWN
+    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+               send_command=_forbid_command(), confirm=_mock_confirm("ok"),
+               read_odo_km=_mock_odo([1])))
+    assert res["ok"] is False and res["can_switch"] is False
+    assert res["reason"] == _gate.R_DEVICE_WRITE_DISABLED
+    assert res["state"] == pm.UNKNOWN
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["state"] == pm.UNKNOWN
+
+
+def test_failfast_double_tap_write_off_no_mutation(monkeypatch):
+    """T9 — double demande write OFF -> aucun pending, aucune commande, aucun changement."""
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "0")
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    _run(db.private_mode_state.update_one({"vehicle_id": "vA"},
+         {"$set": {"vehicle_id": "vA", "state": pm.BUSINESS}}, upsert=True))
+    for _ in range(2):
+        res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+                   send_command=_forbid_command(), confirm=_mock_confirm("ok"),
+                   read_odo_km=_mock_odo([1])))
+        assert res["ok"] is False and res["state"] == pm.BUSINESS
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["state"] == pm.BUSINESS
+
+
+def test_failfast_idempotent_still_ok_write_off(monkeypatch):
+    """Idempotence : déjà dans l'état cible -> no-op ok (aucune commande), même write OFF."""
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "0")
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    _run(db.private_mode_state.update_one({"vehicle_id": "vA"},
+         {"$set": {"vehicle_id": "vA", "state": pm.PRIVATE}}, upsert=True))
+    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+               send_command=_forbid_command(), confirm=_mock_confirm("ok"),
+               read_odo_km=_mock_odo([1])))
+    assert res["ok"] is True and res.get("idempotent") is True
+    assert res["state"] == pm.PRIVATE
+
+
+def test_write_on_transition_still_works(monkeypatch):
+    """T4 — write ON : le comportement normal de transition est conservé (non-régression)."""
+    monkeypatch.setenv("PRIVATE_MODE_DEVICE_WRITE", "1")
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    _run(db.private_mode_state.update_one({"vehicle_id": "vA"},
+         {"$set": {"vehicle_id": "vA", "state": pm.BUSINESS}}, upsert=True))
+    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+               send_command=_mock_command(), confirm=_mock_confirm("ok"),
+               read_odo_km=_mock_odo([140000.0])))
+    assert res["ok"] is True and res["state"] == pm.PRIVATE
 
 
 # --------- Phase B : tests de non-fuite de localisation (privacy web) ---------
