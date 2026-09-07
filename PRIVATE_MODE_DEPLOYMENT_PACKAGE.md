@@ -33,8 +33,8 @@
 | `backend/scripts/d3_fmc130_snapshot.py` | **NEW** — précheck AVL16 READ-ONLY (diagnostic terrain) |
 | `backend/scripts/resolve_pilot_tenant_3657864.py` | **NEW** — audit tenant READ-ONLY (diagnostic) |
 | `backend/scripts/d3b_snapshot.py` | (existant) diagnostic FMC003 |
-| `backend/scripts/e2e_setup.py` | **DEV_ONLY — DO_NOT_RUN_IN_PROD** (mute la DB pour l'E2E) |
-| `backend/scripts/e2e_teardown.py` | **DEV_ONLY — DO_NOT_RUN_IN_PROD** (restaure la DB de test) |
+| `backend/scripts/e2e_setup.py` | **REMOVED** (DEV-only DB mutation + fake credential — retiré du repo avant push) |
+| `backend/scripts/e2e_teardown.py` | **REMOVED** (DEV-only — retiré du repo avant push) |
 
 ### Expo (mobile chauffeur)
 | Fichier | Type |
