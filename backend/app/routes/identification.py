@@ -348,19 +348,23 @@ async def driver_km_summary(
 
     sess = await ble_engine.get_current_session(db, driver_id)
     vehicle_id = sess.get("vehicle_id") if sess else None
+    now = datetime.now(timezone.utc)
+    _MONTHS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+                  "août", "septembre", "octobre", "novembre", "décembre"]
+    period_label = (f"{_MONTHS_FR[now.month - 1].capitalize()} {now.year}"
+                    if period == "month" else "Aujourd'hui")
     if not vehicle_id:
-        return {"period": period, "vehicle_id": None,
+        return {"period": period, "period_label": period_label, "vehicle_id": None,
                 "pro_km": None, "private_km": None, "available": False}
 
     # Bornes de période (UTC).
-    now = datetime.now(timezone.utc)
     if period == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     else:  # month
         start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     start_iso = start.isoformat()
 
-    # Trajets du VÉHICULE ACTIF, tenant scmapé, sur la période.
+    # Trajets du VÉHICULE ACTIF, tenant scopé, sur la période.
     q = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
     trips = await db.trips.find(
         q, {"_id": 0, "distance_km": 1, "classification": 1}).limit(20000).to_list(20000)
@@ -369,7 +373,7 @@ async def driver_km_summary(
                     if t.get("classification") == "professional"), 1)
     priv = round(sum((t.get("distance_km") or 0) for t in trips
                      if t.get("classification") == "personal"), 1)
-    return {"period": period, "vehicle_id": vehicle_id,
+    return {"period": period, "period_label": period_label, "vehicle_id": vehicle_id,
             "pro_km": pro, "private_km": priv, "available": True}
 
 
