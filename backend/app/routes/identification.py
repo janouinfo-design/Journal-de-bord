@@ -8,7 +8,7 @@ Endpoints under `/driver/*`:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -232,6 +232,76 @@ async def driver_my_vehicle(user=Depends(get_current_user)):
             "session": {k: sess.get(k) for k in (
                 "id", "status", "started_at", "ended_at", "identification_source",
                 "active_driver", "mobile_override", "confidence")}}
+
+
+class SosIn(BaseModel):
+    note: Optional[str] = None            # contexte libre saisi par le chauffeur (optionnel)
+    share_location: Optional[bool] = True  # le chauffeur consent au partage de position (urgence)
+
+
+@router.post("/driver/sos")
+async def driver_sos(payload: SosIn, user=Depends(get_current_user)):
+    """Déclenche une alerte SOS. Persiste l'alerte + notifie les gestionnaires/admins.
+
+    Contexte capturé (si disponible) : chauffeur, véhicule actif, horodatage. La POSITION
+    exacte n'est PAS calculée ici (backend n'a pas le GPS temps réel du device de façon fiable) ;
+    on enregistre le véhicule/tracker pour que le gestionnaire localise via la plateforme.
+    En cas de SOS, la sécurité prime : la position du véhicule peut être consultée par le
+    gestionnaire même en mode Privé (décision produit ; l'app en informe le chauffeur).
+    Anti-double-envoi : déduplication 60 s par chauffeur.
+    """
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "name": 1}) or {}
+    sess = await ble_engine.get_current_session(db, driver_id)
+    vehicle_id = sess.get("vehicle_id") if sess else None
+    vehicle = await db.vehicles.find_one(
+        {"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0, "plate": 1, "navixy_tracker_id": 1}
+    ) if vehicle_id else None
+
+    now = datetime.now(timezone.utc)
+    # Anti-double-envoi : une alerte active récente (<60s) pour ce chauffeur -> renvoyer l'existante.
+    recent = await db.sos_alerts.find_one(
+        {"tenant_id": tenant_id, "driver_id": driver_id, "status": "active",
+         "created_at": {"$gte": (now - timedelta(seconds=60)).isoformat()}},
+        {"_id": 0, "id": 1}, sort=[("created_at", -1)])
+    if recent:
+        return {"ok": True, "sos_id": recent["id"], "duplicate": True,
+                "message": "Alerte déjà en cours d'envoi."}
+
+    import uuid as _uuid
+    sos_id = str(_uuid.uuid4())
+    doc = {
+        "id": sos_id, "tenant_id": tenant_id, "driver_id": driver_id,
+        "driver_name": driver.get("name"),
+        "vehicle_id": vehicle_id, "vehicle_plate": (vehicle or {}).get("plate"),
+        "tracker_id": (vehicle or {}).get("navixy_tracker_id"),
+        "note": (payload.note or "")[:500],
+        "share_location": bool(payload.share_location),
+        "status": "active", "created_at": now.isoformat(), "created_by": user.get("email"),
+    }
+    await db.sos_alerts.insert_one(doc)
+
+    # Notifie les gestionnaires/admins via le pipeline existant (push/email/sms + in-app).
+    try:
+        from app import notifications_service as notif
+        await notif.dispatch("sos.triggered", {
+            "sos_id": sos_id, "driver_id": driver_id, "driver_name": driver.get("name"),
+            "vehicle_id": vehicle_id, "vehicle_plate": (vehicle or {}).get("plate"),
+            "has_location": bool(vehicle_id),
+        }, tenant_id=tenant_id, dedup_key=f"sos:{sos_id}")
+    except Exception:
+        # l'alerte est persistée quoi qu'il arrive ; l'échec de notif ne casse pas le SOS
+        pass
+
+    return {"ok": True, "sos_id": sos_id, "duplicate": False,
+            "vehicle_selected": bool(vehicle_id),
+            "message": "Alerte SOS envoyée."}
+
 
 
 @router.get("/driver/my-vehicles")

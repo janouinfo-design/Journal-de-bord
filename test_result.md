@@ -31,6 +31,17 @@ backend:
       - working: true
         agent: "testing"
         comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/km-summary?period=today|month returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) No active session: returns {available:false, vehicle_id:null, pro_km:null, private_km:null} (honest, not fake 0) ✓. (3) With active session: returns {available:true, vehicle_id:..., pro_km:0, private_km:0} for today (no trips today) ✓, {pro_km:380.3, private_km:51.8} for month (real trip data) ✓. (4) Period validation: period=today ✓, period=month ✓, period=week → 422 (regex validation) ✓. (5) Scoping: km values scoped to driver's ACTIVE vehicle only (verified vehicle_id matches current session) ✓. (6) Security: NO secrets ✓, NO GPS coordinates (lat/lng/address) ✓. (7) Non-regression: /auth/me, /driver/private-mode, /driver/my-vehicle, /livre/dashboard all 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
+  - task: "Driver emergency SOS - POST /api/livre/driver/sos"
+    implemented: true
+    working: true
+    file: "backend/app/routes/identification.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "NEW SOS ENDPOINT VALIDATION COMPLETE - All 7 tests PASSED (2026-09-07). POST /api/livre/driver/sos (driver auth) persists SOS alert to sos_alerts collection, dispatches notification (event 'sos.triggered') to admins/managers, and implements anti-double-send (60s deduplication). Test results: (1) Driver SOS success: POST {note:'test urgence', share_location:true} → HTTP 200, ok=true, sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' (valid UUID), duplicate=false, vehicle_selected=false, message='Alerte SOS envoyée.' ✓. Response contains NO GPS coordinates (lat/lng/address) ✓, NO secrets (navixy_hash/api_key/token/Navixy/Teltonika) ✓. (2) Anti-double-send: Immediate 2nd POST (same driver, <60s) → HTTP 200, ok=true, duplicate=true, SAME sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' ✓ (anti-double-send verified). (3) Admin (no driver record): POST as admin@logitrak.ch → HTTP 400 'Utilisateur non lié à un chauffeur' ✓ (only drivers can trigger SOS). (4) Unauthenticated: POST without token → HTTP 401 ✓. (5) Notification created: GET /api/livre/notifications/inbox as admin → HTTP 200, found notification with event='sos.triggered', title='🆘 Alerte SOS', body='Jean Dupont a déclenché une alerte SOS.', data contains sos_id/driver_id/vehicle_id/has_location ✓. Notification contains NO GPS coords ✓, NO secrets ✓. (6) Security: ALL responses checked across 7 tests, 0 security issues found ✓. NO forbidden strings: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓. NO GPS coordinates: lat, lng, latitude, longitude, address, coordinates, position, location ✓. (7) Non-regression: GET /api/auth/me (driver+admin) → 200 ✓, GET /api/livre/driver/private-mode → 200 ✓, GET /api/livre/driver/km-summary?period=today → 200 ✓, GET /api/livre/dashboard → 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch / admin123. Backend URL: https://confidentialite-flag.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Privacy redaction in report exports"
     implemented: true
     working: true
@@ -831,3 +842,95 @@ agent_communication:
       TOTAL: 63 PASSED (8 + 55), 0 FAILED, 0 SKIPPED
       
       NO REGRESSION DETECTED. The refactoring is READ-ONLY (pure data + functions, no DB writes, no Navixy calls, not called by endpoints yet). All existing functionality (multi-tenant Navixy, BLE, auto-assignment, odometer audit) remains fully operational. The business strategies accurately reflect LOGITRAK's multi-model architecture: strategy depends on MODEL, and for FMC003 on VEHICLE. No hardcoded AVL16 universal approach.
+  - agent: "testing"
+    message: |
+      NEW SOS ALERT ENDPOINT VALIDATION COMPLETE (2026-09-07)
+      
+      CONTEXT: Validated NEW driver emergency SOS endpoint POST /api/livre/driver/sos. This endpoint allows drivers to trigger emergency alerts that are persisted to sos_alerts collection and dispatched as notifications to admins/managers. Includes anti-double-send protection (60s deduplication).
+      
+      TEST RESULTS (backend_test_sos.py against https://confidentialite-flag.preview.emergentagent.com):
+      ✅ ALL 7 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
+      
+      DETAILED VERIFICATION:
+      
+      ✅ TEST 1 - Driver SOS Success:
+         - POST /api/livre/driver/sos {"note":"test urgence","share_location":true} as DRIVER
+         - HTTP 200 ✓
+         - Response: {"ok":true,"sos_id":"8910ec97-24d1-4f6b-a54e-56b8e74dcdf0","duplicate":false,"vehicle_selected":false,"message":"Alerte SOS envoyée."} ✓
+         - sos_id is valid UUID (8910ec97-24d1-4f6b-a54e-56b8e74dcdf0) ✓
+         - duplicate=false (first SOS) ✓
+         - message present ✓
+         - vehicle_selected=false (driver has no active session) ✓
+         - NO GPS coordinates (lat/lng/address) in response ✓
+         - NO secrets (navixy_hash/api_key/token/Navixy/Teltonika) in response ✓
+      
+      ✅ TEST 2 - Anti-Double-Send (60s Deduplication):
+         - Immediately POST again (same driver, <60s)
+         - HTTP 200 ✓
+         - Response: {"ok":true,"sos_id":"8910ec97-24d1-4f6b-a54e-56b8e74dcdf0","duplicate":true,"message":"Alerte déjà en cours d'envoi."} ✓
+         - duplicate=true ✓
+         - SAME sos_id as TEST 1 (8910ec97-24d1-4f6b-a54e-56b8e74dcdf0) ✓
+         - Anti-double-send working correctly ✓
+      
+      ✅ TEST 3 - Admin (No Driver Record):
+         - POST /api/livre/driver/sos as ADMIN (admin@logitrak.ch has no driver record)
+         - HTTP 400 ✓
+         - Response: {"detail":"Utilisateur non lié à un chauffeur"} ✓
+         - Only drivers can trigger SOS (correct behavior) ✓
+      
+      ✅ TEST 4 - Unauthenticated:
+         - POST /api/livre/driver/sos without auth token
+         - HTTP 401 ✓
+         - Response: {"detail":"Non authentifié"} ✓
+         - Auth required (correct behavior) ✓
+      
+      ✅ TEST 5 - Notification Created:
+         - GET /api/livre/notifications/inbox as ADMIN
+         - HTTP 200 ✓
+         - Found 1 notification with event='sos.triggered' ✓
+         - Notification structure:
+           * id: "350e86cc-b785-4d17-97eb-6600bc2c8974"
+           * event: "sos.triggered" ✓
+           * title: "🆘 Alerte SOS" ✓
+           * body: "Jean Dupont a déclenché une alerte SOS." ✓
+           * data.sos_id: "8910ec97-24d1-4f6b-a54e-56b8e74dcdf0" (matches TEST 1) ✓
+           * data.driver_id: "1580345e-6b8e-45a2-88e7-513a008b6b12" (Jean Dupont) ✓
+           * data.vehicle_id: null (no active session) ✓
+           * data.has_location: false ✓
+           * link: "/livre/dashboard" ✓
+           * read: false ✓
+         - Notification contains NO GPS coordinates ✓
+         - Notification contains NO secrets ✓
+         - Notification dispatched successfully via existing notifications pipeline ✓
+      
+      ✅ TEST 6 - Security Verification:
+         - ALL responses checked across 7 tests
+         - 0 security issues found ✓
+         - NO forbidden secrets: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓
+         - NO GPS coordinates: lat, lng, latitude, longitude, address, coordinates, position, location ✓
+         - SOS response shape verified: only contains ok, sos_id, duplicate, message, vehicle_selected ✓
+      
+      ✅ TEST 7 - Non-Regression:
+         - GET /api/auth/me (driver) → HTTP 200 ✓
+         - GET /api/auth/me (admin) → HTTP 200 ✓
+         - GET /api/livre/driver/private-mode → HTTP 200 ✓
+         - GET /api/livre/driver/km-summary?period=today → HTTP 200 ✓
+         - GET /api/livre/dashboard → HTTP 200 ✓
+         - All existing endpoints working correctly ✓
+      
+      ENDPOINT BEHAVIOR VERIFIED:
+      - Persists SOS alert to sos_alerts collection with driver, vehicle (if any), timestamp ✓
+      - Dispatches notification (event "sos.triggered") to admins/managers via existing notifications pipeline ✓
+      - Anti-double-send: 2nd SOS within 60s returns SAME sos_id with duplicate=true ✓
+      - Only drivers can trigger SOS (admin without driver record → 400) ✓
+      - Auth required (unauthenticated → 401) ✓
+      - Response contains NO GPS coordinates or secrets ✓
+      - Notification created successfully and visible in admin inbox ✓
+      
+      CREDENTIALS TESTED:
+         - Driver: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12)
+         - Admin: admin@logitrak.ch / admin123
+      
+      CONCLUSION:
+      NEW SOS alert endpoint working correctly. All 7 tests passed. SOS alerts are persisted, notifications dispatched, anti-double-send working (60s deduplication), security verified (no leaks), non-regression verified (all endpoints working). NO ISSUES FOUND.
+

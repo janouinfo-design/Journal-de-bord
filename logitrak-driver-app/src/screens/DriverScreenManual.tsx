@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import { usePrivateMode } from '@/hooks/usePrivateMode';
 import { useKmSummary } from '@/hooks/useKmSummary';
+import SosButton from '@/components/SosButton';
 import {
   getMyVehicles, claimVehicle, getMyVehicle, Vehicle, SessionVehicle,
 } from '@/api/ble';
@@ -176,6 +177,9 @@ export default function DriverScreenManual() {
             <Text style={[styles.kmValue, { color: colors.text }]}>{km.loading ? '…' : fmtKm(km.privateKm)}</Text>
           </View>
         </View>
+
+        {/* --- SOS Urgence (bas de l'écran) --- */}
+        <SosButton isPrivate={isPrivate} />
       </ScrollView>
 
       {/* --- Modal : Choisir un véhicule (assignés uniquement) --- */}

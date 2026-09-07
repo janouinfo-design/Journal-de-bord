@@ -140,6 +140,23 @@ export async function getKmSummary(period: 'today' | 'month' = 'today'): Promise
   return data as KmSummary;
 }
 
+export type SosResult = {
+  ok: boolean;
+  sos_id?: string;
+  duplicate?: boolean;
+  vehicle_selected?: boolean;
+  message?: string;
+};
+
+// Déclenche une alerte SOS (urgence). Le backend persiste + notifie les gestionnaires.
+export async function triggerSos(note?: string, shareLocation = true): Promise<SosResult> {
+  const { data } = await apiClient.post('/api/livre/driver/sos', {
+    note: note ?? null,
+    share_location: shareLocation,
+  });
+  return data as SosResult;
+}
+
 export async function getFleetTags(): Promise<FleetTag[]> {
   const { data } = await apiClient.get('/api/livre/driver/fleet-tags');
   return (Array.isArray(data) ? data : []) as FleetTag[];
