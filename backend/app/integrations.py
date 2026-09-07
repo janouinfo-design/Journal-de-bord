@@ -128,3 +128,40 @@ def integration_status(tenant_id: Optional[str] = None,
     NONE / TENANT / ENV_API_KEY / ENV_LEGACY_HASH."""
     cred = get_integration_credential(tenant_id, provider)
     return cred["source"] if cred else "NONE"
+
+
+# ---------------------------------------------------------------------------
+# Classification (NON destructive, NON sensible) d'une valeur stockée.
+# Utilisée par l'audit / la migration. Ne renvoie JAMAIS la valeur elle-même.
+# ---------------------------------------------------------------------------
+FMT_ABSENT = "ABSENT"                    # champ absent / None
+FMT_EMPTY = "EMPTY"                      # chaîne vide / blancs
+FMT_LEGACY_PLAINTEXT = "LEGACY_PLAINTEXT"  # credential en clair (sans préfixe enc::)
+FMT_ENCRYPTED_VALID = "ENCRYPTED_VALID"    # enc:: déchiffrable avec la clé courante
+FMT_INVALID_ENCRYPTED = "INVALID_ENCRYPTED"  # enc:: NON déchiffrable (clé absente/mauvaise/corrompu)
+
+
+def classify_secret(stored, *, key_available: Optional[bool] = None) -> str:
+    """Classe une valeur stockée SANS l'exposer. Ne déchiffre que pour VÉRIFIER
+    la validité (le clair n'est jamais retourné/loggé).
+
+    - None                         -> ABSENT
+    - "" / blancs                  -> EMPTY
+    - ne commence pas par enc::     -> LEGACY_PLAINTEXT
+    - enc:: + déchiffrable          -> ENCRYPTED_VALID
+    - enc:: + non déchiffrable      -> INVALID_ENCRYPTED
+    """
+    if stored is None:
+        return FMT_ABSENT
+    if not isinstance(stored, str) or stored.strip() == "":
+        return FMT_EMPTY
+    if not stored.startswith("enc::"):
+        return FMT_LEGACY_PLAINTEXT
+    # enc:: -> vérifier la déchiffrabilité réelle (jamais présumer valide)
+    plain = decrypt_secret(stored)
+    return FMT_ENCRYPTED_VALID if plain else FMT_INVALID_ENCRYPTED
+
+
+def encryption_key_available() -> bool:
+    """True si INTEGRATION_ENCRYPTION_KEY est configurée et valide (Fernet)."""
+    return _fernet() is not None
