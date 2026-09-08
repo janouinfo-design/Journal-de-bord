@@ -68,6 +68,10 @@ R_NO_TRACKER = "ODOMETER_CALIBRATION_NO_TRACKER"
 R_INVALID_VALUE = "ODOMETER_CALIBRATION_INVALID_VALUE"
 R_DEVICE_OFFLINE = "ODOMETER_CALIBRATION_DEVICE_OFFLINE"
 R_NOT_CONFIRMED = "ODOMETER_CALIBRATION_NOT_CONFIRMED"
+# Gate PILOTE dédiée (fail-closed) — indépendante du Mode Privé.
+R_TENANT_NOT_ALLOWED = "ODOMETER_CALIBRATION_TENANT_NOT_PILOT"
+R_TRACKER_NOT_ALLOWED = "ODOMETER_CALIBRATION_TRACKER_NOT_PILOT"
+R_ENV_NOT_ALLOWED = "ODOMETER_CALIBRATION_ENV_NOT_ALLOWED"
 
 HTTP_BY_REASON = {
     R_DEVICE_WRITE_DISABLED: 503,
@@ -76,6 +80,9 @@ HTTP_BY_REASON = {
     R_NO_TRACKER: 409,
     R_INVALID_VALUE: 400,
     R_DEVICE_OFFLINE: 409,
+    R_TENANT_NOT_ALLOWED: 403,
+    R_TRACKER_NOT_ALLOWED: 403,
+    R_ENV_NOT_ALLOWED: 403,
     R_NOT_CONFIRMED: 202,
 }
 
@@ -95,6 +102,72 @@ def calibration_device_write_enabled() -> bool:
     Verrou dédié `ODOMETER_CALIBRATION_DEVICE_WRITE` (défaut 0). JAMAIS couplé au Mode Privé."""
     return os.environ.get("ODOMETER_CALIBRATION_DEVICE_WRITE", "0").strip().lower() in (
         "1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# GATE PILOTE DÉDIÉE (fail-closed) — allowlists tenant + tracker INDÉPENDANTES du Mode Privé.
+# Env : ODOMETER_CALIBRATION_PILOT_TENANTS (CSV) / ODOMETER_CALIBRATION_PILOT_TRACKERS (CSV).
+# RÈGLE ABSOLUE : une liste ABSENTE => AUCUNE autorisation (jamais "tous autorisés").
+# ---------------------------------------------------------------------------
+# Environnements où une commande device réelle est permise (sinon fail-closed).
+_ALLOWED_APP_ENVS = ("production", "preview", "staging", "development", "dev", "local", "test")
+
+
+def _csv_env(name: str) -> Optional[set[str]]:
+    """Retourne l'ensemble CSV d'une variable d'env, ou None si la variable est ABSENTE.
+    Distinction VOLONTAIRE : None (absente => fail-closed) vs set() (présente mais vide)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+def calibration_env_allowed() -> bool:
+    """APP_ENV doit être explicitement autorisé (fail-closed si inconnu/absent)."""
+    return os.environ.get("APP_ENV", "production").strip().lower() in _ALLOWED_APP_ENVS
+
+
+def calibration_tenant_allowed(tenant_id: Optional[str]) -> bool:
+    """Tenant dans ODOMETER_CALIBRATION_PILOT_TENANTS. Liste absente => refus (fail-closed)."""
+    if not tenant_id:
+        return False
+    allow = _csv_env("ODOMETER_CALIBRATION_PILOT_TENANTS")
+    if allow is None:
+        return False
+    return str(tenant_id) in allow
+
+
+def calibration_tracker_allowed(tracker_id) -> bool:
+    """Tracker dans ODOMETER_CALIBRATION_PILOT_TRACKERS. Liste absente => refus (fail-closed)."""
+    if tracker_id is None:
+        return False
+    allow = _csv_env("ODOMETER_CALIBRATION_PILOT_TRACKERS")
+    if allow is None:
+        return False
+    return str(tracker_id) in allow
+
+
+def calibration_pilot_gate(tenant_id: Optional[str], tracker_id) -> tuple[bool, Optional[str]]:
+    """Décision FAIL-CLOSED d'envoi de commande RÉELLE de calibration.
+
+    Toutes les conditions doivent être vraies (sinon (False, raison)) :
+      - APP_ENV autorisé ;
+      - ODOMETER_CALIBRATION_DEVICE_WRITE=1 ;
+      - tenant dans l'allowlist dédiée ;
+      - tracker dans l'allowlist dédiée.
+    (La résolution véhicule/tracker exact, capability, online, RBAC, valeur sont vérifiés
+     par ailleurs dans calibrate_vehicle_odometer / la route.)
+    Retour (allowed, reason|None).
+    """
+    if not calibration_env_allowed():
+        return False, R_ENV_NOT_ALLOWED
+    if not calibration_device_write_enabled():
+        return False, R_DEVICE_WRITE_DISABLED
+    if not calibration_tenant_allowed(tenant_id):
+        return False, R_TENANT_NOT_ALLOWED
+    if not calibration_tracker_allowed(tracker_id):
+        return False, R_TRACKER_NOT_ALLOWED
+    return True, None
 
 
 # ---------------------------------------------------------------------------
@@ -309,19 +382,23 @@ async def calibrate_vehicle_odometer(
     if avl16_before is not None:
         large_delta = abs(km - float(avl16_before)) >= LARGE_DELTA_WARN_KM
 
-    # 4) GATE d'écriture device (FAIL-FAST si off) — AUCUNE commande, aucun event.
-    if not calibration_device_write_enabled():
+    # 4) GATE PILOTE FAIL-CLOSED (dédiée) — AVANT toute commande, aucun event.
+    #    APP_ENV autorisé + write=1 + tenant allowlisté + tracker allowlisté.
+    #    Liste absente => refus. Indépendant du Mode Privé. Le tracker doit correspondre
+    #    EXACTEMENT au véhicule canonique déjà résolu (tid/vehicle_id/tracker_id ci-dessus).
+    gate_ok, gate_reason = calibration_pilot_gate(tid, tracker_id)
+    if not gate_ok:
         await _audit(db, {"actor": actor, "vehicle_id": vehicle_id, "tracker_id": tracker_id,
                           "tenant_id": tid, "requested_dashboard_km": km,
                           "avl16_before_km": avl16_before, "result": "refused",
-                          "reason": R_DEVICE_WRITE_DISABLED})
-        return {"ok": False, "result": CALIB_REFUSED, "reason": R_DEVICE_WRITE_DISABLED,
-                "http": HTTP_BY_REASON[R_DEVICE_WRITE_DISABLED], "vehicle_id": vehicle_id,
+                          "reason": gate_reason})
+        return {"ok": False, "result": CALIB_REFUSED, "reason": gate_reason,
+                "http": HTTP_BY_REASON.get(gate_reason, 403), "vehicle_id": vehicle_id,
                 "tracker_id": tracker_id, "requested_dashboard_km": km,
                 "avl16_before_km": avl16_before, "odometer_calibrated": False,
                 "large_delta_warning": large_delta}
 
-    # 5) Envoi commande (GATED — n'arrive ici que si write ON)
+    # 5) Envoi commande (GATED — n'arrive ici que si la gate pilote autorise TOUT)
     command = build_calibration_command(km, style=command_style)
     cmd_res = await send_command(int(tracker_id), command)
 

@@ -84,6 +84,18 @@ backend:
       - working: true
         agent: "testing"
         comment: "STRATÉGIE V2 MIGRATION COMPLETE - Socle commun AVL 16 pour FMC003+FMC130. Test results: test_odometer_capability.py 17 PASSED (was 8, added 9 V2 tests). All 8 business invariants PASS: (a) FMC003 strategy=TELTONIKA_TOTAL_ODOMETER + primary_source=TELTONIKA_TOTAL_ODOMETER ✓, (b) FMC130 strategy=TELTONIKA_TOTAL_ODOMETER ✓, (c) FMC003 secondary_source=OBD_OEM_TOTAL_MILEAGE (AVL 389 optionnel) ✓, (d) Aucun modèle verified=True ✓, (e) vehicle_private_mode_allowed exige TOUTES 4 preuves (runtime/cumulative/private_increment/field_validated) + source=AVL16 + raw_avl_id=16 ✓, (f) private_mode_production_allowed()=False ✓, (g) FMU130 DEPRECATED, FMC640/650 NOT_PRESENT, tous private_mode_allowed=False ✓, (h) normalize_teltonika_total_odometer scale explicite (UNVERIFIED sans mapping, VERIFIED avec mapping validé) ✓. Module isolation verified: ONLY imported by test_odometer_capability.py (grep confirmed). NO REGRESSION DETECTED. Module remains READ-ONLY (pure business logic, no endpoints, no DB writes, no Navixy calls)."
+  - task: "Odometer Dashboard Calibration - dedicated pilot gate (fail-closed)"
+    implemented: true
+    working: true
+    file: "backend/app/odometer_calibration.py, backend/app/routes/odometer_calibration.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "ODOMETER CALIBRATION PILOT GATE VALIDATION COMPLETE - All 27 pytest tests PASSED (2026-01-XX). Verified NEW security hardening: dedicated fail-closed allowlist gate independent from Private Mode. ONLY tracker 781479 of tenant 'default' can pass when device writes enabled. NO real device commands sent (all mocked). PRIMARY VALIDATION: (1) pytest test_odometer_calibration.py: 27 PASSED in 0.10s ✓ - Original tests T1-T14 PASS (no regression): km validation (T1), AVL16 confirmation (T2), anti-false-delta baseline (T3), delta after calibration (T4), Pro/Privé classification (T5/T6), source AVL16 explicit (T7), unsupported model refused (T8), cross-tenant refused (T9), device offline refused (T10), not confirmed when no AVL16 (T11), incoherent AVL16 not validated (T12), 2nd calibration new baseline (T13), device write OFF fail-fast (T14). NEW gate tests T15-T24 + test_gate_env_not_allowed ALL PASS: test_t15_write_off_refused (write=0 → refused, no event) ✓, test_t16_tenant_not_allowlisted_refused ✓, test_t17_tracker_not_allowlisted_refused ✓, test_t18_missing_allowlist_failclosed (allowlist ABSENT → refused, NEVER 'all allowed') ✓, test_t19_pilot_allowed (781479 + default + write=1 → gate authorizes, CONFIRMED) ✓, test_t20_other_tracker_same_tenant_refused ✓, test_t21_same_tracker_wrong_tenant_refused ✓, test_t22_canonical_tracker_mismatch_refused (781480 != 781479) ✓, test_t23_cross_tenant_isolation_refused (vehicle of tenant default seen from 'autre' → NO_VEHICLE) ✓, test_t24_no_device_send_when_gate_refuses (device send function NEVER called when gate refuses) ✓, test_gate_env_not_allowed (APP_ENV unknown → ENV_NOT_ALLOWED) ✓. (2) Wider regression: 100 PASSED in 0.15s (test_odometer_calibration.py + test_private_mode_phase2.py + test_private_mode_confirmation.py + test_private_mode_gate.py + test_odometer_capability.py) ✓. CODE INSPECTION: (3) calibration_pilot_gate() verified (lines 150-170): returns (allowed, reason) requiring ALL of APP_ENV allowed AND DEVICE_WRITE=1 AND tenant in PILOT_TENANTS AND tracker in PILOT_TRACKERS ✓. _csv_env() returns None when env var ABSENT (lines 116-122) ✓. calibration_tenant_allowed() returns False when list absent (lines 130-137, fail-closed) ✓. calibration_tracker_allowed() returns False when list absent (lines 140-147, fail-closed) ✓. Allowlists DISTINCT from PRIVATE_MODE_* env vars (independent) ✓. (4) calibrate_vehicle_odometer() verified (lines 329-467): gate called at line 389 BEFORE building/sending command ✓. Step order: vehicle/tenant (348-352) → tracker (354-357) → model AVL16 (359-363) → validate value (365-370) → read AVL16 before (373) → offline check (376-379) → PILOT GATE fail-closed (385-399) → only then send_command (401-403) ✓. When gate refuses: NO command sent, NO calibration event recorded (audit only at 391-394) ✓. (5) Anti-false-delta helpers intact: safe_avl16_delta_km() returns None when crosses=True (lines 308-323, calibration jump 56377→139620 never becomes distance) ✓. CALIBRATION_EVENT history append-only (line 257: insert_one, never update) ✓. (6) Endpoints verified: GET /vehicles/{id}/odometer returns can_calibrate (full pilot gate, lines 64-67, 80) ✓. POST /vehicles/{id}/odometer/calibrate uses require_roles('admin') (line 96) ✓. Backend service running cleanly (uptime 0:33:54) ✓. CONCLUSION: Security hardening correctly implemented. Dedicated fail-closed allowlist gate (ODOMETER_CALIBRATION_PILOT_TENANTS, ODOMETER_CALIBRATION_PILOT_TRACKERS) independent from Private Mode. Gate requires ALL conditions (env + write + tenant + tracker). When allowlist ABSENT → fail-closed (never 'all allowed'). Gate checked BEFORE any device command. NO real device commands sent (all mocked in tests). Anti-false-delta protection intact. NO ISSUES FOUND."
+
   - task: "Navixy credential refactor regression - multi-tenant isolation"
     implemented: true
     working: true
@@ -1026,4 +1038,84 @@ agent_communication:
       
       CONCLUSION:
       NEW SOS alert endpoint working correctly. All 7 tests passed. SOS alerts are persisted, notifications dispatched, anti-double-send working (60s deduplication), security verified (no leaks), non-regression verified (all endpoints working). NO ISSUES FOUND.
+
+  - agent: "testing"
+    message: |
+      ODOMETER DASHBOARD CALIBRATION PILOT GATE VALIDATION COMPLETE (2026-01-XX)
+      
+      CONTEXT: Validated NEW security hardening for Odometer Dashboard Calibration feature (LOGITRAK backend). Added dedicated fail-closed allowlist gate independent from Private Mode, ensuring ONLY tracker 781479 of tenant "default" can pass when device writes enabled. NO real device commands sent (all mocked in tests).
+      
+      PRIMARY VALIDATION (pytest - authoritative):
+      ✅ (1) test_odometer_calibration.py: 27 PASSED in 0.10s (100%)
+         - Original tests T1-T14: ALL PASS (no regression)
+           • T1: km validation (integer, no decimals) ✓
+           • T2: AVL16 confirmation (dashboard km ≈ AVL16) ✓
+           • T3: calibration creates baseline, NO fake distance (anti-false-delta) ✓
+           • T4: delta after calibration = real distance ✓
+           • T5/T6: Pro/Privé classification (delta classified correctly) ✓
+           • T7: source AVL16 explicit (Navixy odometer never used) ✓
+           • T8: unsupported model refused ✓
+           • T9: cross-tenant refused ✓
+           • T10: device offline refused ✓
+           • T11: not confirmed when no AVL16 after (calibrated=false, PENDING) ✓
+           • T12: incoherent AVL16 not validated (FAILED) ✓
+           • T13: 2nd calibration = new baseline, NO fake delta ✓
+           • T14: device write OFF → fail-fast (no command, no event) ✓
+         
+         - NEW gate tests T15-T24 + test_gate_env_not_allowed: ALL PASS
+           • test_t15_write_off_refused: write=0 → refused, no event ✓
+           • test_t16_tenant_not_allowlisted_refused: tenant not in allowlist → refused ✓
+           • test_t17_tracker_not_allowlisted_refused: tracker not in allowlist → refused ✓
+           • test_t18_missing_allowlist_failclosed: allowlist ABSENT → refused (NEVER "all allowed") ✓
+           • test_t19_pilot_allowed: 781479 + default + write=1 → gate authorizes, CONFIRMED ✓
+           • test_t20_other_tracker_same_tenant_refused: tracker 999999 (same tenant) → refused ✓
+           • test_t21_same_tracker_wrong_tenant_refused: tracker 781479 (wrong tenant) → refused ✓
+           • test_t22_canonical_tracker_mismatch_refused: tracker 781480 (off-by-one) → refused ✓
+           • test_t23_cross_tenant_isolation_refused: vehicle of tenant default seen from 'autre' → NO_VEHICLE ✓
+           • test_t24_no_device_send_when_gate_refuses: device send function NEVER called when gate refuses ✓
+           • test_gate_env_not_allowed: APP_ENV unknown → ENV_NOT_ALLOWED ✓
+      
+      ✅ (2) Wider regression: 100 PASSED in 0.15s
+         - test_odometer_calibration.py (27)
+         - test_private_mode_phase2.py
+         - test_private_mode_confirmation.py
+         - test_private_mode_gate.py
+         - test_odometer_capability.py
+      
+      CODE INSPECTION (confirmed - no live device):
+      ✅ (3) calibration_pilot_gate() implementation verified (odometer_calibration.py lines 150-170):
+         - Returns (allowed, reason) tuple ✓
+         - Requires ALL of: APP_ENV allowed AND DEVICE_WRITE=1 AND tenant in PILOT_TENANTS AND tracker in PILOT_TRACKERS ✓
+         - _csv_env() returns None when env var ABSENT (lines 116-122) ✓
+         - calibration_tenant_allowed() returns False when list absent (lines 130-137, fail-closed) ✓
+         - calibration_tracker_allowed() returns False when list absent (lines 140-147, fail-closed) ✓
+         - Allowlists DISTINCT from PRIVATE_MODE_* env vars (independent gate) ✓
+         - Env vars: ODOMETER_CALIBRATION_PILOT_TENANTS, ODOMETER_CALIBRATION_PILOT_TRACKERS ✓
+      
+      ✅ (4) calibrate_vehicle_odometer() step order verified (lines 329-467):
+         - Gate called at line 389 BEFORE building/sending any command ✓
+         - Step order: vehicle/tenant (348-352) → tracker (354-357) → model AVL16 (359-363) → validate value (365-370) → read AVL16 before (373) → offline check (376-379) → PILOT GATE fail-closed (385-399) → only then send_command (401-403) ✓
+         - When gate refuses: NO command sent, NO calibration event recorded (audit only at 391-394) ✓
+         - Command building happens AFTER gate authorization (line 402) ✓
+      
+      ✅ (5) Anti-false-delta helpers intact:
+         - safe_avl16_delta_km() returns None when crosses=True (lines 308-323) ✓
+         - Calibration jump (e.g., 56377→139620 km) NEVER becomes distance ✓
+         - CALIBRATION_EVENT history append-only (line 257: insert_one, never update) ✓
+      
+      ✅ (6) Endpoints verified (routes/odometer_calibration.py):
+         - GET /vehicles/{id}/odometer returns can_calibrate (full pilot gate check, lines 64-67, 80) ✓
+         - POST /vehicles/{id}/odometer/calibrate uses require_roles("admin") (line 96) ✓
+         - Backend service running cleanly (uptime 0:33:54) ✓
+      
+      SECURITY VERIFICATION:
+      ✅ NO real device commands sent (all mocked in tests) ✓
+      ✅ NO setparam executed on real tracker ✓
+      ✅ Fail-closed gate: allowlist ABSENT → refused (never "all allowed") ✓
+      ✅ Independent from Private Mode (separate env vars, separate gate logic) ✓
+      ✅ Multi-tenant isolation verified (cross-tenant refused) ✓
+      ✅ RBAC verified (admin-only endpoint) ✓
+      
+      CONCLUSION:
+      Security hardening correctly implemented. Dedicated fail-closed allowlist gate (ODOMETER_CALIBRATION_PILOT_TENANTS, ODOMETER_CALIBRATION_PILOT_TRACKERS) independent from Private Mode. Gate requires ALL conditions (env + write + tenant + tracker). When allowlist ABSENT → fail-closed (never "all allowed"). Gate checked BEFORE any device command. Anti-false-delta protection intact (calibration jumps never counted as distance). All 27 tests pass (original T1-T14 + NEW gate tests T15-T24 + env test). Wider regression 100 tests pass. NO real device commands sent. NO ISSUES FOUND.
 

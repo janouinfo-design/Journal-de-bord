@@ -116,8 +116,12 @@ def _mock_read(seq):
 
 @pytest.fixture(autouse=True)
 def _write_on(monkeypatch):
-    # Par défaut ON pour tester la machine ; les tests fail-fast forcent OFF explicitement.
+    # Par défaut : gate pilote OUVERTE pour le tracker/tenant de test (default/781479).
+    # Les tests fail-closed forcent explicitement OFF/absent selon le cas.
+    monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("ODOMETER_CALIBRATION_DEVICE_WRITE", "1")
+    monkeypatch.setenv("ODOMETER_CALIBRATION_PILOT_TENANTS", "default")
+    monkeypatch.setenv("ODOMETER_CALIBRATION_PILOT_TRACKERS", "781479")
     yield
 
 
@@ -312,3 +316,134 @@ def test_write_lock_default_is_off(monkeypatch):
     assert oc.calibration_device_write_enabled() is False
     monkeypatch.setenv("ODOMETER_CALIBRATION_DEVICE_WRITE", "1")
     assert oc.calibration_device_write_enabled() is True
+
+
+# ===========================================================================
+# GATE PILOTE DÉDIÉE (fail-closed) — T15..T24.
+# Seul tracker 781479 / tenant default / write=1 / env autorisé peut franchir la gate.
+# ===========================================================================
+def _db_vehicle(vehicle_id, tenant, tracker, model="telfmu130_fmc130"):
+    db = _DB()
+    _run(db.vehicles.update_one({"id": vehicle_id}, {"$set": {
+        "id": vehicle_id, "tenant_id": tenant, "model": model,
+        "navixy_tracker_id": tracker, "plate": "PLQ"}}, upsert=True))
+    return db
+
+
+def _forbid_send():
+    async def _c(tid, cmd):
+        raise AssertionError("Aucune commande device ne doit partir quand la gate refuse")
+    return _c
+
+
+# ---------- T15 : write=0 -> refus ----------
+def test_t15_write_off_refused(monkeypatch):
+    monkeypatch.setenv("ODOMETER_CALIBRATION_DEVICE_WRITE", "0")
+    db = _db_fmc130()
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_DEVICE_WRITE_DISABLED
+    assert _run(db.odometer_calibrations.count_documents({"vehicle_id": "v130"})) == 0
+
+
+# ---------- T16 : write=1 + tenant non allowlisté -> refus ----------
+def test_t16_tenant_not_allowlisted_refused(monkeypatch):
+    monkeypatch.setenv("ODOMETER_CALIBRATION_PILOT_TENANTS", "autre_tenant")
+    db = _db_fmc130()
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_TENANT_NOT_ALLOWED
+    assert _run(db.odometer_calibrations.count_documents({"vehicle_id": "v130"})) == 0
+
+
+# ---------- T17 : write=1 + tracker non allowlisté -> refus ----------
+def test_t17_tracker_not_allowlisted_refused(monkeypatch):
+    monkeypatch.setenv("ODOMETER_CALIBRATION_PILOT_TRACKERS", "999999")
+    db = _db_fmc130()
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_TRACKER_NOT_ALLOWED
+
+
+# ---------- T18 : allowlist absente -> refus (fail-closed, jamais "tous autorisés") ----------
+def test_t18_missing_allowlist_failclosed(monkeypatch):
+    monkeypatch.delenv("ODOMETER_CALIBRATION_PILOT_TENANTS", raising=False)
+    monkeypatch.delenv("ODOMETER_CALIBRATION_PILOT_TRACKERS", raising=False)
+    db = _db_fmc130()
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] in (oc.R_TENANT_NOT_ALLOWED, oc.R_TRACKER_NOT_ALLOWED)
+    # helpers renvoient bien False si la variable est ABSENTE
+    assert oc.calibration_tenant_allowed("default") is False
+    assert oc.calibration_tracker_allowed(781479) is False
+
+
+# ---------- T19 : pilote exact (781479 / default / write=1) -> gate autorise ----------
+def test_t19_pilot_allowed():
+    db = _db_fmc130()
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_mock_send("REAL"), read_avl16_km=_mock_read([56377.978, 139620.0])))
+    assert res["ok"] is True and res["result"] == oc.CALIB_CONFIRMED
+    # la gate a bien autorisé (aucun refus)
+    ok, reason = oc.calibration_pilot_gate("default", 781479)
+    assert ok is True and reason is None
+
+
+# ---------- T20 : autre tracker du tenant default -> refus ----------
+def test_t20_other_tracker_same_tenant_refused():
+    db = _db_vehicle("vOther", "default", 999999)   # FMC130 supporté mais tracker non pilote
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="vOther", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([1000.0])))
+    assert res["ok"] is False and res["reason"] == oc.R_TRACKER_NOT_ALLOWED
+
+
+# ---------- T21 : même tracker 781479 mais mauvais tenant -> refus ----------
+def test_t21_same_tracker_wrong_tenant_refused():
+    db = _db_vehicle("vOtherTenant", "autre", 781479)  # tracker pilote mais tenant non pilote
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="autre", vehicle_id="vOtherTenant", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_TENANT_NOT_ALLOWED
+
+
+# ---------- T22 : véhicule canonique avec tracker != pilote -> refus ----------
+def test_t22_canonical_tracker_mismatch_refused():
+    db = _db_vehicle("vMismatch", "default", 781480)   # 781480 != 781479 (off-by-one)
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="vMismatch", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_TRACKER_NOT_ALLOWED
+
+
+# ---------- T23 : cross-tenant (véhicule du tenant default vu depuis 'autre') -> refus ----------
+def test_t23_cross_tenant_isolation_refused():
+    db = _db_fmc130()  # vehicle v130 appartient à tenant default
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="autre", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_NO_VEHICLE
+    assert _run(db.odometer_calibrations.count_documents({"vehicle_id": "v130"})) == 0
+
+
+# ---------- T24 : gate refusée -> la fonction d'envoi device n'est JAMAIS appelée ----------
+def test_t24_no_device_send_when_gate_refuses(monkeypatch):
+    monkeypatch.setenv("ODOMETER_CALIBRATION_PILOT_TRACKERS", "999999")  # 781479 exclu
+    db = _db_fmc130()
+    # _forbid_send lève si appelé -> si le test passe, aucun envoi n'a eu lieu
+    res = _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_forbid_send(), read_avl16_km=_mock_read([56377.978])))
+    assert res["ok"] is False and res["reason"] == oc.R_TRACKER_NOT_ALLOWED
+
+
+# ---------- Gate env : APP_ENV non autorisé -> refus ----------
+def test_gate_env_not_allowed(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "unknown_env_xyz")
+    ok, reason = oc.calibration_pilot_gate("default", 781479)
+    assert ok is False and reason == oc.R_ENV_NOT_ALLOWED

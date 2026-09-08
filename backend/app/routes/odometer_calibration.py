@@ -61,6 +61,11 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
 
     calibrations = await oc.list_calibrations(db, tenant_id=tenant_id, vehicle_id=vehicle_id)
 
+    # can_calibrate = gate PILOTE complète (env + write + tenant + tracker allowlistés).
+    # Le backend reste autoritaire ; l'UI n'active le bouton que si can_calibrate est vrai.
+    gate_ok, gate_reason = oc.calibration_pilot_gate(tenant_id, tracker_id)
+    can_calibrate = bool(supported and gate_ok)
+
     return {
         "vehicle": {"id": vehicle.get("id"), "plate": vehicle.get("plate"),
                     "model": vehicle.get("model")},
@@ -72,6 +77,8 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
         "last_update": last_update,
         "capability": cap,
         "device_write_enabled": oc.calibration_device_write_enabled(),
+        "can_calibrate": can_calibrate,
+        "can_calibrate_reason": None if can_calibrate else gate_reason,
         "param_max_km": oc.PARAM_MAX_KM,
         "large_delta_warn_km": oc.LARGE_DELTA_WARN_KM,
         "calibrations": calibrations,

@@ -60,7 +60,7 @@ export default function VehicleOdometerPage() {
 
   const telematicsKm = state?.telematics_km;
   const supported = !!state?.supported;
-  const writeEnabled = !!state?.device_write_enabled;
+  const writeEnabled = state?.can_calibrate ?? !!state?.device_write_enabled;
 
   // Validation stricte : entier uniquement (jamais tronqué silencieusement)
   const validate = (raw) => {

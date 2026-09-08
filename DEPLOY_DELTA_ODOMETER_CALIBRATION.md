@@ -62,12 +62,21 @@
                             si relecture AVL16 ≈ valeur demandée (tolérance 1 km).
 ```
 
-## GATE DEVICE (verrou DÉDIÉ)
+## GATE DEVICE (verrou DÉDIÉ + allowlist pilote FAIL-CLOSED)
 
 ```
-ODOMETER_CALIBRATION_DEVICE_WRITE = 0   (défaut obligatoire, fail-closed)
-- DÉCOUPLÉ de PRIVATE_MODE_DEVICE_WRITE (prouvé par test).
-- write OFF -> refus immédiat 503, AUCUNE commande, AUCUN event, baseline inchangée.
+ODOMETER_CALIBRATION_DEVICE_WRITE  = 0         (défaut obligatoire, fail-closed)
+ODOMETER_CALIBRATION_PILOT_TENANTS = default   (allowlist DÉDIÉE — absente => AUCUNE écriture)
+ODOMETER_CALIBRATION_PILOT_TRACKERS= 781479    (allowlist DÉDIÉE — absente => AUCUNE écriture)
+
+- Totalement INDÉPENDANT de PRIVATE_MODE_DEVICE_WRITE / PRIVATE_MODE_PILOT_* (prouvé par test).
+- Une commande RÉELLE ne part QUE si TOUT est vrai :
+    APP_ENV autorisé + DEVICE_WRITE=1 + tenant allowlisté + tracker allowlisté
+    + véhicule canonique résolu + tracker lié exactement + capability AVL16
+    + RBAC admin/superadmin + tracker online + valeur valide.
+- Liste absente => refus (JAMAIS "tous autorisés").
+- Sinon : aucune commande, aucun setparam, aucune calibration confirmée, baseline inchangée.
+- Seul tracker 781479 / tenant default / FMC130 peut franchir la gate. Tout autre => REFUS.
 ```
 
 ## UI (fiche véhicule — /livre/administration/kilometrage)
@@ -113,12 +122,23 @@ POST /api/livre/vehicles/{vehicle_id}/odometer/calibrate  (admin) — calibratio
 
 ---
 
-## ENV (à ajouter — défaut sûr)
+## ENV (à ajouter — défauts sûrs, fail-closed)
 
 ```
-ODOMETER_CALIBRATION_DEVICE_WRITE=0     # verrou dédié, défaut OFF (aucune commande)
+ODOMETER_CALIBRATION_DEVICE_WRITE=0        # verrou dédié, défaut OFF (aucune commande)
+ODOMETER_CALIBRATION_PILOT_TENANTS=default # allowlist tenant dédiée (absente => aucune écriture)
+ODOMETER_CALIBRATION_PILOT_TRACKERS=781479 # allowlist tracker dédiée (absente => aucune écriture)
 ```
-(Ne PAS modifier les autres variables. Ne PAS activer à 1 avant le GO terrain.)
+Le premier déploiement prod reste **WRITE=0** (lecture + UI + RBAC + historique + capability + tests).
+Ne PAS activer WRITE=1 avant le GO terrain. Les allowlists n'ouvrent RIEN tant que WRITE=0.
+
+## TESTS (mise à jour durcissement)
+
+```
+- backend calibration : 27 → PASS 27 / FAIL 0   (T1..T14 + T15..T24 gate + env)
+- régression globale   : 100 → PASS 100 / FAIL 0
+- testing_agent        : PASS (gate fail-closed, isolation tenant/tracker, anti-faux-delta, RBAC)
+```
 
 ## COMMANDES VPS (DELTA)
 
