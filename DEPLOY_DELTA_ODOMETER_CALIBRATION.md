@@ -42,6 +42,8 @@
 | `backend/app/routes/odometer_calibration.py` | NEW | ✅ DEPLOY (backend) |
 | `backend/app/routes/__init__.py` | MODIFIED (wire router) | ✅ DEPLOY (backend) |
 | `frontend/src/pages/VehicleOdometerPage.jsx` | NEW | ✅ DEPLOY (frontend) |
+| `frontend/src/pages/vehicleOdometerLogic.js` | NEW (logique fail-closed pure) | ✅ DEPLOY (frontend) |
+| `frontend/src/pages/__tests__/vehicleOdometerLogic.test.js` | TEST_ONLY | ⛔ ne pas déployer |
 | `frontend/src/App.js` | MODIFIED (route admin) | ✅ DEPLOY (frontend) |
 | `frontend/src/pages/AdministrationLayout.jsx` | MODIFIED (onglet) | ✅ DEPLOY (frontend) |
 | `backend/tests/test_odometer_calibration.py` | TEST_ONLY | ⛔ ne pas déployer |
@@ -85,9 +87,11 @@ ODOMETER_CALIBRATION_PILOT_TRACKERS= 781479    (allowlist DÉDIÉE — absente =
 - accès       : Admin + Superadmin uniquement (ProtectedRoute + require_roles backend)
                 Manager/Driver/lecture_seule -> 403 (backend autoritaire)
 - affichage   : Km télématique (AVL16) + Source "Teltonika AVL16" + dernière mise à jour
-- saisie      : "Kilométrage actuel du tableau de bord" — ENTIER strict
-                (décimale -> message "Saisir un kilométrage ENTIER", jamais tronqué)
-- action      : bouton "Synchroniser avec le compteur" (désactivé si write off)
+- FAIL-CLOSED : bouton "Synchroniser" actif SEULEMENT si can_calibrate === true (booléen strict).
+                Aucun fallback sur device_write_enabled. false/null/undefined/absent/erreur GET
+                -> bouton désactivé, aucun POST, aucun spinner, message "indisponible".
+                openConfirm() garde aussi fail-closed (pas de dialogue si gate refuse).
+- saisie      : "Kilométrage du tableau de bord" — ENTIER strict (décimale refusée, jamais tronqué)
 - confirmation: dialogue 2 temps (valeur actuelle vs saisie + écart) — pas d'écriture auto
 - avertissement: écart important (>= 1000 km) affiché avant confirmation
 - historique  : liste append-only des calibrations (date, avant/saisie/après, résultat, auteur)
@@ -132,12 +136,43 @@ ODOMETER_CALIBRATION_PILOT_TRACKERS=781479 # allowlist tracker dédiée (absente
 Le premier déploiement prod reste **WRITE=0** (lecture + UI + RBAC + historique + capability + tests).
 Ne PAS activer WRITE=1 avant le GO terrain. Les allowlists n'ouvrent RIEN tant que WRITE=0.
 
-## TESTS (mise à jour durcissement)
+## TESTS (mise à jour durcissement + UI fail-closed)
 
 ```
 - backend calibration : 27 → PASS 27 / FAIL 0   (T1..T14 + T15..T24 gate + env)
 - régression globale   : 100 → PASS 100 / FAIL 0
-- testing_agent        : PASS (gate fail-closed, isolation tenant/tracker, anti-faux-delta, RBAC)
+- frontend (Jest)      : 10 → PASS 10 / FAIL 0   (vehicleOdometerLogic : can_calibrate strict, no fallback)
+- testing_agent backend: PASS (gate fail-closed, isolation tenant/tracker, anti-faux-delta, RBAC)
+- testing_agent frontend: PASS (règle UI fail-closed, aucun fallback device_write_enabled)
+```
+
+## GO DÉPLOIEMENT PROD — WRITE OFF (à exécuter par l'utilisateur sur le VPS)
+
+> ⚠️ L'agent n'a PAS accès au VPS. Les commandes ci-dessous sont à lancer par vous.
+
+Configuration production (ne PAS activer WRITE avant GO terrain) :
+```
+ODOMETER_CALIBRATION_DEVICE_WRITE=0
+ODOMETER_CALIBRATION_PILOT_TENANTS=default
+ODOMETER_CALIBRATION_PILOT_TRACKERS=781479
+```
+Rebuild (uniquement ces 2 services) :
+```
+docker compose build journal_backend  && docker compose up -d journal_backend
+docker compose build journal_frontend && docker compose up -d journal_frontend
+```
+
+## SMOKE TEST PROD (checklist à cocher par vous)
+
+```
+- backend healthy / frontend healthy
+- Page /livre/administration/kilometrage chargée (admin) ; non visible pour chauffeur
+- Véhicule pilote (LOGITRAK AUDI / 781479) visible ; Km AVL16 réel affiché ; source TELTONIKA_AVL16
+- Historique accessible ; aucune erreur console importante
+- Gate WRITE=0 : GET renvoie can_calibrate=false -> bouton DÉSACTIVÉ, aucune commande device
+- RBAC : admin OK · superadmin OK · manager 403 · driver 403
+- Isolation : aucun autre tracker calibrable (can_calibrate=false partout sauf, plus tard, 781479 si WRITE=1)
+- PREUVE DEVICE : setparam 11807 réel envoyé = NON · tracker 781479 modifié = NON · autres = NON
 ```
 
 ## COMMANDES VPS (DELTA)

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Loader2, Gauge, Truck, History, AlertTriangle } from "lucide-react";
+import { canCalibrate as canCalibrateFn, syncDisabled, canAttemptCalibration } from "./vehicleOdometerLogic";
 
 /**
  * Fiche véhicule — Kilométrage compteur (calibration baseline AVL16).
@@ -60,7 +61,9 @@ export default function VehicleOdometerPage() {
 
   const telematicsKm = state?.telematics_km;
   const supported = !!state?.supported;
-  const writeEnabled = state?.can_calibrate ?? !!state?.device_write_enabled;
+  // UI FAIL-CLOSED : le bouton n'est actif QUE si can_calibrate === true (booléen strict).
+  // Jamais de fallback sur device_write_enabled : null/undefined/absent/erreur => désactivé.
+  const canCalibrate = canCalibrateFn(state);
 
   // Validation stricte : entier uniquement (jamais tronqué silencieusement)
   const validate = (raw) => {
@@ -80,6 +83,8 @@ export default function VehicleOdometerPage() {
   }, [dashKm, telematicsKm]);
 
   const openConfirm = () => {
+    // Garde fail-closed : jamais de confirmation/POST si la gate backend n'autorise pas.
+    if (!canAttemptCalibration(state)) return;
     const { value, error } = validate(dashKm);
     if (error) { setInputError(error); return; }
     setInputError(null);
@@ -193,7 +198,7 @@ export default function VehicleOdometerPage() {
                 </div>
               </div>
 
-              {!writeEnabled ? (
+              {!canCalibrate ? (
                 <p className="text-xs text-amber-600 flex items-center gap-1" data-testid="odo-write-disabled">
                   <AlertTriangle className="w-3.5 h-3.5" /> La synchronisation du compteur est actuellement indisponible.
                 </p>
@@ -212,7 +217,7 @@ export default function VehicleOdometerPage() {
                     className="max-w-[200px]"
                   />
                   <span className="text-sm text-slate-500">km</span>
-                  <Button onClick={openConfirm} disabled={!writeEnabled || submitting || !dashKm}
+                  <Button onClick={openConfirm} disabled={syncDisabled({ state, submitting, dashKm })}
                     data-testid="odo-sync-button" className="bg-[#2196F3] hover:bg-[#1E88E5]">
                     Synchroniser avec le compteur
                   </Button>
