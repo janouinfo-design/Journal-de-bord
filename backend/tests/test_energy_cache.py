@@ -127,6 +127,21 @@ class TestCacheModule:
         _, val = energy_cache.lookup(key)
         assert val["metrics"]["fuel_liters_total"]["value"] is None  # jamais 0
 
+    def test_erreur_explicite_jamais_ancienne_valeur_available(self):
+        """Une erreur transport ÉCRASE l'entrée précédente : le cache ne retourne
+        jamais une ancienne valeur AVAILABLE à la place d'une erreur, et l'erreur
+        cachée reste visible comme erreur (reason + UNAVAILABLE + metrics None)."""
+        key = energy_cache.make_key(*K)
+        energy_cache.store(key, {"availability": "AVAILABLE", "metrics": {"x": 1}})
+        err = {"availability": "UNAVAILABLE", "reason": "energy_unreachable", "metrics": None}
+        energy_cache.store(key, err)
+        state, val = energy_cache.lookup(key)
+        assert state == "HIT"
+        assert val == err, "l'erreur doit rester explicite, jamais l'ancienne valeur"
+        assert val["availability"] == "UNAVAILABLE"
+        assert val["reason"] == "energy_unreachable"
+        assert val["metrics"] is None
+
     def test_erreur_energy_jamais_conservee_au_ttl_normal(self, monkeypatch):
         key = energy_cache.make_key(*K)
         for reason in ("energy_unreachable", "energy_not_connected", "energy_invalid_response"):

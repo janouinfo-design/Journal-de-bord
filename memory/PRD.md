@@ -897,4 +897,6 @@ affectation manuelle, droits par rôle.
 - preview/XLSX/PDF = pipeline unique partageant le cache ; refresh=true + bouton « Actualiser » = bypass réel.
 - Perf : MISS 7,9 s → HIT 0,16 s ; XLSX 0,15 s ; PDF 0,18 s. Tests 24/24 · agent iteration_34 PASS ·
   régression 670 PASS / 0 FAIL / 3 SKIP. real_energy_validated=false.
-- En attente GO : déploiement Journal VPS · badge global accès restreint.
+- Pré-déploiement vérifié (08/09) : 1 worker uvicorn/1 replica = cache OK prod ; BLOQUANT env :
+  ENERGY_API_BASE_URL/TOKEN à ajouter au compose + .env VPS avant déploiement (patch proposé, non appliqué).
+- En attente GO : déploiement Journal VPS (via Save to GitHub + deploy.sh) · badge global accès restreint.

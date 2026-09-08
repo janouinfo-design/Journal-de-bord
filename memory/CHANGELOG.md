@@ -224,3 +224,13 @@ real_energy_validated (false).
 - Perf réelle (energie.logitrak.ch) : MISS 7,9 s → HIT 0,16 s ; XLSX 0,15 s ; PDF 0,18 s après preview.
 - Tests : test_energy_cache.py 24/24 PASS · testing agent iteration_34 : tout PASS ·
   régression complète 670 PASS / 0 FAIL / 3 SKIP. real_energy_validated=false (absent en DB).
+
+## 08/09/2026 (suite) — Pré-déploiement cache Energy (READ-ONLY, aucun déploiement)
+- Modèle process prod vérifié : compose 1 replica, Dockerfile CMD uvicorn SANS --workers → 1 process,
+  cache mémoire partagé entre requêtes = OK pour prod. Vérif résiduelle VPS fournie (docker exec ps).
+- +1 test unitaire : erreur transport écrase l'ancienne valeur AVAILABLE et reste explicite (11/11 module).
+- BLOQUANT identifié : ENERGY_API_BASE_URL / ENERGY_API_TOKEN absents de docker-compose.yml et env.example
+  → en prod Energy serait not_connected. Patch minimal (2 lignes compose + 2 clés .env VPS) proposé, NON appliqué.
+- Delta lot cache (commit 110877f) : backend energy_cache.py + routes/energy.py ; frontend EnergyReconciliationPage.jsx ;
+  tests test_energy_cache.py. env NON modifié, DB migration NON, Energy NON modifié.
+- Commandes déploiement + rollback + smoke test post-deploy préparées, AUCUNE exécutée (attente GO).
