@@ -16,6 +16,7 @@ import DriverFinesPage from "@/pages/DriverFinesPage";
 import AdministrationLayout from "@/pages/AdministrationLayout";
 import TeamUsersPage from "@/pages/TeamUsersPage";
 import TeamDriversPage from "@/pages/TeamDriversPage";
+import VehicleOdometerPage from "@/pages/VehicleOdometerPage";
 import TeamImpersonationPage from "@/pages/TeamImpersonationPage";
 import InvitationPage from "@/pages/InvitationPage";
 import AdminTenantsPage from "@/pages/AdminTenantsPage";
@@ -119,6 +120,8 @@ function App() {
               <Route path="utilisateurs" element={
                 <ProtectedRoute roles={["admin"]}><TeamUsersPage /></ProtectedRoute>} />
               <Route path="chauffeurs" element={<TeamDriversPage />} />
+              <Route path="kilometrage" element={
+                <ProtectedRoute roles={["admin"]}><VehicleOdometerPage /></ProtectedRoute>} />
               <Route path="apercus" element={
                 <ProtectedRoute roles={["admin"]}><TeamImpersonationPage /></ProtectedRoute>} />
             </Route>

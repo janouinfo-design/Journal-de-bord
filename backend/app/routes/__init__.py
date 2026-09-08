@@ -21,6 +21,7 @@ from app.routes import (
     identification as _identification,
     misc as _misc,
     notifications as _notifications,
+    odometer_calibration as _odometer_calibration,
     realtime as _realtime,
     reports as _reports,
     settings as _settings,
@@ -44,5 +45,6 @@ livre_router.include_router(_fines.router)
 livre_router.include_router(_team.router)
 livre_router.include_router(_fuel_statements.router)
 livre_router.include_router(_fuel.router)
+livre_router.include_router(_odometer_calibration.router)
 
 __all__ = ["auth_router", "livre_router"]

@@ -1,7 +1,7 @@
 import { Outlet } from "react-router-dom";
 import SubTabs from "@/components/layout/SubTabs";
 import { useAuth } from "@/contexts/AuthContext";
-import { Users, IdCard, Eye } from "lucide-react";
+import { Users, IdCard, Eye, Gauge } from "lucide-react";
 
 export default function AdministrationLayout() {
   const { user } = useAuth();
@@ -10,6 +10,7 @@ export default function AdministrationLayout() {
     ...(isAdmin ? [{ to: "/livre/administration/utilisateurs", label: "Utilisateurs", icon: Users, testId: "subtab-team-users" }] : []),
     { to: "/livre/administration/chauffeurs", label: "Chauffeurs", icon: IdCard, testId: "subtab-team-drivers" },
     ...(isAdmin ? [{ to: "/livre/administration/apercus", label: "Aperçus", icon: Eye, testId: "subtab-team-impersonation" }] : []),
+    ...(isAdmin ? [{ to: "/livre/administration/kilometrage", label: "Kilométrage", icon: Gauge, testId: "subtab-odometer" }] : []),
   ];
   return (
     <div data-testid="administration-page" className="space-y-5">
