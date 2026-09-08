@@ -130,6 +130,17 @@ export default function VehicleOdometerPage() {
     if (!iso) return "—";
     try { return new Date(iso).toLocaleString("fr-CH"); } catch { return String(iso); }
   };
+  // Ancienneté relative honnête ("il y a 2 min" / "il y a 3 h").
+  const fmtAge = (iso) => {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return null;
+    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (s < 90) return "il y a moins d'une minute";
+    if (s < 3600) return `il y a ${Math.floor(s / 60)} min`;
+    if (s < 86400) return `il y a ${Math.floor(s / 3600)} h`;
+    return `il y a ${Math.floor(s / 86400)} j`;
+  };
 
   return (
     <div data-testid="vehicle-odometer-page" className="max-w-5xl mx-auto p-4 space-y-5">
@@ -188,8 +199,16 @@ export default function VehicleOdometerPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <p className="text-xs text-slate-500">Kilométrage télématique</p>
+                  <p className="text-xs text-slate-500">
+                    {typeof telematicsKm === "number" && state.avl16_recent === false
+                      ? "Dernière valeur reçue" : "Kilométrage télématique"}
+                  </p>
                   <p className="text-2xl font-bold text-[#2196F3]" data-testid="odo-telematics-km">{fmtKm(telematicsKm)}</p>
+                  {typeof telematicsKm === "number" && state.last_update ? (
+                    <p className="text-[11px] text-slate-400 mt-1" data-testid="odo-avl16-age">
+                      {fmtAge(state.last_update)}{state.avl16_recent === false ? " (pas récent)" : ""}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <p className="text-xs text-slate-500">Source</p>

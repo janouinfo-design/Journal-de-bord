@@ -447,3 +447,126 @@ def test_gate_env_not_allowed(monkeypatch):
     monkeypatch.setenv("APP_ENV", "unknown_env_xyz")
     ok, reason = oc.calibration_pilot_gate("default", 781479)
     assert ok is False and reason == oc.R_ENV_NOT_ALLOWED
+
+
+# ===========================================================================
+# LECTURE LIVE AVL16 (READ-ONLY) — T1..T10.
+# fetch_sensor MOCKÉ (aucun appel Navixy). Aucune écriture, aucune commande device.
+# ===========================================================================
+def _fetch_ok(value, time="2026-09-08 08:42:22"):
+    async def _f(tenant_id, tracker_id, sensor_id):
+        return {"value": value, "time": time}
+    return _f
+
+
+async def _fetch_none(tenant_id, tracker_id, sensor_id):
+    return None
+
+
+def test_live_t1_valid_sensor_value():
+    db = _db_fmc130()  # capability tracker 781479 avec navixy_sensor_id=5577108
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+               fetch_sensor=_fetch_ok(56377.978)))
+    assert res["value_km"] == 56377.978
+    assert res["source"] == oc.SOURCE_TELTONIKA_AVL16
+    assert res["sensor_id"] == 5577108
+
+
+def test_live_t2_divider_1000_raw_reconstructed():
+    db = _db_fmc130()
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+               fetch_sensor=_fetch_ok(56377.978)))
+    # value normalisée en km ; raw ≈ value × 1000 (mètres)
+    assert res["value_km"] == 56377.978
+    assert res["raw_value"] == 56377978.0
+
+
+def test_live_t3_timestamp_exposed():
+    db = _db_fmc130()
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+               fetch_sensor=_fetch_ok(56377.978, time="2026-09-08 08:42:22")))
+    assert res["timestamp"] == "2026-09-08 08:42:22"
+    assert "recent" in res
+
+
+def test_live_t4_sensor_absent_returns_null():
+    # capability sans navixy_sensor_id -> pas de sensor mappé -> value None (N/A)
+    db = _DB()
+    _run(db.vehicles.update_one({"id": "vNoSensor"}, {"$set": {
+        "id": "vNoSensor", "tenant_id": "default", "model": "telfmu130_fmc130",
+        "navixy_tracker_id": 781479}}, upsert=True))
+    _run(db.vehicle_private_capabilities.update_one({"tracker_id": 781479}, {"$set": {
+        "tracker_id": 781479, "vehicle_id": "vNoSensor"}}, upsert=True))  # pas de sensor_id
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="vNoSensor",
+               fetch_sensor=_fetch_ok(1.0)))
+    assert res["value_km"] is None and res["reason"] == "AVL16_SENSOR_NOT_MAPPED"
+
+
+def test_live_t5_navixy_error_returns_null_not_500():
+    db = _db_fmc130()
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+               fetch_sensor=_fetch_none))
+    assert res["value_km"] is None and res["reason"] == "NAVIXY_UNAVAILABLE"
+
+
+def test_live_t6_generic_odometer_never_used():
+    # le lecteur n'appelle QUE le sensor injecté ; il n'utilise jamais counter/value/get.
+    db = _db_fmc130()
+    called = {"sensor": 0}
+    async def _f(tenant_id, tracker_id, sensor_id):
+        called["sensor"] += 1
+        assert sensor_id == 5577108  # bien le sensor AVL16, pas l'odomètre générique
+        return {"value": 56377.978, "time": "2026-09-08 08:42:22"}
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130", fetch_sensor=_f))
+    assert called["sensor"] == 1 and res["value_km"] == 56377.978
+
+
+def test_live_t7_cross_tenant_refused():
+    db = _db_fmc130()  # v130 appartient à tenant default
+    res = _run(oc.read_live_avl16_km(db, tenant_id="autre", vehicle_id="v130",
+               fetch_sensor=_fetch_ok(56377.978)))
+    assert res["value_km"] is None and res["reason"] == oc.R_NO_VEHICLE
+
+
+def test_live_t8_unsupported_model_refused():
+    db = _DB()
+    _run(db.vehicles.update_one({"id": "vX"}, {"$set": {
+        "id": "vX", "tenant_id": "default", "model": "some_unknown_model",
+        "navixy_tracker_id": 111}}, upsert=True))
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="vX",
+               fetch_sensor=_fetch_ok(1.0)))
+    assert res["value_km"] is None and res["reason"] == oc.R_NOT_SUPPORTED
+
+
+def test_live_t9_read_visible_even_if_calibration_disabled(monkeypatch):
+    # WRITE=0 (can_calibrate=false) NE doit PAS empêcher la lecture AVL16.
+    monkeypatch.setenv("ODOMETER_CALIBRATION_DEVICE_WRITE", "0")
+    db = _db_fmc130()
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+               fetch_sensor=_fetch_ok(56377.978)))
+    assert res["value_km"] == 56377.978  # lecture OK malgré write off
+
+
+def test_live_t10_no_device_command_and_no_db_write():
+    db = _db_fmc130()
+    before_events = len(db.odometer_calibrations.docs)
+    before_audit = len(db.audit_log.docs)
+    async def _f(tenant_id, tracker_id, sensor_id):
+        return {"value": 56377.978, "time": "2026-09-08 08:42:22"}
+    _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130", fetch_sensor=_f))
+    # lecture pure : aucun event, aucun audit, aucune commande (fetch ne fait que lire)
+    assert len(db.odometer_calibrations.docs) == before_events
+    assert len(db.audit_log.docs) == before_audit
+
+
+def test_live_freshness_flag():
+    from datetime import datetime, timezone, timedelta
+    db = _db_fmc130()
+    recent_ts = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")
+    old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    r1 = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+              fetch_sensor=_fetch_ok(56377.978, time=recent_ts)))
+    r2 = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+              fetch_sensor=_fetch_ok(56377.978, time=old_ts)))
+    assert r1["recent"] is True
+    assert r2["recent"] is False and r2["value_km"] == 56377.978  # ancienne mais visible

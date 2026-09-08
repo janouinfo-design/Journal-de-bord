@@ -41,13 +41,19 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
     model = oc.resolve_model(vehicle.get("model"))
     supported = oc._model_supports_calibration(model)
 
-    # Lecture AVL16 courante (READ-ONLY). Jamais de 0 fictif.
+    # Lecture LIVE AVL16 (READ-ONLY) — sensor Navixy avl_io_16, jamais l'odomètre générique.
+    # Fail-closed & honnête : indispo -> None (UI affiche N/A). Aucune écriture, aucune commande.
     telematics_km = None
     last_update = None
-    source = None
-    if tracker_id and supported:
-        telematics_km = await oc._default_read_avl16_km(int(tracker_id))
-        source = oc.SOURCE_TELTONIKA_AVL16
+    source = oc.SOURCE_TELTONIKA_AVL16
+    avl16_recent = False
+    avl16_raw = None
+    if supported:
+        live = await oc.read_live_avl16_km(db, tenant_id=tenant_id, vehicle_id=vehicle_id)
+        telematics_km = live.get("value_km")
+        last_update = live.get("timestamp")
+        avl16_recent = bool(live.get("recent"))
+        avl16_raw = live.get("raw_value")
 
     cap = await db.vehicle_private_capabilities.find_one(
         {"tracker_id": int(tracker_id)} if tracker_id else {"tracker_id": None},
@@ -55,7 +61,9 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
          "navixy_input": 1, "multiplier": 1, "divider": 1, "odometer_calibrated": 1,
          "calibration_baseline_km": 1, "calibration_at": 1, "last_value_km": 1,
          "last_timestamp": 1}) or {}
-    if cap.get("last_value_km") is not None and telematics_km is None:
+    # Repli sur la dernière valeur connue en capability UNIQUEMENT si le live est indisponible
+    # (jamais 0 inventé ; null reste null).
+    if telematics_km is None and cap.get("last_value_km") is not None:
         telematics_km = cap.get("last_value_km")
         last_update = cap.get("last_timestamp")
 
@@ -75,6 +83,8 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
         "telematics_km": telematics_km,
         "source": source,
         "last_update": last_update,
+        "avl16_recent": avl16_recent,
+        "avl16_raw": avl16_raw,
         "capability": cap,
         "device_write_enabled": oc.calibration_device_write_enabled(),
         "can_calibrate": can_calibrate,

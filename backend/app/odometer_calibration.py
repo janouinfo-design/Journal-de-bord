@@ -248,6 +248,125 @@ async def _default_read_avl16_km(tracker_id: int) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# LECTURE LIVE AVL16 (READ-ONLY) — sensor Navixy avl_io_16, jamais l'odomètre générique.
+# Aucune écriture, aucune commande device, aucun secret loggé/exposé.
+# ---------------------------------------------------------------------------
+# Fraîcheur : au-delà, la valeur reste affichable mais marquée « pas récente » (honnêteté).
+AVL16_FRESH_MAX_S = int(os.environ.get("ODOMETER_AVL16_FRESH_MAX_S", "1800"))  # 30 min
+
+
+def _parse_ts(ts):
+    """Parse un timestamp ISO ou 'YYYY-MM-DD HH:MM:SS' en datetime aware (UTC). None si invalide."""
+    if not ts:
+        return None
+    s = str(ts).strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(s)
+    except Exception:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                d = datetime.strptime(s[:19], fmt)
+                break
+            except Exception:
+                d = None
+        if d is None:
+            return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d
+
+
+async def _fetch_sensor_last_value(tenant_id: str, tracker_id: int, sensor_id: int) -> Optional[dict]:
+    """Lit la DERNIÈRE valeur normalisée d'un sensor metering Navixy (READ-ONLY).
+
+    Utilise `tracker/sensor/data/read` (endpoint historique, lecture seule) sur une
+    fenêtre courte, et retourne le point le plus récent. Ne logge/expose jamais le credential.
+    Retour : {value, time} ou None si indisponible.
+    """
+    from datetime import timedelta
+    from app.integrations import get_integration_credential
+    cred = get_integration_credential(tenant_id, "NAVIXY")
+    if not cred or not cred.get("credential"):
+        return None
+    base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+            or "https://api.navixy.com/v2").rstrip("/")
+    now = datetime.now(timezone.utc)
+    # Fenêtre large (48 h) pour capter la dernière valeur même si peu de trames récentes.
+    d_from = (now - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+    d_to = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{base}/tracker/sensor/data/read", json={
+                "hash": cred["credential"], "tracker_id": int(tracker_id),
+                "sensor_id": int(sensor_id), "from": d_from, "to": d_to,
+                "raw_data": False})
+            data = r.json() or {}
+    except Exception:
+        return None
+    vals = data.get("value") or data.get("list") or []
+    if not isinstance(vals, list) or not vals:
+        return None
+    last = vals[-1]
+    if not isinstance(last, dict):
+        return None
+    return {"value": last.get("value"),
+            "time": last.get("time") or last.get("get_time")}
+
+
+async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
+                             fetch_sensor=_fetch_sensor_last_value) -> dict:
+    """Lecture LIVE READ-ONLY de l'AVL16 (km) pour la fiche véhicule.
+
+    Résout véhicule (tenant scopé) -> tracker -> capability AVL16 -> sensor_id, puis lit le
+    sensor Navixy `avl_io_16`. JAMAIS l'odomètre générique. Fail-closed & honnête :
+    toute indisponibilité -> value_km=None (UI affiche N/A). Aucune écriture.
+
+    Retour : {value_km, raw_value, timestamp, source, sensor_id, recent, reason?}
+    """
+    empty = {"value_km": None, "raw_value": None, "timestamp": None,
+             "source": SOURCE_TELTONIKA_AVL16, "sensor_id": None, "recent": False}
+
+    vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0})
+    if not vehicle:
+        return {**empty, "reason": R_NO_VEHICLE}          # cross-tenant / introuvable
+    tracker_id = vehicle.get("navixy_tracker_id")
+    if not tracker_id:
+        return {**empty, "reason": R_NO_TRACKER}
+    model = resolve_model(vehicle.get("model"))
+    if not _model_supports_calibration(model):
+        return {**empty, "reason": R_NOT_SUPPORTED}
+
+    cap = await db.vehicle_private_capabilities.find_one(
+        {"tracker_id": int(tracker_id)},
+        {"_id": 0, "navixy_sensor_id": 1, "private_distance_source": 1,
+         "multiplier": 1, "divider": 1}) or {}
+    sensor_id = cap.get("navixy_sensor_id")
+    if not sensor_id:
+        # Pas de sensor AVL16 mappé pour ce tracker -> lecture indisponible (jamais l'odo générique).
+        return {**empty, "reason": "AVL16_SENSOR_NOT_MAPPED"}
+    divider = float(cap.get("divider") or 1000.0)
+
+    reading = await fetch_sensor(tenant_id, int(tracker_id), int(sensor_id))
+    if not reading:
+        return {**empty, "sensor_id": sensor_id, "reason": "NAVIXY_UNAVAILABLE"}
+
+    raw_norm = reading.get("value")
+    try:
+        value_km = round(float(raw_norm), 3)
+    except (TypeError, ValueError):
+        return {**empty, "sensor_id": sensor_id, "reason": "VALUE_INVALID"}
+
+    ts = reading.get("time")
+    dt = _parse_ts(ts)
+    recent = bool(dt and (datetime.now(timezone.utc) - dt).total_seconds() <= AVL16_FRESH_MAX_S)
+    # raw (mètres) reconstitué à titre indicatif (value normalisée × divider).
+    raw_value = round(value_km * divider, 0) if value_km is not None else None
+    return {"value_km": value_km, "raw_value": raw_value, "timestamp": ts,
+            "source": SOURCE_TELTONIKA_AVL16, "sensor_id": sensor_id, "recent": recent}
+
+
+# ---------------------------------------------------------------------------
 # Persistance : historique append-only + baseline de capability.
 # ---------------------------------------------------------------------------
 async def _record_calibration_event(db, doc: dict) -> str:

@@ -64,6 +64,24 @@
                             si relecture AVL16 ≈ valeur demandée (tolérance 1 km).
 ```
 
+## LECTURE LIVE AVL16 (READ-ONLY) — ajout
+
+```
+- backend      : read_live_avl16_km(db, tenant_id, vehicle_id) — lit le sensor Navixy avl_io_16
+                 (tracker/sensor/data/read, raw_data=false) via le credential du tenant.
+- source       : sensor AVL16 (id capability) — JAMAIS tracker/counter/value/get ni odomètre générique.
+- divider      : 1000 (capability) ; value normalisée en km ; raw (mètres) reconstitué pour info.
+- fraîcheur    : avl16_recent (seuil ODOMETER_AVL16_FRESH_MAX_S, défaut 1800s). Valeur ancienne
+                 reste affichée mais marquée « pas récent » (UI : "Dernière valeur reçue … il y a 3 h").
+- fail-closed  : sensor absent / valeur invalide / Navixy indispo / cross-tenant / modèle non AVL16
+                 -> value_km=null -> UI affiche N/A (jamais 0, jamais inventé).
+- découplage   : lecture AVL16 INDÉPENDANTE de can_calibrate. WRITE=0 n'empêche PAS la lecture.
+- GET expose   : telematics_km, last_update, avl16_recent, avl16_raw (+ can_calibrate inchangé).
+- frontend     : affiche la vraie valeur + ancienneté ; N/A si null ; bouton calibration
+                 toujours régi par can_calibrate (fail-closed), non lié à la lecture.
+- SAFETY       : aucune écriture Mongo, aucune commande device, aucun secret exposé.
+```
+
 ## GATE DEVICE (verrou DÉDIÉ + allowlist pilote FAIL-CLOSED)
 
 ```
@@ -136,13 +154,13 @@ ODOMETER_CALIBRATION_PILOT_TRACKERS=781479 # allowlist tracker dédiée (absente
 Le premier déploiement prod reste **WRITE=0** (lecture + UI + RBAC + historique + capability + tests).
 Ne PAS activer WRITE=1 avant le GO terrain. Les allowlists n'ouvrent RIEN tant que WRITE=0.
 
-## TESTS (mise à jour durcissement + UI fail-closed)
+## TESTS (mise à jour durcissement + UI fail-closed + lecture live)
 
 ```
-- backend calibration : 27 → PASS 27 / FAIL 0   (T1..T14 + T15..T24 gate + env)
-- régression globale   : 100 → PASS 100 / FAIL 0
+- backend calibration : 38 → PASS 38 / FAIL 0   (T1..T14 + T15..T24 gate + env + live T1..T10 + fraîcheur)
+- régression globale   : 111 → PASS 111 / FAIL 0
 - frontend (Jest)      : 10 → PASS 10 / FAIL 0   (vehicleOdometerLogic : can_calibrate strict, no fallback)
-- testing_agent backend: PASS (gate fail-closed, isolation tenant/tracker, anti-faux-delta, RBAC)
+- testing_agent backend: PASS (gate fail-closed, isolation tenant/tracker, anti-faux-delta, RBAC, lecture READ-ONLY)
 - testing_agent frontend: PASS (règle UI fail-closed, aucun fallback device_write_enabled)
 ```
 
