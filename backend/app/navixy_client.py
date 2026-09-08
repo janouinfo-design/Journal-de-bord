@@ -1,14 +1,26 @@
 """Thin async client for Navixy User API (api.navixy.com/v2).
 
-Authentication uses session `hash` (32-char hex). Configure via env:
+Authentication credential (env, server-side only — NEVER exposed to the mobile app):
+- NAVIXY_API_KEY   (RECOMMENDED for server integrations — priority)
+- NAVIXY_HASH      (legacy session hash — kept for backward compat, deprecated)
+The credential is passed to Navixy in the JSON field `hash` (Navixy accepts both an
+API key and a session hash there). A per-tenant `navixy_hash` in the DB still takes
+precedence when a tenant context is active.
+
+Secret handling: the credential is NEVER logged, NEVER returned in API responses,
+NEVER sent to the frontend.
+
 - NAVIXY_API_URL (default https://api.navixy.com/v2)
-- NAVIXY_HASH
 
 All methods raise NavixyError on non-success responses.
 """
 import os
+import logging
 from typing import Any, Optional
 import httpx
+
+logger = logging.getLogger(__name__)
+_deprecation_warned = False
 
 
 class NavixyError(Exception):
@@ -23,23 +35,53 @@ def _base_url() -> str:
     return os.environ.get("NAVIXY_API_URL", "https://api.navixy.com/v2").rstrip("/")
 
 
+def _env_credential() -> str:
+    """Résout le credential d'environnement, NAVIXY_API_KEY prioritaire sur NAVIXY_HASH.
+    Ne retourne jamais dans les logs la valeur ; émet un avertissement de dépréciation
+    (sans secret) si l'ancien NAVIXY_HASH est utilisé."""
+    global _deprecation_warned
+    api_key = os.environ.get("NAVIXY_API_KEY", "").strip()
+    if api_key:
+        return api_key
+    legacy = os.environ.get("NAVIXY_HASH", "").strip()
+    if legacy and not _deprecation_warned:
+        _deprecation_warned = True
+        logger.warning(
+            "NAVIXY_HASH (env) est déprécié : définissez NAVIXY_API_KEY à la place "
+            "(intégration serveur recommandée). Aucune valeur n'est journalisée."
+        )
+    return legacy
+
+
 def _hash() -> str:
-    from app.tenant_context import get_tenant_doc
-    t = get_tenant_doc()
-    if t and t.get("navixy_hash"):
-        return t["navixy_hash"]
-    h = os.environ.get("NAVIXY_HASH", "").strip()
-    if not h:
+    """Credential effectif transmis à Navixy dans le champ `hash`.
+    Résolution centralisée multi-tenant (fail-closed) via app.integrations :
+    tenant.navixy_hash -> NAVIXY_API_KEY (dev/pilot) -> NAVIXY_HASH (legacy)."""
+    from app.integrations import get_integration_credential
+    cred = get_integration_credential(provider="NAVIXY")
+    if not cred or not cred.get("credential"):
         raise NavixyError("Clé d'intégration LOGITRAK non configurée")
-    return h
+    return cred["credential"]
 
 
 def is_configured() -> bool:
-    from app.tenant_context import get_tenant_doc, get_tenant_id
-    if get_tenant_id():
-        t = get_tenant_doc()
-        return bool(t and t.get("navixy_hash"))
-    return bool(os.environ.get("NAVIXY_HASH", "").strip())
+    from app.integrations import get_integration_credential
+    return bool(get_integration_credential(provider="NAVIXY"))
+
+
+def credential_type() -> str:
+    """Type de credential ACTIF (sans jamais révéler la valeur) — pour l'audit.
+    Mappe la source centralisée vers les libellés attendus par les rapports :
+    API_KEY / LEGACY_HASH / TENANT_HASH / NONE."""
+    from app.integrations import integration_status
+    src = integration_status(provider="NAVIXY")
+    return {
+        "TENANT": "TENANT_HASH",
+        "ENV_API_KEY": "API_KEY",
+        "ENV_LEGACY_HASH": "LEGACY_HASH",
+        "NONE": "NONE",
+    }.get(src, "NONE")
+
 
 
 async def _post(client: httpx.AsyncClient, path: str, payload: dict) -> dict:
@@ -134,3 +176,36 @@ async def send_raw_command(tracker_id: int, command: str, reliable: bool = True)
             "command": command,
             "reliable": reliable,
         })
+
+
+# ---------------------------------------------------------------------------
+# READ-ONLY counters / odometer (audit odomètre Teltonika -> Navixy).
+# Endpoints Navixy User API officiels (vérifiés sur la doc, NON inventés) :
+#   - tracker/get_counters            {hash, tracker_id}
+#   - tracker/counter/value/get       {hash, tracker_id, type: "odometer"|"engine_hours"}
+# Aucune écriture ici. `counter/value/set` n'est volontairement PAS implémenté
+# (write op non autorisée pendant l'audit).
+# ---------------------------------------------------------------------------
+async def get_counters(tracker_id: int) -> dict:
+    """Lit TOUS les compteurs courants d'un tracker (odometer, engine_hours, ...).
+
+    Réponse Navixy typique : {success, list|counters: [{type, value, update_time, ...}]}
+    ou une forme mappée selon la version. Le mapping exact est résolu par l'appelant.
+    """
+    async with httpx.AsyncClient() as c:
+        return await _post(c, "tracker/get_counters", {"tracker_id": int(tracker_id)})
+
+
+async def get_counter_value(tracker_id: int, counter_type: str = "odometer") -> dict:
+    """Lit la valeur d'UN compteur (par défaut l'odomètre) pour un tracker.
+
+    counter_type ∈ {"odometer", "engine_hours"}. Réponse Navixy : {success, value, ...}.
+    """
+    if counter_type not in ("odometer", "engine_hours"):
+        raise NavixyError("counter_type doit être 'odometer' ou 'engine_hours'")
+    async with httpx.AsyncClient() as c:
+        return await _post(c, "tracker/counter/value/get", {
+            "tracker_id": int(tracker_id),
+            "type": counter_type,
+        })
+

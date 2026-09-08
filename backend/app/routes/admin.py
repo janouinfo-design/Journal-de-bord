@@ -37,6 +37,9 @@ def _tenant_out(t: dict) -> dict:
     out = {k: v for k, v in t.items() if k not in ("navixy_hash", "_id")}
     out["navixy_hash_masked"] = _mask_hash(t.get("navixy_hash"))
     out["has_navixy_hash"] = bool(t.get("navixy_hash"))
+    # Statut non sensible (jamais la valeur) : credential chiffré ou clair legacy.
+    h = t.get("navixy_hash")
+    out["navixy_credential_encrypted"] = bool(h and str(h).startswith("enc::"))
     return out
 
 
@@ -95,7 +98,9 @@ async def create_tenant(payload: TenantIn, current=Depends(require_superadmin)):
             {"navixy_master_user_id": ident["navixy_master_user_id"]}, {"_id": 0, "name": 1})
         if dup:
             raise HTTPException(400, f"Ce compte Navixy est déjà rattaché au client « {dup['name']} »")
-        doc["navixy_hash"] = payload.navixy_hash.strip()
+        # Chiffrement au repos si INTEGRATION_ENCRYPTION_KEY présente (sinon clair legacy).
+        from app.integrations import encrypt_secret
+        doc["navixy_hash"] = encrypt_secret(payload.navixy_hash.strip())
         doc.update(ident)
 
     await db.tenants.insert_one(dict(doc))
@@ -133,7 +138,9 @@ async def update_tenant(tenant_id: str, payload: TenantUpdate, current=Depends(r
             {"_id": 0, "name": 1})
         if dup:
             raise HTTPException(400, f"Ce compte Navixy est déjà rattaché au client « {dup['name']} »")
-        updates["navixy_hash"] = new_hash
+        # Chiffrement au repos si INTEGRATION_ENCRYPTION_KEY présente (sinon clair legacy).
+        from app.integrations import encrypt_secret
+        updates["navixy_hash"] = encrypt_secret(new_hash)
         updates.update(ident)
 
     if not updates:

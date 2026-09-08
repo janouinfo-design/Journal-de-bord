@@ -234,3 +234,22 @@ real_energy_validated (false).
 - Delta lot cache (commit 110877f) : backend energy_cache.py + routes/energy.py ; frontend EnergyReconciliationPage.jsx ;
   tests test_energy_cache.py. env NON modifié, DB migration NON, Energy NON modifié.
 - Commandes déploiement + rollback + smoke test post-deploy préparées, AUCUNE exécutée (attente GO).
+
+## 08/09/2026 (suite) — RÉCONCILIATION private-mode-pilot + Energy (mergée en preview, NON déployée)
+- Découverte : prod VPS = branche feat/private-mode-pilot (131 commits, historique orphelin du 16/08 :
+  console chauffeur MODE MANUEL + Mode Privé + SOS + km, page admin Kilométrage/calibration odomètre,
+  chiffrement credentials Navixy, app Expo). Notre lignée (151 commits) = Energy/rapprochement/cache/
+  accès véhicules/Object Storage/BEV. Aucun ancêtre Git commun → fusion 3-way par contenu
+  (BASE=e998ac6 Clôture Phase 3, clone isolé /root/reconcile, graft local, aucun push).
+- Résolution : 229 identiques, 10 conflits résolus en conservant LES DEUX lignées. Décisions clés :
+  console web = version prod mode manuel, MAIS picker rebranché sur GET /driver/vehicles (source
+  d'autorité ALL/SELECTED/SINGLE) ; my-vehicles backend désormais INTERSECTÉ avec vehicle_access ;
+  claim 403 conservé ; routes __init__ = energy + odometer_calibration ; misc = redact_private_trip
+  + fuel_l_meta ; App.js = redirect conducteurs + route kilometrage ; .emergent/PRD/test_reports = nôtres.
+- Console BLE web remplacée par le mode manuel (décision prod assumée) ; DriverVehiclePicker.jsx démonté
+  mais conservé avec lib driverVehicleSelection + tests jest.
+- Fix infra tests prod : _run() event-loop robuste (test_migrate_navixy_hash, test_odometer_calibration).
+- Preview : PRIVATE_MODE_ENABLED absent = fail-closed prouvé (PRIVATE_MODE_FEATURE_DISABLED, bouton Privé disabled).
+- Tests : régression combinée 830 PASS / 0 FAIL / 3 SKIP · testing agent iteration_35 : 12/12 + frontend 100 %,
+  0 défaut (deux lignées). real_energy_validated=false. AUCUN déploiement VPS.
+- P3 connu : warning a11y DialogContent (picker véhicule, préexistant lignée prod) ; warning eslint VehicleOdometerPage.

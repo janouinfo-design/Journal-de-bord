@@ -6,8 +6,14 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "splash": {
+      "backgroundColor": "#0B0F14",
+      "resizeMode": "contain"
+    },
     "assetBundlePatterns": ["**/*"],
+    "web": {
+      "bundler": "metro"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "ch.logitrak.driver",
@@ -27,6 +33,10 @@
     "android": {
       "package": "ch.logitrak.driver",
       "versionCode": 1,
+      "splash": {
+        "backgroundColor": "#0B0F14",
+        "resizeMode": "contain"
+      },
       "permissions": [
         "BLUETOOTH",
         "BLUETOOTH_ADMIN",
@@ -43,6 +53,16 @@
     },
     "plugins": [
       "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34
+          }
+        }
+      ],
       [
         "expo-notifications",
         {
@@ -63,15 +83,12 @@
         "origin": false
       },
       "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
+        "projectId": "SET_VIA_eas_init"
       }
     },
     "owner": "logitrak",
     "runtimeVersion": {
       "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/00000000-0000-0000-0000-000000000000"
     }
   }
 }

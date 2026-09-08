@@ -1,7 +1,7 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { logger } from '@/utils/logger';
+import * as storage from '@/utils/storage';
 
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL ||
@@ -13,23 +13,23 @@ const REFRESH_KEY = 'logitrak.refresh_token';
 
 export async function setTokens(access: string | null, refresh: string | null) {
   if (access) {
-    await SecureStore.setItemAsync(ACCESS_KEY, access);
+    await storage.setItemAsync(ACCESS_KEY, access);
   } else {
-    await SecureStore.deleteItemAsync(ACCESS_KEY);
+    await storage.deleteItemAsync(ACCESS_KEY);
   }
   if (refresh) {
-    await SecureStore.setItemAsync(REFRESH_KEY, refresh);
+    await storage.setItemAsync(REFRESH_KEY, refresh);
   } else {
-    await SecureStore.deleteItemAsync(REFRESH_KEY);
+    await storage.deleteItemAsync(REFRESH_KEY);
   }
 }
 
 export async function getAccessToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(ACCESS_KEY);
+  return storage.getItemAsync(ACCESS_KEY);
 }
 
 export async function getRefreshToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(REFRESH_KEY);
+  return storage.getItemAsync(REFRESH_KEY);
 }
 
 export function getApiUrl(): string {
@@ -105,7 +105,7 @@ apiClient.interceptors.response.use(
 export type LoginResponse = {
   access_token: string;
   refresh_token?: string;
-  user: { id: string; email: string; role: string; full_name?: string };
+  user: { id: string; email: string; role: string; name?: string; full_name?: string };
 };
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
@@ -123,7 +123,17 @@ export async function logout() {
   await setTokens(null, null);
 }
 
+// /api/auth/me renvoie {user{...}} — on dé-emballe pour renvoyer l'objet user.
 export async function fetchMe() {
   const { data } = await apiClient.get('/api/auth/me');
+  return data?.user ?? data;
+}
+
+// Changement de mot de passe (utilisé par le flux must_change_password et le profil).
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const { data } = await apiClient.post('/api/auth/change-password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
   return data;
 }

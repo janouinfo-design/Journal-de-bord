@@ -46,6 +46,21 @@ async def export_report(
     await log_audit("report.export", user,
                     {"classification": classification, "format": fmt, "count": len(trips)})
 
+    # Confidentialité (Phase 2/3) : un trajet effectué en Mode Privé (device) ne doit
+    # JAMAIS exporter de localisation (adresses/coords), quelle que soit sa classification.
+    # On conserve les champs métier (distance, durée) ; on remplace la géo par un libellé.
+    from app.private_mode_engine import redact_private_trip, trip_is_private
+    _redacted = []
+    for _t in trips:
+        if trip_is_private(_t):
+            _rt = redact_private_trip(_t)
+            _rt["start_address"] = "Privé — position masquée"
+            _rt["end_address"] = "Privé — position masquée"
+            _redacted.append(_rt)
+        else:
+            _redacted.append(_t)
+    trips = _redacted
+
     # Privacy mode 'masked' for managers — personal report contains no per-trip data
     is_masked = (classification == "personal"
                  and settings.get("mode") == "masked"

@@ -900,3 +900,15 @@ affectation manuelle, droits par rôle.
 - Pré-déploiement vérifié (08/09) : 1 worker uvicorn/1 replica = cache OK prod ; BLOQUANT env :
   ENERGY_API_BASE_URL/TOKEN à ajouter au compose + .env VPS avant déploiement (patch proposé, non appliqué).
 - En attente GO : déploiement Journal VPS (via Save to GitHub + deploy.sh) · badge global accès restreint.
+
+## Réconciliation private-mode-pilot + Energy — 08/09/2026 : MERGÉE EN PREVIEW, NON DÉPLOYÉE
+- Prod VPS = feat/private-mode-pilot (console mode manuel + Mode Privé + odomètre + app Expo, 131 commits
+  orphelins) ; fusion 3-way par contenu avec notre lignée (Energy/cache/accès véhicules, 151 commits).
+- Les DEUX lignées conservées : console prod + picker sur /driver/vehicles, my-vehicles ∩ vehicle_access,
+  claim 403, cache Energy intact, Object Storage intact, garde-fou BEV intact, kilometrage admin ajouté.
+- Console BLE web remplacée par mode manuel (décision prod) ; private mode fail-closed en preview.
+- Tests : 830 PASS / 0 FAIL / 3 SKIP · testing agent iteration_35 12/12 + frontend 100 %.
+- PROCHAINE ÉTAPE (sur GO) : Save to GitHub → branche réconciliée → runbook déploiement VPS
+  (checkout branche réconciliée, PAS un pull de feat/private-mode-pilot) + patch .env Energy VPS.
+- RISQUE À GÉRER : si la session parallèle « Logitrak VPS » continue de committer sur
+  feat/private-mode-pilot, une re-divergence apparaîtra — geler ou re-réconcilier avant déploiement.

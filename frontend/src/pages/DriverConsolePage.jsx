@@ -1,136 +1,213 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
-  Bluetooth, Loader2, Briefcase, User as UserIcon, Smartphone,
-  Truck, RefreshCw, Wifi, LogOut, AlertCircle, Tag, Play, Square, RadioTower,
+  Loader2, Briefcase, User as UserIcon, Smartphone, Truck, LogOut,
+  RefreshCw, ChevronRight, ShieldAlert,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import useBleScanner from "@/hooks/useBleScanner";
-import DriverVehiclePicker from "@/components/livre/DriverVehiclePicker";
 
-function Pulse({ active }) {
-  return (
-    <span className="relative inline-flex h-2.5 w-2.5">
-      {active && <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />}
-      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${active ? "bg-emerald-500" : "bg-slate-400"}`} />
-    </span>
-  );
-}
-
-function Confidence({ value }) {
-  const v = value ?? 0;
-  const color = v >= 75 ? "bg-emerald-400" : v >= 50 ? "bg-amber-400" : "bg-rose-400";
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-2 w-full bg-white/20 rounded overflow-hidden">
-        <div className={`h-full ${color} transition-all`} style={{ width: `${v}%` }} />
-      </div>
-      <span className="text-xs font-mono text-white/80 w-8 text-right">{v}</span>
-    </div>
-  );
-}
-
+/**
+ * Console chauffeur — MODE MANUEL (sans Bluetooth).
+ * Hiérarchie : Véhicule actuel -> Changer -> PRO/PRIVÉ -> Km Pro/Privé -> SOS.
+ * Backend = seule source de vérité (session, PRO/PRIVÉ, km). Aucun calcul GPS local.
+ * PRO/PRIVÉ appelle le VRAI Mode Privé (/driver/private-mode), pas la classification.
+ */
 export default function DriverConsolePage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [fleetTags, setFleetTags] = useState([]);
-  const [testingTagId, setTestingTagId] = useState(null);
-  const [vehRefresh, setVehRefresh] = useState(0);
-  const scanner = useBleScanner();
 
-  async function loadSession() {
+  const [vehicle, setVehicle] = useState(null);       // {id, plate, model}
+  const [connected, setConnected] = useState(false);
+  const [loadingVehicle, setLoadingVehicle] = useState(true);
+
+  const [pm, setPm] = useState({ state: "UNKNOWN", allowed: false, reason: null, pending: false, can_switch: false, can_switch_reason: null });
+  const [pmBusy, setPmBusy] = useState(false);
+
+  // KM : état DÉCOUPLÉ du Mode Privé. On conserve la dernière valeur VALIDE pour le
+  // contexte courant (véhicule + période) ; on n'efface JAMAIS sur erreur/refetch/transition.
+  //  - hasValid : au moins une réponse valide reçue pour ce contexte.
+  //  - refreshing : un refetch est en cours (indicateur discret, sans effacer les chiffres).
+  //  - initialLoading : premier chargement sans aucune valeur valide (affiche « … »).
+  const [km, setKm] = useState({
+    pro: null, priv: null, label: "Mois en cours",
+    hasValid: false, initialLoading: true, refreshing: false,
+  });
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [myVehicles, setMyVehicles] = useState([]);
+  const [switching, setSwitching] = useState(false);
+
+  const [sosSending, setSosSending] = useState(false);
+  const sosInFlight = useRef(false);
+  const pmInFlight = useRef(false);
+  const lastVehicleId = useRef(undefined);
+
+  // --- Chargements ---
+  const loadVehicle = useCallback(async () => {
+    setLoadingVehicle(true);
     try {
-      const { data } = await api.get("/livre/driver/current-session");
-      setSession(data.session);
-    } catch (e) {
-      // Chauffeur might not be linked to a driver record — that is fine.
-      // Anything else (network / 5xx) is logged for debugging.
-      if (e?.response?.status && e.response.status !== 400) {
-        console.debug("[DriverConsole] current-session fetch failed:", e);
-      }
-    } finally { setLoading(false); }
-  }
-
-  async function loadFleetTags() {
-    try {
-      const { data } = await api.get("/livre/driver/fleet-tags");
-      setFleetTags(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.debug("[DriverConsole] fleet-tags fetch failed:", e);
-    }
-  }
-
-  useEffect(() => {
-    loadSession();
-    loadFleetTags();
-    const t = setInterval(loadSession, 10000); // poll every 10s
-    return () => clearInterval(t);
+      const { data } = await api.get("/livre/driver/my-vehicle");
+      if (data?.vehicle?.id) { setVehicle(data.vehicle); setConnected(!!data.current); }
+      else { setVehicle(null); setConnected(false); }
+    } catch { setVehicle(null); setConnected(false); }
+    finally { setLoadingVehicle(false); }
   }, []);
 
-  async function testTag(t) {
-    setTestingTagId(t.id);
+  const loadPrivateMode = useCallback(async () => {
     try {
-      for (let i = 0; i < 3; i++) {
-        await api.post("/livre/ble/detections", {
-          identifier: t.identifier_raw || t.identifier,
-          rssi: -55 - Math.floor(Math.random() * 10),
-          platform: "pwa",
-          battery: 78,
+      const { data } = await api.get("/livre/driver/private-mode");
+      setPm(data);
+    } catch {
+      setPm((p) => ({ ...p, state: "UNKNOWN" }));
+    }
+  }, []);
+
+  const loadKm = useCallback(async () => {
+    // Refetch NON destructif : on marque « refreshing » sans toucher aux chiffres actuels.
+    setKm((k) => ({ ...k, refreshing: true }));
+    try {
+      const { data } = await api.get("/livre/driver/km-summary", { params: { period: "month" } });
+      const label = data.period_label || "Mois en cours";
+      if (data.available) {
+        // Valeurs réelles (0 km = valeur calculée légitime ; null seulement si absent).
+        setKm({
+          pro: typeof data.pro_km === "number" ? data.pro_km : null,
+          priv: typeof data.private_km === "number" ? data.private_km : null,
+          label, hasValid: true, initialLoading: false, refreshing: false,
         });
-      }
-      toast.success(`Tag « ${t.identifier_raw || t.identifier} » envoyé`);
-      await loadSession();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Échec");
-    } finally { setTestingTagId(null); }
-  }
-
-  async function stopDriving() {
-    setSending(true);
-    try {
-      const { data } = await api.post("/livre/driver/stop");
-      if (data.stopped) {
-        toast.success(`Session terminée${data.vehicle_plate ? ` — ${data.vehicle_plate}` : ""}`);
-        setSession(null);
       } else {
-        toast.info(data.message || "Aucune session active");
+        // available=false -> aucun véhicule/donnée : état « N/A » honnête (jamais 0 inventé).
+        setKm({ pro: null, priv: null, label, hasValid: false, initialLoading: false, refreshing: false });
       }
-      await loadSession();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Échec");
-    } finally { setSending(false); }
-  }
+    } catch {
+      // Erreur/timeout : NE JAMAIS effacer une dernière valeur valide. On sort juste du refresh.
+      setKm((k) => ({ ...k, initialLoading: false, refreshing: false }));
+    }
+  }, []);
 
-  async function setMode(mode) {
-    setSending(true);
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadVehicle(), loadPrivateMode(), loadKm()]);
+  }, [loadVehicle, loadPrivateMode, loadKm]);
+
+  useEffect(() => {
+    refreshAll();
+    const t = setInterval(() => { loadPrivateMode(); }, 15000); // poll léger état
+    return () => clearInterval(t);
+  }, [refreshAll, loadPrivateMode]);
+
+  // reset km quand le véhicule change (pas de contamination A -> B) :
+  // on PURGE la dernière valeur (contexte différent) puis on recharge.
+  useEffect(() => {
+    const vid = vehicle?.id ?? null;
+    if (lastVehicleId.current !== undefined && lastVehicleId.current !== vid) {
+      setKm({ pro: null, priv: null, label: "Mois en cours", hasValid: false, initialLoading: true, refreshing: false });
+    }
+    lastVehicleId.current = vid;
+    if (vid) loadKm();
+  }, [vehicle?.id, loadKm]);
+
+  // --- Actions ---
+  const openPicker = useCallback(async () => {
+    setPickerOpen(true);
+    // Source d'autorité : périmètre véhicules du chauffeur (ALL/SELECTED/SINGLE).
+    // Fail-closed : erreur = liste vide, jamais de liste globale de repli.
+    try { const { data } = await api.get("/livre/driver/vehicles"); setMyVehicles(data?.vehicles || []); }
+    catch { setMyVehicles([]); }
+  }, []);
+
+  const selectVehicle = useCallback(async (v) => {
+    if (switching) return;
+    setSwitching(true);
     try {
-      const { data } = await api.post("/livre/driver/manual-mode", { mode });
-      setSession({ ...session, mobile_override: mode, status: "manual" });
-      toast.success(`Mode ${mode === "professional" ? "PROFESSIONNEL" : "PRIVÉ"} activé · ${data.trips_affected} trajet(s) impacté(s)`);
+      await api.post("/livre/driver/claim", { vehicle_id: v.id });
+      setPickerOpen(false);
+      await refreshAll();
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Échec");
-    } finally { setSending(false); }
-  }
+      toast.error(e?.response?.data?.detail || "Impossible de sélectionner ce véhicule");
+    } finally { setSwitching(false); }
+  }, [switching, refreshAll]);
 
-  async function doLogout() {
-    await logout();
-    navigate("/login");
-  }
+  const setMode = useCallback(async (mode) => {
+    if (pmInFlight.current) return;   // anti double-clic
+    // Garde-fou UX : si le changement n'est pas exécutable (écriture device coupée,
+    // transition en cours, non éligible) -> message immédiat, AUCUN POST, aucun spinner.
+    if (!pm.can_switch) {
+      toast.info(reasonMessage(pm.can_switch_reason, null));
+      return;
+    }
+    pmInFlight.current = true;
+    setPmBusy(true);
+    try {
+      const { data } = await api.post("/livre/driver/private-mode", { mode });
+      if (data.ok === true && data.state === "PENDING_CONFIRMATION") {
+        // commande envoyée, confirmation en cours -> JAMAIS "activé", pas d'état optimiste
+        toast.info("Changement en cours de confirmation…");
+      } else if (data.ok === true && (data.state === "PRIVATE" || data.state === "BUSINESS")) {
+        toast.success(data.state === "PRIVATE" ? "Mode Privé activé." : "Mode Professionnel activé.");
+      } else {
+        // ok=false (ex. non confirmé, transition en cours) -> message honnête, aucun état optimiste
+        toast.info(reasonMessage(data.reason, null));
+      }
+    } catch (e) {
+      const st = e?.response?.status;
+      const detail = e?.response?.data?.detail;
+      toast.info(reasonMessage(detail, st));
+    } finally {
+      setPmBusy(false); pmInFlight.current = false;
+      // Source de vérité serveur : on rafraîchit l'état + les km SÉPARÉMENT (découplés).
+      // Le refetch km est NON destructif : les derniers km valides restent affichés.
+      loadPrivateMode();
+      loadKm();
+    }
+  }, [pm.can_switch, pm.can_switch_reason, loadPrivateMode, loadKm]);
 
-  const isPro = session?.mobile_override === "professional";
-  const isPerso = session?.mobile_override === "personal";
+  const triggerSos = useCallback(async () => {
+    if (sosInFlight.current) return;
+    sosInFlight.current = true;
+    setSosSending(true);
+    try {
+      const { data } = await api.post("/livre/driver/sos", { share_location: true });
+      toast.success(data?.duplicate ? "Alerte déjà en cours." : "Alerte SOS envoyée. Les gestionnaires sont prévenus.");
+    } catch {
+      toast.error("Connexion indisponible. Alerte NON envoyée — réessayez.");
+    } finally { setSosSending(false); sosInFlight.current = false; }
+  }, []);
+
+  const confirmSos = useCallback(() => {
+    const extra = pm.state === "PRIVATE"
+      ? " En cas d'urgence, votre position pourra être partagée pour permettre l'assistance."
+      : "";
+    if (window.confirm(`Déclencher une alerte SOS ?\n\nUne alerte va être envoyée aux gestionnaires.${extra}`)) {
+      triggerSos();
+    }
+  }, [pm.state, triggerSos]);
+
+  async function doLogout() { await logout(); navigate("/login"); }
+
+  const st = pm.state;
+  const isPrivate = st === "PRIVATE";
+  const isBusiness = st === "BUSINESS";
+  const isPending = st === "PENDING_CONFIRMATION" || st === "PRIVATE_REQUESTED" || st === "BUSINESS_REQUESTED";
+  const hasVehicle = !!vehicle?.id;
+  // canToggle = capacité d'ACTION réelle (can_switch backend), pas seulement l'éligibilité.
+  const canToggle = hasVehicle && pm.can_switch && !pmBusy && !isPending;
+  // Affichage km : « … » au tout premier chargement, « N/A » si aucune donnée valide,
+  // valeur réelle sinon (0 km reste 0 km ; jamais inventé).
+  const kmDisplay = (v) => {
+    if (km.initialLoading && !km.hasValid) return "…";
+    if (typeof v === "number") return `${v.toFixed(1)} km`;
+    return "N/A";
+  };
 
   return (
     <div data-testid="driver-console-page" className="min-h-screen bg-slate-900 text-white flex flex-col">
-      {/* Top bar */}
       <header className="bg-slate-950/60 backdrop-blur px-4 py-3 flex items-center justify-between border-b border-slate-800">
         <div className="flex items-center gap-2">
           <Smartphone className="w-5 h-5 text-[#2196F3]" />
@@ -139,249 +216,179 @@ export default function DriverConsolePage() {
             <p className="text-sm font-semibold">{user?.name || user?.email}</p>
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={doLogout} className="text-slate-300 hover:text-white hover:bg-slate-800"
-          data-testid="driver-logout">
+        <Button variant="ghost" size="sm" onClick={doLogout} className="text-slate-300 hover:text-white hover:bg-slate-800" data-testid="driver-logout">
           <LogOut className="w-4 h-4" />
         </Button>
       </header>
 
       <main className="flex-1 px-4 py-5 max-w-md mx-auto w-full flex flex-col gap-4">
-        {/* Vehicle card */}
+        {/* Véhicule actuel */}
+        <p className="text-[10px] uppercase tracking-wider text-slate-400">Véhicule actuel</p>
         <Card className="bg-slate-800 border-slate-700 text-white p-5" data-testid="driver-vehicle-card">
-          {loading ? (
-            <div className="py-8 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-[#2196F3]" /></div>
-          ) : !session ? (
-            <div className="text-center py-2">
-              <Truck className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-              <p className="text-sm font-semibold">Aucun véhicule détecté</p>
-              <p className="text-xs text-slate-400 mt-1">
-                Approchez-vous d&apos;un véhicule équipé d&apos;un tag BLE LOGITRAK.
-              </p>
-            </div>
-          ) : (
+          {loadingVehicle ? (
+            <div className="py-6 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-[#2196F3]" /></div>
+          ) : hasVehicle ? (
             <>
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] uppercase tracking-wider text-slate-400">Véhicule détecté</p>
-                <span className="flex items-center gap-1.5 text-[11px] text-emerald-300">
-                  <Pulse active /> Connecté
+                <span className="flex items-center gap-2">
+                  <span className="w-11 h-11 rounded-lg bg-slate-700 flex items-center justify-center"><Truck className="w-6 h-6 text-[#2196F3]" /></span>
+                  <span>
+                    <span className="block font-mono text-lg font-semibold" data-testid="driver-vehicle-plate">{vehicle.plate || "Véhicule"}</span>
+                    {vehicle.model ? <span className="block text-xs text-slate-400">{vehicle.model}</span> : null}
+                  </span>
+                </span>
+                <span className={`flex items-center gap-1.5 text-[11px] ${connected ? "text-emerald-300" : "text-slate-400"}`}>
+                  <span className={`inline-block w-2 h-2 rounded-full ${connected ? "bg-emerald-500" : "bg-slate-500"}`} />
+                  {connected ? "Connecté" : "Hors ligne"}
                 </span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-lg bg-slate-700 flex items-center justify-center">
-                  <Truck className="w-6 h-6 text-[#2196F3]" />
-                </div>
-                <div>
-                  <p className="font-mono text-lg font-semibold tracking-tight" data-testid="driver-vehicle-plate">
-                    {session.vehicle?.plate || "—"}
-                  </p>
-                  <p className="text-xs text-slate-400">{session.vehicle?.model}</p>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500">Signal BLE</p>
-                  <p className="font-mono mt-0.5">{session.last_rssi} dBm</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500">Détections</p>
-                  <p className="font-mono mt-0.5">{session.detection_count ?? 0}</p>
-                </div>
-              </div>
-              <div className="mt-3">
-                <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Score de confiance</p>
-                <Confidence value={session.confidence} />
-              </div>
             </>
+          ) : (
+            <p className="text-sm text-slate-300 py-2" data-testid="driver-no-vehicle">Aucun véhicule sélectionné</p>
           )}
+          <Button onClick={openPicker} data-testid="driver-change-vehicle"
+            className="w-full mt-2 h-11 bg-[#2196F3] hover:bg-[#1E88E5] text-white font-semibold rounded-xl">
+            Changer de véhicule <ChevronRight className="w-4 h-4 ml-1" />
+          </Button>
         </Card>
 
-        {/* Véhicules autorisés — source d'autorité : GET /livre/driver/vehicles */}
-        <DriverVehiclePicker
-          userKey={user?.id || user?.email}
-          refreshKey={vehRefresh}
-          onClaimed={loadSession}
-        />
-
-        {/* Mode toggle */}
+        {/* PRO / PRIVÉ */}
+        <p className="text-[10px] uppercase tracking-wider text-slate-400">Mode</p>
         <div className="grid grid-cols-2 gap-3">
           <button
-            data-testid="driver-mode-pro"
-            disabled={!session || sending}
-            onClick={() => setMode("professional")}
-            className={`relative rounded-2xl p-5 transition-all border-2 ${
-              isPro
-                ? "bg-[#2196F3] border-[#2196F3] shadow-lg shadow-blue-500/30 scale-[1.02]"
-                : "bg-slate-800 border-slate-700 hover:border-slate-600 active:scale-[0.98]"
-            } ${(!session || sending) ? "opacity-40 cursor-not-allowed" : ""}`}
+            data-testid="driver-mode-pro" disabled={!canToggle || isBusiness}
+            onClick={() => setMode("BUSINESS")}
+            className={`relative rounded-2xl p-5 border-2 transition-all ${isBusiness
+              ? "bg-[#2196F3] border-[#2196F3] shadow-lg shadow-blue-500/30"
+              : "bg-slate-800 border-slate-700 hover:border-slate-600"} ${(!canToggle || isBusiness) ? "opacity-50 cursor-not-allowed" : ""}`}
           >
-            <Briefcase className={`w-8 h-8 mx-auto mb-2 ${isPro ? "text-white" : "text-[#2196F3]"}`} />
-            <p className={`text-lg font-bold ${isPro ? "text-white" : "text-slate-100"}`}>PRO</p>
-            <p className="text-[10px] uppercase tracking-wider text-slate-300 mt-1">Professionnel</p>
-            {isPro && <span className="absolute top-2 right-2 text-[9px] bg-white text-blue-700 px-1.5 py-0.5 rounded font-bold">ACTIF</span>}
+            <Briefcase className={`w-8 h-8 mx-auto mb-2 ${isBusiness ? "text-white" : "text-[#2196F3]"}`} />
+            <p className="text-lg font-bold">Professionnel</p>
+            {isBusiness && <span className="absolute top-2 right-2 text-[9px] bg-white text-blue-700 px-1.5 py-0.5 rounded font-bold">ACTIF</span>}
           </button>
-
           <button
-            data-testid="driver-mode-perso"
-            disabled={!session || sending}
-            onClick={() => setMode("personal")}
-            className={`relative rounded-2xl p-5 transition-all border-2 ${
-              isPerso
-                ? "bg-slate-200 border-slate-200 shadow-lg shadow-slate-500/30 scale-[1.02]"
-                : "bg-slate-800 border-slate-700 hover:border-slate-600 active:scale-[0.98]"
-            } ${(!session || sending) ? "opacity-40 cursor-not-allowed" : ""}`}
+            data-testid="driver-mode-private" disabled={!canToggle || isPrivate}
+            onClick={() => setMode("PRIVATE")}
+            className={`relative rounded-2xl p-5 border-2 transition-all ${isPrivate
+              ? "bg-slate-200 border-slate-200 shadow-lg"
+              : "bg-slate-800 border-slate-700 hover:border-slate-600"} ${(!canToggle || isPrivate) ? "opacity-50 cursor-not-allowed" : ""}`}
           >
-            <UserIcon className={`w-8 h-8 mx-auto mb-2 ${isPerso ? "text-slate-700" : "text-slate-400"}`} />
-            <p className={`text-lg font-bold ${isPerso ? "text-slate-900" : "text-slate-100"}`}>PRIVÉ</p>
-            <p className={`text-[10px] uppercase tracking-wider mt-1 ${isPerso ? "text-slate-600" : "text-slate-300"}`}>Personnel</p>
-            {isPerso && <span className="absolute top-2 right-2 text-[9px] bg-slate-900 text-white px-1.5 py-0.5 rounded font-bold">ACTIF</span>}
+            <UserIcon className={`w-8 h-8 mx-auto mb-2 ${isPrivate ? "text-slate-700" : "text-slate-400"}`} />
+            <p className={`text-lg font-bold ${isPrivate ? "text-slate-900" : "text-slate-100"}`}>Privé</p>
+            {isPrivate && <span className="absolute top-2 right-2 text-[9px] bg-slate-900 text-white px-1.5 py-0.5 rounded font-bold">ACTIF</span>}
           </button>
         </div>
 
-        {session && (
-          <Button
-            data-testid="driver-stop-btn"
-            disabled={sending}
-            onClick={stopDriving}
-            className="w-full h-12 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-2xl"
-          >
-            <Square className="w-4 h-4 mr-2" /> Je m&apos;arrête
-          </Button>
-        )}
+        {/* Aide contextuelle (sans jargon) */}
+        {hasVehicle && pm.allowed ? (
+          <p className="text-xs text-slate-400 leading-relaxed" data-testid="driver-mode-help">
+            {isPending
+              ? "Changement en cours de confirmation…"
+              : (pm.can_switch === false && pm.can_switch_reason === "PRIVATE_MODE_DEVICE_WRITE_DISABLED")
+              ? "Le changement de mode est temporairement indisponible."
+              : isPrivate
+              ? (pm.private_odometer_supported
+                  ? "Mode Privé actif. Votre position est masquée. Vos kilomètres privés continuent d'être comptabilisés."
+                  : "Mode Privé actif. Votre position est masquée.")
+              : isBusiness
+              ? "Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels."
+              : "Sélectionnez votre mode."}
+          </p>
+        ) : hasVehicle && !pm.allowed && pm.reason === "PRIVATE_MODE_NOT_SUPPORTED" ? (
+          <p className="text-xs text-slate-400" data-testid="driver-mode-unavailable">Mode Privé indisponible pour ce véhicule.</p>
+        ) : null}
 
-        {session?.mobile_override && (
-          <Card className="bg-amber-500/10 border-amber-500/30 text-amber-200 p-3 text-xs flex gap-2 items-start"
-            data-testid="driver-override-banner">
-            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-semibold">Mode {session.mobile_override === "professional" ? "PROFESSIONNEL" : "PRIVÉ"} forcé</p>
-              <p className="text-[11px] mt-0.5 opacity-80">
-                Tous les nouveaux trajets sur ce véhicule seront classés ainsi jusqu&apos;à votre prochain changement de véhicule.
-              </p>
-            </div>
+        {/* Km Professionnels / Km Privés — mois en cours */}
+        <p className="text-[10px] uppercase tracking-wider text-slate-400">
+          Kilomètres — {km.label}
+          {km.refreshing && !km.initialLoading ? <span className="ml-2 text-slate-500 normal-case" data-testid="driver-km-refreshing">Actualisation…</span> : null}
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Card className="bg-slate-800 border-slate-700 p-4" data-testid="driver-km-pro">
+            <p className="text-xs font-semibold text-slate-100">Km Professionnels</p>
+            <p className="text-[10px] text-slate-500 mb-1">{km.label}</p>
+            <p className="text-2xl font-bold text-[#2196F3]" data-testid="driver-km-pro-value">{kmDisplay(km.pro)}</p>
           </Card>
-        )}
+          <Card className="bg-slate-800 border-slate-700 p-4" data-testid="driver-km-private">
+            <p className="text-xs font-semibold text-slate-100">Km Privés</p>
+            <p className="text-[10px] text-slate-500 mb-1">{km.label}</p>
+            <p className="text-2xl font-bold text-slate-100" data-testid="driver-km-private-value">{kmDisplay(km.priv)}</p>
+          </Card>
+        </div>
 
-        {/* BLE Scanner status */}
-        <Card className="bg-slate-800 border-slate-700 text-slate-200 p-4" data-testid="driver-scanner-card">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <RadioTower className="w-3 h-3" /> Scanner Bluetooth
-            </p>
-            <span
-              data-testid="driver-scanner-status"
-              className={`flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
-                scanner.scanning
-                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
-                  : scanner.support === "ok"
-                    ? "bg-slate-700/60 text-slate-300 border-slate-600"
-                    : "bg-rose-500/15 text-rose-300 border-rose-500/40"
-              }`}
-            >
-              <Pulse active={scanner.scanning} />
-              {scanner.scanning
-                ? "Actif"
-                : scanner.support === "ok"
-                  ? "Inactif"
-                  : "Indisponible"}
-            </span>
-          </div>
-          {scanner.support !== "ok" && (
-            <p className="text-[11px] text-amber-300/90 leading-relaxed mb-2"
-               data-testid="driver-scanner-warning">
-              {scanner.support === "no-bluetooth"
-                ? "Web Bluetooth indisponible. Sur iPhone, l'app native Expo sera nécessaire (Phase B)."
-                : "Le scan BLE nécessite Chrome Android. Ouvrez cette page depuis Chrome sur Android."}
-            </p>
-          )}
-          {scanner.error && (
-            <p className="text-[11px] text-rose-300 mb-2" data-testid="driver-scanner-error">
-              {scanner.error}
-            </p>
-          )}
-          {scanner.lastEvent && (
-            <p className="text-[10px] text-slate-400 font-mono mb-2" data-testid="driver-scanner-last">
-              dernier signal : {scanner.lastEvent.id} · {scanner.lastEvent.rssi} dBm
-            </p>
-          )}
-          <div className="flex gap-2">
-            {!scanner.scanning ? (
-              <Button
-                size="sm"
-                onClick={scanner.start}
-                disabled={scanner.support !== "ok"}
-                data-testid="driver-scanner-start"
-                className="bg-emerald-600 hover:bg-emerald-500 text-white flex-1 h-9 disabled:opacity-40"
-              >
-                <Play className="w-3.5 h-3.5 mr-1.5" /> Démarrer le scan
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                onClick={scanner.stop}
-                data-testid="driver-scanner-stop"
-                className="bg-rose-600 hover:bg-rose-500 text-white flex-1 h-9"
-              >
-                <Square className="w-3.5 h-3.5 mr-1.5" /> Arrêter
-              </Button>
-            )}
-          </div>
-        </Card>
+        {/* SOS Urgence */}
+        <Button
+          onClick={confirmSos} disabled={sosSending}
+          data-testid="driver-sos-button"
+          className="w-full h-14 mt-2 bg-rose-600 hover:bg-rose-500 text-white text-lg font-bold rounded-2xl tracking-wide"
+        >
+          {sosSending ? <Loader2 className="w-5 h-5 animate-spin" /> : (<><ShieldAlert className="w-5 h-5 mr-2" /> SOS Urgence</>)}
+        </Button>
 
-        {/* Fleet tags */}
-        <Card className="bg-slate-800/60 border-slate-700 text-slate-200 p-4" data-testid="driver-fleet-tags-card">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Tag className="w-3 h-3" /> Tags BLE de la flotte
-            </p>
-            <span className="text-[10px] text-slate-500 font-mono">{fleetTags.length}</span>
-          </div>
-          {fleetTags.length === 0 ? (
-            <p className="text-[11px] text-slate-500 py-2">
-              Aucun tag enregistré. Demandez à un administrateur d&apos;associer vos beacons aux véhicules.
-            </p>
-          ) : (
-            <div className="max-h-[180px] overflow-y-auto -mx-1 px-1 space-y-1.5">
-              {fleetTags.map((t) => (
-                <div
-                  key={t.id}
-                  data-testid={`driver-fleet-tag-${t.id}`}
-                  className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-md bg-slate-900/60 border border-slate-700/60"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-mono text-[#9EE9FF] truncate">
-                      {t.identifier_raw || t.identifier}
-                    </p>
-                    <p className="text-[10px] text-slate-400 truncate">
-                      {t.vehicle_plate || "—"}{t.vehicle_model ? ` · ${t.vehicle_model}` : ""}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={testingTagId === t.id}
-                    onClick={() => testTag(t)}
-                    data-testid={`driver-fleet-tag-test-${t.id}`}
-                    className="h-7 text-[10px] text-[#2196F3] hover:bg-blue-500/10 px-2"
-                  >
-                    {testingTagId === t.id
-                      ? <Loader2 className="w-3 h-3 animate-spin" />
-                      : <><Bluetooth className="w-3 h-3 mr-1" /> Tester</>}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-
-        {/* Simulator removed — fleet tags list above provides a "Tester" button per tag. */}
-
-        <Button variant="ghost" size="sm"
-          onClick={() => { loadSession(); loadFleetTags(); setVehRefresh((k) => k + 1); }}
-          className="text-slate-400 hover:text-white hover:bg-slate-800 mt-2"
-          data-testid="driver-refresh">
+        <Button variant="ghost" size="sm" onClick={refreshAll}
+          className="text-slate-400 hover:text-white hover:bg-slate-800 mt-1" data-testid="driver-refresh">
           <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rafraîchir
         </Button>
       </main>
+
+      {/* Modal : Choisir un véhicule (assignés) */}
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white" data-testid="driver-vehicle-picker">
+          <DialogHeader><DialogTitle>Choisir un véhicule</DialogTitle></DialogHeader>
+          {myVehicles.length === 0 ? (
+            <p className="text-sm text-slate-400 py-4" data-testid="driver-picker-empty">Aucun véhicule disponible</p>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto space-y-2">
+              {myVehicles.map((v) => {
+                const selected = v.id === vehicle?.id;
+                return (
+                  <button key={v.id} disabled={switching}
+                    onClick={() => selectVehicle(v)}
+                    data-testid={`driver-picker-item-${v.id}`}
+                    className={`w-full flex items-center justify-between p-3 rounded-lg border text-left ${selected ? "border-[#2196F3] bg-blue-500/10" : "border-slate-700 bg-slate-800 hover:border-slate-600"}`}
+                  >
+                    <span>
+                      <span className="block font-mono font-semibold">{v.plate || "Véhicule"}</span>
+                      {v.model ? <span className="block text-xs text-slate-400">{v.model}</span> : null}
+                    </span>
+                    {selected ? <span className="text-[10px] text-[#2196F3] font-bold">Actuel</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {switching ? <div className="flex justify-center pt-2"><Loader2 className="w-5 h-5 animate-spin text-[#2196F3]" /></div> : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+// Messages simples (sans jargon) selon raison gate / code HTTP.
+function reasonMessage(reason, httpStatus) {
+  switch (reason) {
+    case "PRIVATE_MODE_FEATURE_DISABLED":
+    case "PRIVATE_MODE_TENANT_NOT_ALLOWED":
+    case "PRIVATE_MODE_VEHICLE_NOT_PILOT":
+      return "Le mode Privé n'est pas disponible pour le moment.";
+    case "PRIVATE_MODE_KILL_SWITCH_ACTIVE":
+    case "PRIVATE_MODE_INTEGRATION_UNAVAILABLE":
+      return "Mode Privé temporairement indisponible. Réessayez plus tard.";
+    case "PRIVATE_MODE_DEVICE_WRITE_DISABLED":
+      return "Le changement de mode est temporairement indisponible.";
+    case "PRIVATE_MODE_NOT_SUPPORTED":
+      return "Le mode Privé n'est pas disponible pour ce véhicule.";
+    case "PRIVATE_MODE_NO_TRACKER":
+    case "PRIVATE_MODE_NO_VEHICLE":
+      return "Aucun véhicule actif.";
+    case "PRIVATE_MODE_TRANSITION_IN_PROGRESS":
+    case "transition_in_progress":
+      return "Un changement de mode est déjà en cours…";
+    case "not_confirmed":
+      return "Le changement n'a pas encore été confirmé. Réessayez dans un instant.";
+  }
+  if (httpStatus === 409) return "Le changement n'a pas pu être effectué car l'état du véhicule a changé.";
+  if (httpStatus === 503) return "Le changement de mode est temporairement indisponible.";
+  if (httpStatus === 401 || httpStatus === 403) return "Action non autorisée ou session expirée.";
+  return "Action impossible pour le moment.";
 }

@@ -32,3 +32,6 @@ android/
 google-services.json
 GoogleService-Info.plist
 play-store-service-account.json
+
+# Env (never commit — use EAS secrets / EXPO_PUBLIC_ at build)
+.env

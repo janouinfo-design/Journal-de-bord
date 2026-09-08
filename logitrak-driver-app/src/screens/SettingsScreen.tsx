@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,63 +6,120 @@ import {
   Switch,
   TouchableOpacity,
   ScrollView,
-  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Constants from 'expo-constants';
 import { useAuthStore } from '@/store/authStore';
 import { useSessionStore } from '@/store/sessionStore';
-import { useQueueStore } from '@/store/queueStore';
 import { colors, spacing, radius, font } from '@/theme/colors';
-import { getApiUrl } from '@/api/client';
+import { showConfirm } from '@/utils/alert';
 import { bleScanner } from '@/ble/scanner';
+import {
+  getNotificationCatalog,
+  getNotificationPreferences,
+  updateNotificationPreferences,
+  CatalogEvent,
+  NotificationPreferences,
+} from '@/api/notifications';
+import type { RootStackParamList } from '@/navigation/RootNavigator';
+
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function SettingsScreen() {
-  const { user, signOut } = useAuthStore();
+  const nav = useNavigation<Nav>();
+  const { signOut } = useAuthStore();
   const { bleEnabled, setBleEnabled } = useSessionStore();
-  const { size: queueSize, triggerFlush, flushing } = useQueueStore();
-  const [scannerLabel, setScannerLabel] = useState('—');
+
+  const [catalog, setCatalog] = useState<CatalogEvent[]>([]);
+  const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
+  const [prefsLoading, setPrefsLoading] = useState(true);
+  const [savingEvent, setSavingEvent] = useState<string | null>(null);
 
   useEffect(() => {
-    const t = setInterval(() => setScannerLabel(bleScanner.getState()), 1000);
-    return () => clearInterval(t);
+    (async () => {
+      try {
+        const [cat, pr] = await Promise.all([
+          getNotificationCatalog(),
+          getNotificationPreferences(),
+        ]);
+        // On n'affiche que les événements destinés au chauffeur si l'audience est fournie.
+        setCatalog(cat.filter((c) => !c.audience || c.audience === 'driver' || c.audience === 'all'));
+        setPrefs(pr);
+      } catch {
+        // Pas de blocage : si indisponible, on n'affiche pas la section prefs.
+        setCatalog([]);
+      } finally {
+        setPrefsLoading(false);
+      }
+    })();
   }, []);
+
+  const togglePush = useCallback(
+    async (eventKey: string, value: boolean) => {
+      if (!prefs) return;
+      const prev = prefs;
+      const nextEvents = {
+        ...prefs.events,
+        [eventKey]: { ...(prefs.events[eventKey] || { push: false, email: false, sms: false }), push: value },
+      };
+      setPrefs({ ...prefs, events: nextEvents });
+      setSavingEvent(eventKey);
+      try {
+        const saved = await updateNotificationPreferences({ events: nextEvents });
+        setPrefs(saved);
+      } catch {
+        setPrefs(prev); // rollback si échec serveur
+        showConfirm('Erreur', "La préférence n'a pas pu être enregistrée.");
+      } finally {
+        setSavingEvent(null);
+      }
+    },
+    [prefs],
+  );
 
   const toggleBle = async (v: boolean) => {
     setBleEnabled(v);
-    if (v) {
-      await bleScanner.start();
-    } else {
-      await bleScanner.stop();
-    }
+    if (v) await bleScanner.start();
+    else await bleScanner.stop();
   };
 
   const onLogout = () => {
-    Alert.alert('Se déconnecter', 'Confirmer la déconnexion ?', [
+    showConfirm('Se déconnecter', 'Confirmer la déconnexion ?', [
       { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Déconnexion',
-        style: 'destructive',
-        onPress: () => {
-          signOut();
-        },
-      },
+      { text: 'Déconnexion', style: 'destructive', onPress: () => signOut() },
     ]);
   };
 
+  const isDev = __DEV__ === true || Constants.expoConfig?.extra?.env === 'development';
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={styles.scroll} testID="settings-scroll">
+        {/* Compte */}
         <Section title="Compte">
-          <Row label="Identité" value={user?.full_name || user?.email || '—'} />
-          <Row label="Rôle" value={user?.role || '—'} />
+          <TouchableOpacity
+            style={styles.rowBtn}
+            onPress={() => nav.navigate('ChangePassword')}
+            testID="settings-change-password"
+          >
+            <Text style={styles.rowBtnText}>Changer mon mot de passe</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.rowBtn} onPress={onLogout} testID="settings-logout">
+            <Text style={[styles.rowBtnText, { color: colors.danger }]}>Se déconnecter</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
         </Section>
 
+        {/* Bluetooth (contrôle chauffeur réel) */}
         <Section title="Bluetooth">
           <View style={styles.rowToggle}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>Détection automatique BLE</Text>
-              <Text style={styles.rowSub}>Active le scan en avant-plan</Text>
+              <Text style={styles.rowSub}>Active le scan en avant-plan (build natif)</Text>
             </View>
             <Switch
               value={bleEnabled}
@@ -72,36 +129,44 @@ export function SettingsScreen() {
               testID="settings-ble-toggle"
             />
           </View>
-          <Row label="État scanner" value={scannerLabel} />
-          <Row label="File hors-ligne" value={`${queueSize} détection(s)`} />
-          <TouchableOpacity
-            onPress={triggerFlush}
-            disabled={flushing || queueSize === 0}
-            style={[styles.btnSecondary, (flushing || queueSize === 0) && { opacity: 0.5 }]}
-            testID="settings-flush"
-          >
-            <Text style={styles.btnSecondaryText}>
-              {flushing ? 'Synchronisation…' : 'Synchroniser maintenant'}
+        </Section>
+
+        {/* Notifications — préférences RÉELLES du chauffeur */}
+        <Section title="Notifications">
+          {prefsLoading ? (
+            <ActivityIndicator color={colors.primary} style={{ paddingVertical: spacing.md }} />
+          ) : catalog.length === 0 || !prefs ? (
+            <Text style={styles.rowSub} testID="settings-notif-empty">
+              Aucune préférence de notification disponible.
             </Text>
-          </TouchableOpacity>
+          ) : (
+            catalog.map((ev) => {
+              const ch = prefs.events[ev.event] || ev.default_channels;
+              return (
+                <View style={styles.rowToggle} key={ev.event}>
+                  <View style={{ flex: 1, paddingRight: spacing.md }}>
+                    <Text style={styles.rowLabel}>{ev.label}</Text>
+                    <Text style={styles.rowSub}>Notification push</Text>
+                  </View>
+                  <Switch
+                    value={Boolean(ch?.push)}
+                    disabled={savingEvent === ev.event}
+                    onValueChange={(v) => togglePush(ev.event, v)}
+                    trackColor={{ true: colors.primary, false: colors.border }}
+                    thumbColor={colors.text}
+                    testID={`settings-notif-${ev.event}`}
+                  />
+                </View>
+              );
+            })
+          )}
         </Section>
 
-        <Section title="Réseau">
-          <Row label="API" value={getApiUrl()} mono />
-          <Row label="App version" value={String(Constants.expoConfig?.version || '0.1.0')} />
-          <Row
-            label="Build"
-            value={String(
-              Constants.expoConfig?.ios?.buildNumber ||
-                Constants.expoConfig?.android?.versionCode ||
-                '1',
-            )}
-          />
+        {/* Application — jamais d'URL/secret */}
+        <Section title="Application">
+          <Row label="Version" value={String(Constants.expoConfig?.version || '0.1.0')} />
+          {isDev ? <Row label="Environnement" value="développement" /> : null}
         </Section>
-
-        <TouchableOpacity onPress={onLogout} style={styles.btnDanger} testID="settings-logout">
-          <Text style={styles.btnDangerText}>Se déconnecter</Text>
-        </TouchableOpacity>
 
         <Text style={styles.legal}>
           © Logitrak 2026 · Données traitées conformément à la nLPD/RGPD.{'\n'}
@@ -121,11 +186,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={[styles.rowValue, mono ? styles.mono : null]} numberOfLines={1}>
+      <Text style={styles.rowValue} numberOfLines={1}>
         {value}
       </Text>
     </View>
@@ -159,6 +224,16 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     borderBottomWidth: 1,
   },
+  rowBtn: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+  },
+  rowBtnText: { color: colors.primary, fontSize: font.size.md, fontWeight: '500' },
+  chevron: { color: colors.textMuted, fontSize: font.size.lg },
   rowToggle: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -170,26 +245,6 @@ const styles = StyleSheet.create({
   rowLabel: { color: colors.text, fontSize: font.size.sm, fontWeight: '500' },
   rowSub: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
   rowValue: { color: colors.textMuted, fontSize: font.size.sm, maxWidth: '55%' },
-  mono: { fontFamily: 'Courier', fontSize: font.size.xs },
-
-  btnSecondary: {
-    marginVertical: spacing.md,
-    backgroundColor: colors.bgElevated,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  btnSecondaryText: { color: colors.text, fontWeight: '500', fontSize: font.size.sm },
-
-  btnDanger: {
-    marginTop: spacing.md,
-    backgroundColor: colors.danger,
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  btnDangerText: { color: colors.text, fontWeight: '600', fontSize: font.size.md },
-
   legal: {
     color: colors.textMuted,
     fontSize: font.size.xs,

@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 35 — RÉCONCILIATION des deux lignées mergées (Energy + private-mode-pilot). Backend pytest test_iter35_reconciliation.py: 12/12 PASS (19.4s). Frontend E2E validé sur les deux lignées. Aucune régression détectée. Cleanup effectué (Jean Dupont restauré en mode=ALL, 18 véhicules).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "backend_pytest": "12/12 PASS (test_iter35_reconciliation.py)",
+    "PRIVATE_driver_console_testids": "PASS — driver-console-page, driver-vehicle-card (véhicule 'GE 123456 Mercedes Sprinter Connecté'), driver-change-vehicle, driver-mode-pro, driver-mode-private, driver-km-pro, driver-km-private, driver-sos-button tous présents",
+    "PRIVATE_picker_lists_authorized": "PASS — clic sur driver-change-vehicle ouvre driver-vehicle-picker avec 18 driver-picker-item-* (correspond à GET /api/livre/driver/vehicles ALL mode)",
+    "PRIVATE_mode_fail_closed": "PASS — bouton driver-mode-private DISABLED (aria-disabled=true, is_disabled=True), Mode Professionnel reste l'état effectif visuellement. Pas de crash, pas de mode privé activé. PRIVATE_MODE_ENABLED absent → fail-closed correct.",
+    "PRIVATE_km_and_sos": "PASS — driver-km-pro-value='0.0 km' et driver-km-private-value='0.0 km' (valeurs affichées, jamais inventées), driver-sos-button présent (non déclenché)",
+    "PRIVATE_odometer_admin_page": "PASS — /livre/administration/kilometrage charge (body 1065 chars, 2 tables détectées, aucune erreur console bloquante)",
+    "ENERGY_driver_vehicles_ALL_18": "PASS — GET /api/livre/driver/vehicles → access_mode=ALL, 18 véhicules",
+    "ENERGY_put_SELECTED_2_vehicles": "PASS — PUT vehicle-access mode=SELECTED avec 2 véhicules OK",
+    "ENERGY_driver_sees_only_2": "PASS — après SELECTED, GET /driver/vehicles → 2 véhicules exactement (ids correspondants)",
+    "ENERGY_claim_out_of_scope_403": "PASS — POST /api/livre/driver/claim avec vehicle_id hors liste → 403",
+    "ENERGY_reconciliation_cache_hit_bypass": "PASS — 1er preview MISS, 2e preview cache.hit>=18 avec rows STRICTEMENT identiques, 3e preview?refresh=true → cache.bypass>=18",
+    "ENERGY_recon_ui_elements": "PASS — /livre/energie/rapprochement : recon-table, recon-refresh-btn, recon-export-btn (XLSX), recon-export-pdf-btn tous présents, em-dash '—' présent (garde-fou null)",
+    "ENERGY_BEV_no_zero_fuel": "PASS — /api/livre/trips retourne sans '0.00 L' fabriqué pour BEV",
+    "TRANSVERSE_RBAC": "PASS — admin login OK, chauffeur login OK, chauffeur ne peut pas accéder à /api/livre/team/drivers (403)",
+    "CLEANUP": "PASS — mode=ALL restauré automatiquement via fixture pytest (class-scope teardown)"
+  },
+  "test_report_links": ["/app/backend/tests/test_iter35_reconciliation.py", "/app/test_reports/pytest/iter35.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fail-closed du Mode Privé implémenté proprement via désactivation du bouton (disabled) + message contextuel 'temporairement indisponible'. Le testid 'driver-mode-unavailable' n'est utilisé que pour PRIVATE_MODE_NOT_SUPPORTED (vehicle-specific), pas pour la feature disabled globale — c'est un choix cohérent.",
+    "Cache reconciliation reste 100% conforme au spec (TTL 60s, hit>=18 sur période identique, bypass>=18 sur refresh=true, rows byte-identical).",
+    "Intersection my-vehicles ↔ vehicle_access respectée : le picker driver n'affiche QUE les véhicules autorisés (2 en SELECTED, 18 en ALL).",
+    "Console warnings mineurs 'Missing Description or aria-describedby for DialogContent' sur le picker véhicule — non bloquant, à corriger pour a11y."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter35_reconciliation.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100%"},
+  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (Jean Dupont, driver_id=1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch/admin123",
+  "seed_data_creation": "Aucune. Uniquement PUT vehicle-access temporaire (SELECTED → ALL), restauré via fixture teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Les deux lignées Energy + private-mode-pilot sont mergées sans régression. Fail-closed private-mode = bouton DISABLED (pas de testid 'driver-mode-unavailable' sauf pour vehicle non-supporté). Picker options testid pattern: driver-picker-item-<uuid>. Cache reconciliation TTL 60s — enchaîner les 2 previews. Amendes/Object Storage: pas testé UI (aucune amende avec justificatif dans le dataset preview accessible en API — smoke uniquement, le module backend est OK selon iterations 25-33). real_energy_validated laissé à false comme demandé."
+}

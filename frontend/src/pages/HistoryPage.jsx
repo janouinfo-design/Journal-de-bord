@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { ClassificationBadge } from "@/components/livre/Badges";
+import { ClassificationBadge, PrivateMaskedBadge } from "@/components/livre/Badges";
+import { isPrivateTrip } from "@/lib/privateMode";
 import { toast } from "sonner";
 import {
   Loader2, ArrowLeftRight, Briefcase, User, EyeOff, Gauge,
@@ -405,14 +406,22 @@ export default function HistoryPage({ kind }) {
                     <td className="py-3 px-4 text-slate-600 font-mono text-xs">{t.vehicle_plate}</td>
                     {!isMasked && (
                       <td className="py-3 px-4 max-w-md">
-                        <div className="text-xs text-slate-600 flex items-start gap-1">
-                          <MapPin className="w-3 h-3 mt-0.5 text-[#2196F3] shrink-0" />
-                          <span className="truncate">{t.start_address}</span>
-                        </div>
-                        <div className="text-xs text-slate-500 flex items-start gap-1 mt-0.5">
-                          <MapPin className="w-3 h-3 mt-0.5 text-slate-400 shrink-0" />
-                          <span className="truncate">{t.end_address}</span>
-                        </div>
+                        {isPrivateTrip(t) ? (
+                          <div data-testid="history-trip-private-masked">
+                            <PrivateMaskedBadge />
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-xs text-slate-600 flex items-start gap-1">
+                              <MapPin className="w-3 h-3 mt-0.5 text-[#2196F3] shrink-0" />
+                              <span className="truncate">{t.start_address}</span>
+                            </div>
+                            <div className="text-xs text-slate-500 flex items-start gap-1 mt-0.5">
+                              <MapPin className="w-3 h-3 mt-0.5 text-slate-400 shrink-0" />
+                              <span className="truncate">{t.end_address}</span>
+                            </div>
+                          </>
+                        )}
                       </td>
                     )}
                     <td className="py-3 px-4 text-right font-medium text-slate-800">{fmtKm(t.distance_km)}</td>

@@ -16,6 +16,7 @@ import DriverFinesPage from "@/pages/DriverFinesPage";
 import AdministrationLayout from "@/pages/AdministrationLayout";
 import TeamUsersPage from "@/pages/TeamUsersPage";
 import TeamDriversPage from "@/pages/TeamDriversPage";
+import VehicleOdometerPage from "@/pages/VehicleOdometerPage";
 import TeamImpersonationPage from "@/pages/TeamImpersonationPage";
 import InvitationPage from "@/pages/InvitationPage";
 import AdminTenantsPage from "@/pages/AdminTenantsPage";
@@ -173,6 +174,8 @@ function App() {
                 <ProtectedRoute roles={["admin"]}><TeamUsersPage /></ProtectedRoute>} />
               {/* Legacy : la liste des chauffeurs vit dans le domaine Conducteurs */}
               <Route path="chauffeurs" element={<Navigate to="/livre/conducteurs/chauffeurs" replace />} />
+              <Route path="kilometrage" element={
+                <ProtectedRoute roles={["admin"]}><VehicleOdometerPage /></ProtectedRoute>} />
               <Route path="apercus" element={
                 <ProtectedRoute roles={["admin"]}><TeamImpersonationPage /></ProtectedRoute>} />
             </Route>
