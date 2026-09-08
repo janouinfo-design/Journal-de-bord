@@ -98,6 +98,10 @@ async def filter_trips_query(db, user, start: Optional[str], end: Optional[str],
             q["driver_id"] = "__none__"
         else:
             vehicle_ids = await driver_vehicle_ids(db, driver["id"])
+            # Restreint au périmètre autorisé actuel (ne peut jamais élargir).
+            from app.vehicle_access import get_authorized_vehicle_ids_for_driver
+            authorized = set(await get_authorized_vehicle_ids_for_driver(db, driver["id"]))
+            vehicle_ids = [v for v in vehicle_ids if v in authorized]
             q["$or"] = [{"driver_id": driver["id"]}]
             if vehicle_ids:
                 q["$or"].append({"vehicle_id": {"$in": vehicle_ids}})

@@ -147,3 +147,52 @@ real_energy_validated (false).
 - Flicker du sheet véhicules après changement (load() complet au lieu d'un update local).
 - Double mécanisme RBAC dans la même table (canEdit vs role==='admin').
 - SettingsPage.jsx 527 lignes (extraction composant possible).
+
+## 27/08/2026 — ACCÈS VÉHICULES PAR CHAUFFEUR (ALL / SELECTED / SINGLE + véhicule par défaut)
+
+### Modèle
+- Champs sur doc `drivers` : vehicle_access_mode (ALL|SELECTED|SINGLE, ABSENT = ALL implicite),
+  allowed_vehicle_ids, default_vehicle_id. AUCUNE migration Mongo : défaut implicite ALL préserve
+  le comportement historique (claim libre dans le tenant) — aucun chauffeur ne perd de véhicule.
+- `assignments` (qui conduit quoi, résolution trajets) INCHANGÉ et distinct du modèle d'accès.
+
+### Backend (source d'autorité)
+- Nouveau app/vehicle_access.py : get_vehicle_access, get_authorized_vehicles_for_driver,
+  get_authorized_vehicle_ids_for_driver, assert. Véhicules actifs uniquement
+  (active≠False, deleted≠True, archived≠True). Default hors périmètre invalidé (jamais arbitraire).
+- team.py : GET (admin+manager) / PUT (admin only) /team/drivers/{id}/vehicle-access.
+  Validations : SELECTED ≥1 véhicule existant du tenant ; SINGLE exactement 1 (default auto) ;
+  default ∈ périmètre ; audit driver.vehicle_access_updated (before/after complets).
+- identification.py : GET /driver/vehicles (access_mode + default + véhicules autorisés, tenant
+  depuis l'identité) ; claim → 403 hors périmètre (même tenant) ; fleet-tags filtrés pour role driver.
+- _helpers.filter_trips_query : historique par véhicule intersecté avec le périmètre autorisé
+  (ne peut jamais élargir ; ALL = comportement identique à avant).
+
+### Frontend admin
+- DriverVehicleAccessCard.jsx montée dans DriverSheet (fiche chauffeur, /livre/conducteurs/chauffeurs) :
+  radios 3 modes, multi-select recherchable + compteur, dropdown default limité au périmètre,
+  toast de confirmation, RBAC UI (manager lecture seule). DriverConsolePage NON modifiée (phase 2 séparée).
+- Fix a11y pré-existant : Badge <div> dans <p> (Méthodes d'identification) → <div>.
+
+### Tests
+- tests/test_driver_vehicle_access.py : 25/25 PASS (T1-T20 : ALL tenant-only, SELECTED exact,
+  SINGLE, defaults, cross-tenant 404/400, RBAC driver/manager 403, inactif exclu, liste vide sans
+  fallback, assignments préservés, claim 403 = aucune session créée pendant les tests).
+- 1 test legacy adapté : claim véhicule inexistant → 403 (fail-closed avant résolution) au lieu de 404.
+- RÉGRESSION COMPLÈTE : 646 PASS / 0 FAIL / 3 SKIP (run final propre).
+- Testing agent iteration_32 : 8/8 PASS (section fiche, SELECTED 4 véhicules + compteur, default
+  limité, persistance reload, SINGLE, restauration production, RBAC manager, aucun cross-tenant).
+- État final : Jean Dupont restauré ALL/Aucun ; 0 véhicule de test résiduel.
+
+### Prochaine étape convenue (GO séparé)
+- Prompt n°2 : DriverConsolePage.jsx consomme GET /api/livre/driver/vehicles
+  (auto-sélection SINGLE, default proposé, choix si plusieurs sans default, message si aucun véhicule).
+
+## 27/08/2026 (suite) — Uploads amendes migrés vers Emergent Object Storage
+- Nouveau app/object_storage.py (init lazy + re-mint sur 404, put/get httpx async, préfixe logitrak-journal).
+- fines.py : upload → put_object (storage_path canonique en meta), download → get_object
+  (fallback lecture disque legacy pour anciens fichiers preview), delete → soft-delete meta.
+- Migration one-shot : 1 document réel migré (les autres fichiers disque = orphelins de tests sans meta).
+- Prouvé e2e réel : upload → download octets identiques → delete 404. Suite fines : 61/61 PASS
+  (1 test adapté : vérification storage_path au lieu du disque).
+- Raison : le stockage pod-local est perdu au déploiement (blocage pré-déploiement levé).

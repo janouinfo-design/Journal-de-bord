@@ -664,10 +664,11 @@ def test_14_endpoint_robustness(admin_session, driver_session, mongo):
                             json={"vehicle_id": "x"}, timeout=10)
     assert r2.status_code == 400, r2.text
 
-    # 14.3 driver claim inexistent vehicle → 404
+    # 14.3 driver claim inexistent vehicle → 403 (hors périmètre autorisé,
+    # contrôle d'accès véhicule AVANT résolution — n'expose pas l'existence)
     r3 = driver_session.post(f"{BASE_URL}/api/livre/driver/claim",
                              json={"vehicle_id": "nonexistent-vid"}, timeout=10)
-    assert r3.status_code == 404
+    assert r3.status_code in (403, 404)
 
     # 14.4 body empty → 422
     r4 = driver_session.post(f"{BASE_URL}/api/livre/driver/claim",

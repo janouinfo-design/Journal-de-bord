@@ -869,3 +869,12 @@ affectation manuelle, droits par rôle.
   KAIO Volvo EX30 08, KAIO Renault Zoe, Skoda Enyaq BE 579 928, 2-ORHAN, 3-IVAN 03, 4-NEDIR 04,
   Iphone Rabi, Tab Rabi Samsung, + 6 GE-* archivés (démo) — aucune source structurée disponible.
 - En attente GO : cache rapprochement · déploiement Journal VPS · durcissement multi-tenant Energy (côté ÉNERGIE).
+
+## Accès véhicules par chauffeur — 27/08/2026 : LIVRÉ (socle backend + admin UI)
+- ALL/SELECTED/SINGLE + default_vehicle_id sur drivers ; absent = ALL implicite (zéro migration,
+  aucun chauffeur ne perd de véhicule). Résolveur central app/vehicle_access.py = source d'autorité.
+- GET /driver/vehicles ; claim/fleet-tags/historique 403-filtrés hors périmètre ; cross-tenant impossible.
+- UI fiche chauffeur (DriverSheet) : section Accès aux véhicules complète, admin only, auditée.
+- Tests 25/25 · régression 646 PASS / 0 FAIL / 3 SKIP · testing agent iteration_32 : 8/8 PASS.
+- PHASE SUIVANTE (attente GO) : DriverConsolePage consomme /driver/vehicles (auto-select SINGLE/default).
+- Toujours en attente GO : cache rapprochement · déploiement Journal VPS.
