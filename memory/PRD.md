@@ -878,3 +878,13 @@ affectation manuelle, droits par rôle.
 - Tests 25/25 · régression 646 PASS / 0 FAIL / 3 SKIP · testing agent iteration_32 : 8/8 PASS.
 - PHASE SUIVANTE (attente GO) : DriverConsolePage consomme /driver/vehicles (auto-select SINGLE/default).
 - Toujours en attente GO : cache rapprochement · déploiement Journal VPS.
+
+## Console Chauffeur — accès véhicules — 08/09/2026 : LIVRÉ (frontend)
+- DriverVehiclePicker (components/livre/) dans DriverConsolePage : source d'autorité unique
+  GET /api/livre/driver/vehicles ; aucune liste globale, aucun fallback (fail-closed sur erreur API).
+- Sélection : active valide > localStorage validé/purgé > default backend > unique > aucune
+  (lib/driverVehicleSelection.js, testé jest T1–T10). SINGLE verrouillé « ATTRIBUÉ ».
+- Révocation en session via driver-refresh : désélection + notice + purge localStorage.
+- Claim « Je conduis ce véhicule » → POST /driver/claim (403 hors périmètre conservé, conflit géré).
+- Backend inchangé. Tests : jest 11/11 · testing agent iteration_33 7/7 PASS · régression 646/0/3 SKIP.
+- En attente GO : cache rapprochement · déploiement Journal VPS · badge global accès restreint.

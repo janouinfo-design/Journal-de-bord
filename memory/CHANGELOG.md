@@ -196,3 +196,16 @@ real_energy_validated (false).
 - Prouvé e2e réel : upload → download octets identiques → delete 404. Suite fines : 61/61 PASS
   (1 test adapté : vérification storage_path au lieu du disque).
 - Raison : le stockage pod-local est perdu au déploiement (blocage pré-déploiement levé).
+
+## 08/09/2026 — Console Chauffeur : accès véhicules (frontend, LIVRÉ)
+- Nouveau DriverVehiclePicker.jsx monté dans DriverConsolePage (/driver) : consomme exclusivement
+  GET /api/livre/driver/vehicles — jamais /livre/vehicles (liste globale) côté chauffeur.
+- Logique pure lib/driverVehicleSelection.js : priorité sélection active valide > localStorage valide
+  (clé logitrak.driver.vehicle.<userId>, purge si non autorisé) > default backend > unique > aucune.
+- Fail-closed : erreur API = état erreur explicite + bouton Réessayer, aucune liste, aucune sélection.
+- SINGLE : auto-sélection + sélecteur verrouillé (badge ATTRIBUÉ + cadenas). SELECTED : liste exacte.
+- Révocation en session : refresh (driver-refresh) → désélection + notice « n'est plus autorisé » + purge.
+- Liste vide : empty state explicite. Bouton « Je conduis ce véhicule » → POST /driver/claim (403 backend géré).
+- Backend INCHANGÉ. Energy/Object Storage/cache rapprochement intouchés. real_energy_validated=false.
+- Tests : jest T1–T10 11/11 PASS · testing agent iteration_33 : 7/7 PASS (ALL/SELECTED/SINGLE, persistance,
+  révocation, 403, cleanup mode ALL restauré) · régression backend unique 646 PASS / 0 FAIL / 3 SKIP.
