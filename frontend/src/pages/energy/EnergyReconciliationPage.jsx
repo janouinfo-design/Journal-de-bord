@@ -14,7 +14,7 @@ import { EnergyBadge } from "@/components/energy/EnergyBadge";
 import { POWERTRAIN_LABEL } from "@/components/energy/TripEnergyBlock";
 import {
   Scale, AlertTriangle, Loader2, Info, Fuel, Zap, Car, CheckCircle2,
-  SearchCheck, HelpCircle, XCircle, FileSpreadsheet, FileText, BellOff, Settings2,
+  SearchCheck, HelpCircle, XCircle, FileSpreadsheet, FileText, BellOff, Settings2, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -220,14 +220,25 @@ export default function EnergyReconciliationPage() {
     }
   }
 
-  useEffect(() => {
+  function loadPreview(refresh = false) {
     if (!range?.from || !range?.to) return;
     setLoading(true);
     api.get("/livre/energy/reconciliation/preview",
-      { params: { date_from: range.from, date_to: range.to } })
-      .then(r => setData(r.data))
-      .catch(() => setData(null))
+      { params: { date_from: range.from, date_to: range.to, ...(refresh ? { refresh: true } : {}) } })
+      .then(r => {
+        setData(r.data);
+        if (refresh) toast.success("Données Énergie actualisées (cache ignoré)");
+      })
+      .catch(() => {
+        setData(null);
+        if (refresh) toast.error("Échec de l'actualisation");
+      })
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range?.from, range?.to]);
 
   const rows = data?.rows || [];
@@ -350,6 +361,12 @@ export default function EnergyReconciliationPage() {
             )}
           </p>
           <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" data-testid="recon-refresh-btn"
+                    className="text-xs h-7"
+                    onClick={() => loadPreview(true)} disabled={loading || !!exporting}>
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+              Actualiser
+            </Button>
             <Button size="sm" variant="outline" data-testid="recon-export-btn"
                     className="text-xs h-7"
                     onClick={() => doExport("xlsx")} disabled={!!exporting || loading}>

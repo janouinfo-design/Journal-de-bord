@@ -209,3 +209,18 @@ real_energy_validated (false).
 - Backend INCHANGÉ. Energy/Object Storage/cache rapprochement intouchés. real_energy_validated=false.
 - Tests : jest T1–T10 11/11 PASS · testing agent iteration_33 : 7/7 PASS (ALL/SELECTED/SINGLE, persistance,
   révocation, 403, cleanup mode ALL restauré) · régression backend unique 646 PASS / 0 FAIL / 3 SKIP.
+
+## 08/09/2026 (suite) — Cache rapprochement Energy (LIVRÉ)
+- Nouveau app/energy_cache.py : cache mémoire éphémère (non persistant), TTL 60 s,
+  TTL erreur 30 s (erreur transport JAMAIS conservée au TTL normal). Aucune collection Mongo.
+- Clé : tenant Journal + tenant Energy + vehicle_id|ref + période + type de summary — zéro partage cross-tenant.
+- _build_reconciliation (source unique preview/XLSX/PDF/candidates) cache les réponses Energy BRUTES
+  sanitizées ; rapprochement toujours recalculé localement (achats/seuils actuels). Valeurs jamais modifiées
+  (null≠0, STALE conservé, measurement_type/source/timestamp intacts — prouvé rows MISS == rows HIT).
+- preview?refresh=true = BYPASS réel (appels Energy refaits + cache mis à jour). Bouton « Actualiser »
+  ajouté sur /livre/energie/rapprochement (recon-refresh-btn). Réponse preview expose bloc cache
+  {ttl_seconds, persistent:false, hit, miss, expired, bypass}. Logs HIT/MISS/EXPIRED/BYPASS sans secret.
+- Fail-closed inchangé : tenant sans mapping → aucun appel/cache véhicule (health non tenant-specific conservé).
+- Perf réelle (energie.logitrak.ch) : MISS 7,9 s → HIT 0,16 s ; XLSX 0,15 s ; PDF 0,18 s après preview.
+- Tests : test_energy_cache.py 24/24 PASS · testing agent iteration_34 : tout PASS ·
+  régression complète 670 PASS / 0 FAIL / 3 SKIP. real_energy_validated=false (absent en DB).

@@ -888,3 +888,13 @@ affectation manuelle, droits par rôle.
 - Claim « Je conduis ce véhicule » → POST /driver/claim (403 hors périmètre conservé, conflit géré).
 - Backend inchangé. Tests : jest 11/11 · testing agent iteration_33 7/7 PASS · régression 646/0/3 SKIP.
 - En attente GO : cache rapprochement · déploiement Journal VPS · badge global accès restreint.
+
+## Cache rapprochement Energy — 08/09/2026 : LIVRÉ
+- app/energy_cache.py : cache mémoire éphémère TTL 60 s (erreur : 30 s, jamais TTL normal),
+  clé tenant Journal + tenant Energy + véhicule|ref + période + type. Non persistant, zéro Mongo.
+- Réponses Energy brutes cachées ; rapprochement recalculé localement. null≠0, STALE/MEASURED/
+  source/timestamp strictement conservés (rows MISS == rows HIT prouvé). Fail-closed inchangé.
+- preview/XLSX/PDF = pipeline unique partageant le cache ; refresh=true + bouton « Actualiser » = bypass réel.
+- Perf : MISS 7,9 s → HIT 0,16 s ; XLSX 0,15 s ; PDF 0,18 s. Tests 24/24 · agent iteration_34 PASS ·
+  régression 670 PASS / 0 FAIL / 3 SKIP. real_energy_validated=false.
+- En attente GO : déploiement Journal VPS · badge global accès restreint.

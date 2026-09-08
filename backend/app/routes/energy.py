@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError
 
-from app import energy_client
+from app import energy_cache, energy_client
 from app.auth import require_roles
 from app.db import get_db
 from app.navixy_sync import powertrain_from_fuel_type
@@ -226,28 +226,38 @@ async def reconciliation_preview(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     vehicle_id: Optional[str] = None,
+    refresh: bool = False,
     user=Depends(require_roles("admin", "manager", "lecture_seule")),
 ):
     """Rapprochement achats vs consommation — DIAGNOSTIC/PREVIEW, AUCUNE alerte.
     Achats = transactions cartes (commercial). Consommation = module Énergie
     uniquement (priorité MEASURED > ESTIMATED > REFERENCE, sinon NONE).
-    Statuts centralisés : OK / A_CONTROLER / INDICATIF / IMPOSSIBLE."""
+    Statuts centralisés : OK / A_CONTROLER / INDICATIF / IMPOSSIBLE.
+    Réponses Energy cachées 60 s (mémoire, par tenant) ; refresh=true = bypass
+    réel (appels Energy refaits puis cache mis à jour)."""
     tid = _tenant_or_400()
     db = get_db()
     today = datetime.now(timezone.utc).date()
     dfrom = date_from or today.replace(day=1).isoformat()
     dto = date_to or today.isoformat()
-    rows, thresholds, status_svc = await _build_reconciliation(db, tid, dfrom, dto, vehicle_id)
+    rows, thresholds, status_svc, cache_info = await _build_reconciliation(
+        db, tid, dfrom, dto, vehicle_id, bypass_cache=refresh)
     return {"preview": True, "alerting": "disabled",
             "connected": status_svc.get("connected", False), "mode": status_svc.get("mode"),
             "period": {"from": dfrom, "to": dto},
             "thresholds": thresholds,
+            "cache": {"ttl_seconds": energy_cache.TTL_SECONDS, "persistent": False,
+                      **cache_info},
             "rows": rows}
 
 
 async def _build_reconciliation(db, tid: str, dfrom: str, dto: str,
-                                vehicle_id: Optional[str] = None):
-    """Source de vérité UNIQUE du rapprochement (écran + export Excel)."""
+                                vehicle_id: Optional[str] = None,
+                                bypass_cache: bool = False):
+    """Source de vérité UNIQUE du rapprochement (écran + exports Excel/PDF).
+    Les réponses Energy brutes sont cachées 60 s (clé tenant Journal + tenant
+    Energy + véhicule/ref + période) ; le rapprochement est TOUJOURS recalculé
+    localement avec les achats/seuils actuels. Aucune valeur cachée modifiée."""
     vq = {"id": vehicle_id} if vehicle_id else {}
     vehicles = await db.vehicles.find(
         vq, {"_id": 0, "id": 1, "plate": 1, "model": 1,
@@ -277,8 +287,29 @@ async def _build_reconciliation(db, tid: str, dfrom: str, dto: str,
     settings = await get_settings_doc(db)
     threshold_pct = settings.get("reconciliation_threshold_percent")
     threshold_l = settings.get("reconciliation_threshold_liters")
-    status_svc = await energy_client.get_status()
     energy_tenant = await _resolve_energy_tenant(db)
+    cache_info = {"hit": 0, "miss": 0, "expired": 0, "bypass": 0}
+
+    async def _cached(key, fetch, cacheable=None):
+        """Réponse Energy brute via cache éphémère — valeur JAMAIS modifiée."""
+        if bypass_cache:
+            energy_cache.mark_bypass(key)
+            cache_info["bypass"] += 1
+        else:
+            state, cached = energy_cache.lookup(key)
+            cache_info[state.lower()] += 1
+            if state == "HIT":
+                return cached
+        fresh = await fetch()
+        if cacheable is None or cacheable(fresh):
+            energy_cache.store(key, fresh)
+        return fresh
+
+    # Health non tenant-specific (comportement livré inchangé) — clé isolée par tenant.
+    status_svc = await _cached(
+        energy_cache.make_key(tid, energy_tenant or "", "-", "-", "-", "status"),
+        energy_client.get_status,
+        cacheable=lambda s: bool(s.get("connected")))
     if energy_tenant is None:
         status_svc = {**status_svc, "connected": False,
                       "tenant_mapping": "NOT_CONFIGURED",
@@ -292,8 +323,12 @@ async def _build_reconciliation(db, tid: str, dfrom: str, dto: str,
             summ = {"availability": "UNAVAILABLE",
                     "reason": "energy_tenant_not_configured", "metrics": None}
         else:
-            summ = await energy_client.vehicle_energy_summary(
-                v, dfrom, dto, tenant_id=energy_tenant)
+            ref = v.get("navixy_tracker_id") or v["id"]
+            summ = await _cached(
+                energy_cache.make_key(tid, energy_tenant, f"{v['id']}|{ref}",
+                                      dfrom, dto, "vehicle_summary"),
+                lambda v=v: energy_client.vehicle_energy_summary(
+                    v, dfrom, dto, tenant_id=energy_tenant))
         metrics = summ.get("metrics") or {}
         consumed = energy_client.best_metric(metrics.get("fuel_liters_total"))
         consumed_electric = energy_client.best_metric(metrics.get("energy_kwh_total"))
@@ -332,7 +367,7 @@ async def _build_reconciliation(db, tid: str, dfrom: str, dto: str,
     thresholds = {"percent": threshold_pct, "liters": threshold_l,
                   "configured": threshold_pct is not None or threshold_l is not None,
                   "note": "Écran diagnostic/preview — alertes automatiques désactivées"}
-    return rows, thresholds, status_svc
+    return rows, thresholds, status_svc, cache_info
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +529,7 @@ async def generate_alert_candidates(
     today = datetime.now(timezone.utc).date()
     dfrom = date_from or today.replace(day=1).isoformat()
     dto = date_to or today.isoformat()
-    rows, _, status_svc = await _build_reconciliation(db, tid, dfrom, dto, vehicle_id)
+    rows, _, status_svc, _ = await _build_reconciliation(db, tid, dfrom, dto, vehicle_id)
     cands = _alert_candidates(rows, dfrom, dto)
     created = duplicates = 0
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -579,8 +614,9 @@ async def export_reconciliation(
 
 async def _export_dataset(db, tid, dfrom, dto, vehicle_id, group, powertrain,
                           measurement, reliability, status):
-    """Jeu de données commun Excel/PDF — source unique _build_reconciliation."""
-    rows, thresholds, status_svc = await _build_reconciliation(db, tid, dfrom, dto, vehicle_id)
+    """Jeu de données commun Excel/PDF — source unique _build_reconciliation
+    (réutilise le même cache Energy que le preview)."""
+    rows, thresholds, status_svc, _ = await _build_reconciliation(db, tid, dfrom, dto, vehicle_id)
     rows = _apply_recon_filters(rows, group, powertrain, measurement, reliability, status)
     from app.db import get_raw_db
     t = await get_raw_db().tenants.find_one({"id": tid}, {"_id": 0, "name": 1})
