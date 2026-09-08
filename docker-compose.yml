@@ -51,6 +51,8 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       FUEL_CARD_HMAC_SECRET: ${FUEL_CARD_HMAC_SECRET}
+      ENERGY_API_BASE_URL: ${ENERGY_API_BASE_URL}
+      ENERGY_API_TOKEN: ${ENERGY_API_TOKEN}
     volumes:
       - ./data/storage:/app/storage
     ports:
