@@ -19,8 +19,28 @@ from app.db import get_db
 from app import ble_engine
 
 from app.routes._helpers import resolve_driver_id_for_user
+from app.vehicle_access import (get_authorized_vehicles_for_driver,
+                                get_authorized_vehicle_ids_for_driver)
 
 router = APIRouter(tags=["identification"])
+
+
+@router.get("/driver/vehicles")
+async def driver_vehicles(user=Depends(get_current_user)):
+    """Véhicules que le chauffeur connecté a le DROIT d'utiliser.
+
+    Source d'autorité : vehicle_access (ALL/SELECTED/SINGLE) — tenant issu de
+    l'identité authentifiée, jamais d'un paramètre client."""
+    db = get_db()
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    acc, vehicles = await get_authorized_vehicles_for_driver(db, driver_id)
+    return {"access_mode": acc["mode"],
+            "default_vehicle_id": acc["default_vehicle_id"],
+            "vehicles": [{"id": v["id"], "label": v.get("label"),
+                          "plate": v.get("plate"), "model": v.get("model")}
+                         for v in vehicles]}
 
 
 @router.get("/driver/current-session")
@@ -44,6 +64,13 @@ async def driver_fleet_tags(user=Depends(get_current_user)):
     tags = await db.ble_tags.find(
         {"tenant_id": "default"}, {"_id": 0},
     ).to_list(500)
+    # Un chauffeur ne voit que les tags des véhicules de son périmètre autorisé.
+    if user.get("role") == "driver":
+        drv_id = await resolve_driver_id_for_user(db, user)
+        if drv_id:
+            allowed = set(await get_authorized_vehicle_ids_for_driver(db, drv_id))
+            tags = [t for t in tags
+                    if not t.get("vehicle_id") or t["vehicle_id"] in allowed]
     # Bulk-load vehicles to avoid N+1
     vids = list({t.get("vehicle_id") for t in tags if t.get("vehicle_id")})
     vehicles = {}
@@ -101,6 +128,11 @@ async def driver_claim(payload: ClaimIn, user=Depends(get_current_user)):
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    # Source d'autorité : périmètre véhicules du chauffeur (403 hors périmètre,
+    # même pour un véhicule du même tenant).
+    authorized = await get_authorized_vehicle_ids_for_driver(db, driver_id)
+    if payload.vehicle_id not in authorized:
+        raise HTTPException(403, "Véhicule non autorisé pour ce chauffeur")
     try:
         return await ble_engine.claim_driving(
             db, driver_id, payload.vehicle_id, actor=user.get("email", "?"),

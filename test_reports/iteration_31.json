@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend-only QA of the MOTORISATIONS RÉELLES lot (5/5 scenarios PASS). (1) Admin login OK → /livre/settings → 'Gérer les véhicules & affectations (18)' sheet opens with the 'Motorisation' column and 18 fuel-type selects. Values verified exactly as expected: LOGITRAK AUDI = 'Essence', 5-Alliance 01 = 'Essence', all 16 others = 'Inconnue' (KAIO Renault Zoe, Skoda Enyaq BE 579 928, KAIO Skoda Enyaq 07, KAIO Volvo EX30 08, 1-Enyaq 01 Bern all correctly 'Inconnue' — no name-guessed 'Électrique'). (2) Admin edit: AUDI changed to 'Diesel' → toast 'Motorisation mise à jour' shown, value persisted after full page reload (= Diesel), then RESTORED to 'Essence' and re-verified after reload (AUDI = Essence, Alliance = Essence — production values restored, no other vehicle touched). (3) RBAC manager (manager@logitrak.ch): sheet opens, fuel-type select is disabled (is_disabled()=True, visually greyed, click times out / no options open) while the 'Mode' select (settings-vehicle-mode-LOGITRAK-AUDI) stays enabled. (4) Rapprochement (/livre/energie/rapprochement, période Année en cours, table loaded ~1-2 min): LOGITRAK AUDI row = 'Thermique' + 28.0 L with badge 'Périmé' (Mesuré / Exploitable); 5-Alliance 01 = 'Thermique'; exactly 16 rows 'Motorisation inconnue'; zero occurrences of 'Électrique' and zero fabricated 0 L. (5) Non-régression Journal & trajets (/livre/history/pro): loads normally, 500 rows, 'Carb. (est.)' column present with 500 non-null L values (historique non recalculé). No console errors, no error elements.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Settings vehicles sheet", "issues": ["Minor test-flakiness observed: immediately after a fuel-type change the SelectTrigger element is detached/replaced for a few seconds by the full load() refetch (Playwright locator timed out for ~30s on the same data-testid before the row re-appeared). Functionally correct (value persisted) but a targeted state update instead of a full load() would avoid the row flicker."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SettingsPage.jsx changeVehicleFuelType calls the full load() after every change — consider optimistic/local state update to avoid re-fetching the whole settings payload and re-mounting the 18-row table.",
+    "Fuel-type select uses `disabled={user?.role !== 'admin'}` while the Mode select uses `canEdit` — two different gating mechanisms in the same table; centralise the RBAC predicate to avoid drift.",
+    "SettingsPage.jsx is 527 lines and mixes settings sections + vehicle sheet + BLE tag cell; consider extracting the vehicles sheet into its own component."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (per request)", "frontend": "100% (5/5 scenarios)"},
+  "seed_data_creation": "None. AUDI fuel_type temporarily set to diesel then restored to essence; Alliance untouched (essence); 16 others left null (Inconnue). No other setting modified.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@logitrak.ch / admin123 and manager@logitrak.ch / manager123 — both valid",
+  "context_for_next_testing_agent": "Reconciliation route is /livre/energie/rapprochement (NOT /livre/energy/reconciliation — that redirects to dashboard). Recon table loads in ~60-150s; use timeout>=180s on [data-testid=recon-table]. Fuel-type selects: settings-vehicle-fueltype-{plate with spaces→dashes}; mode select testid is settings-vehicle-mode-{plate}. Production fuel_type values confirmed restored: LOGITRAK AUDI=essence, 5-Alliance 01=essence, 16 others null.",
+  "rca_of_the_issue": "N/A — no defects found."
+}

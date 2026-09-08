@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import useBleScanner from "@/hooks/useBleScanner";
+import DriverVehiclePicker from "@/components/livre/DriverVehiclePicker";
 
 function Pulse({ active }) {
   return (
@@ -42,6 +43,7 @@ export default function DriverConsolePage() {
   const [sending, setSending] = useState(false);
   const [fleetTags, setFleetTags] = useState([]);
   const [testingTagId, setTestingTagId] = useState(null);
+  const [vehRefresh, setVehRefresh] = useState(0);
   const scanner = useBleScanner();
 
   async function loadSession() {
@@ -192,6 +194,13 @@ export default function DriverConsolePage() {
             </>
           )}
         </Card>
+
+        {/* Véhicules autorisés — source d'autorité : GET /livre/driver/vehicles */}
+        <DriverVehiclePicker
+          userKey={user?.id || user?.email}
+          refreshKey={vehRefresh}
+          onClaimed={loadSession}
+        />
 
         {/* Mode toggle */}
         <div className="grid grid-cols-2 gap-3">
@@ -366,7 +375,8 @@ export default function DriverConsolePage() {
 
         {/* Simulator removed — fleet tags list above provides a "Tester" button per tag. */}
 
-        <Button variant="ghost" size="sm" onClick={loadSession}
+        <Button variant="ghost" size="sm"
+          onClick={() => { loadSession(); loadFleetTags(); setVehRefresh((k) => k + 1); }}
           className="text-slate-400 hover:text-white hover:bg-slate-800 mt-2"
           data-testid="driver-refresh">
           <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rafraîchir

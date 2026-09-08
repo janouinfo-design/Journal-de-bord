@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend E2E testing of DriverVehicleAccessCard (Accès aux véhicules) on Jean Dupont driver sheet completed. All 8 scenarios PASS: (1) Section visible with 3 radio modes + default ALL checked + hint text OK. (2) SELECTED mode with search 'AUDI' filters correctly, LOGITRAK AUDI + ORHAN + IVAN + NEDIR selected → counter '4 véhicules sélectionnés'. (3) Default select shows only 4 selected + Aucun (5 options), selection saved with toast 'Les accès véhicules de ce chauffeur ont été mis à jour.'. (4) Persistence verified after reload: mode-selected checked, 4 checkboxes, default=LOGITRAK AUDI. (5) SINGLE mode reduces selection to 1, clicking a different vehicle replaces (never 2), single-hint shown, save toast OK. (6) Restoration to production state (ALL + default Aucun) saved and verified after reload. (7) RBAC manager: readonly notice 'Modification réservée aux administrateurs.' visible, save button hidden (count=0), radios have data-disabled attribute. (8) Security list contains exactly 18 vehicles all from LOGITRAK account (LOGITRAK/KAIO/GE-*/Enyaq/ORHAN/IVAN/NEDIR/Alliance/Iphone/Tab plates) — no cross-tenant leak.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "DriverSheet", "issues": ["Console warning: DialogContent requires a DialogTitle for accessibility (screen readers). SheetContent uses SheetHeader/SheetTitle but Radix still reports missing DialogTitle association — likely a minor a11y wrapper issue.", "Hydration warning: <div> cannot be descendant of <p> — Badge (div) rendered inside <p> in Méthodes d'identification section (DriverSheet.jsx lines 238-242 for Application mobile and Bluetooth). Pre-existing, unrelated to vehicle-access feature."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional a11y cleanup in DriverSheet: wrap SheetTitle with VisuallyHidden or explicitly bind DialogTitle to fix Radix warning.",
+    "Optional: fix nested <div> Badge inside <p> in Méthodes d'identification cards (change <p> to <div> or move Badges out) to remove hydration warning."
+  ],
+  "critical_code_review_comments": [
+    "DriverVehicleAccessCard is clean, self-contained (~215 lines), correctly gates edit vs read-only via useAuth role check, and correctly filters default_vehicle options to selected set. State transitions in changeMode() correctly reduce SINGLE to 1 and clear stale default. Save-time validation prevents empty SELECTED and non-single SINGLE. No _id leaks. Good use of data-testid throughout."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped as requested)", "frontend": "100% (8/8 scenarios)"},
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123",
+  "seed_data_creation": "None. Production state restored: Jean Dupont mode=ALL, default_vehicle=None.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Vehicle-access feature fully verified for admin (CRUD + persistence + mode transitions) and manager (readonly). Jean Dupont (chauffeur@logitrak.ch) restored to ALL/Aucun (production state). No sessions were created. Backend not retested (per instructions — 25/25 T1-T20 already passing per iteration_31). If regression is needed later, all 8 data-testids used: driver-sheet-vehicle-access, driver-access-mode-{all,selected,single}, driver-access-all-hint, driver-access-vehicle-search, driver-access-selected-count, driver-access-vehicle-{id}, driver-access-default-select, driver-access-single-hint, driver-access-save-btn, driver-access-readonly."
+}

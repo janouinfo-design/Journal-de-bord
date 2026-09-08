@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend-only QA of the BEV guard-rail lot (null != 0). Login admin OK. HistoryPage /livre/history/pro with période 26.08.2026 → 27.08.2026 shows the 2 QA trips: QA-ICE-888 = '8.50 L', QA-BEV-777 = '—' via data-testid trip-fuel-na-qa-gf-trip-bev (NO '0.00 L' anywhere in the row). TripEnergyBlock on QA-BEV-777 renders trip-energy-unavailable with badge 'Indisponible' + honest reason 'Véhicule non résolu par le module Énergie (tracker non prouvé)' — no 8.5 L leak, no fabricated 0 L / 0 kWh. Exports generated from the trips export buttons (GET /api/livre/reports/export): XLSX column 'Carburant estimé (L)' = empty cell (None) for QA-BEV-777 and 8.5 for QA-ICE-888; PDF row QA-BEV-777 = '—', QA-ICE-888 = '8.50', total '8.50 L (est.)' (the only '0.00' substring found is inside the ISO period timestamps, false positive). Énergie non-régression: Vue d'ensemble shows banner 'Module Énergie connecté (contrat v1)', 4 KPIs 'Non disponible' + 'Indisponible' badges (no zeros); Rapprochement (Année en cours 2026, table loaded in <120s) shows LOGITRAK AUDI = 28.0 L with badge 'Périmé' (Mesuré / Exploitable), all 18 fleet vehicles 'Motorisation inconnue' + 'Non disponible', QA-BEV-777 = Électrique and QA-ICE-888 = Thermique as expected. No '0.0 L' / '0.00' fabricated values in the recon table. No settings were modified, QA seed data left intact.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "HistoryPage filters (Du/Au)", "issues": ["Native browser date inputs (input type=date, mm/dd/yyyy) instead of the shadcn Calendar/Popover component — inconsistent with the rest of the UI and locale-confusing for CH users (dd.mm.yyyy). Pre-existing, low priority."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/check_exports_gf.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "HistoryPage.jsx: fuel cell correctly uses `t.fuel_l != null` (no falsy check) — invariant null != 0 respected; keep this pattern in any new fuel display.",
+    "HistoryPage.jsx is ~490 lines and mixes filters/export/energy fetch logic — consider extracting the export + energy-toggle logic into hooks before it grows further.",
+    "Energy row expansion uses colSpan={12} hardcoded while the column count varies with isMasked/canEdit — cosmetic risk if columns change."
+  ],
+  "updated_files": ["/app/tests/check_exports_gf.py"],
+  "success_rate": {"backend": "not tested (per request)", "frontend": "100% (5/5 scenarios)"},
+  "seed_data_creation": "None created. Used main-agent QA seed (qa-gf-bev / qa-gf-ice trips, 26.08.2026) — left untouched.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Guard-rail BEV validated end-to-end on frontend. HistoryPage route is /livre/history/pro (not /livre/journal). Trips export buttons live on HistoryPage (reports-btn-pdf / reports-btn-xlsx / reports-btn-csv); the Rapports nav tab only hosts the Swiss tax report (reports-btn-tax-pdf). Energy Rapprochement table loads in ~30-60s; use timeout>=120s on [data-testid=recon-table]. Exported artifacts saved under /app/.screenshots/export_qa.xlsx|pdf and can be re-inspected with /app/tests/check_exports_gf.py (needs pypdf, installed).",
+  "test_credentials": "admin@logitrak.ch / admin123 — valid, login OK",
+  "rca_of_the_issue": "N/A — no defects found in this lot."
+}

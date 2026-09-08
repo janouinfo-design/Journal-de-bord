@@ -32,7 +32,7 @@ from app.navixy_client import (
     is_configured as navixy_configured,
     read_track_points as navixy_read_track,
 )
-from app.navixy_sync import sync_navixy
+from app.navixy_sync import sync_navixy, LEGACY_FUEL_META
 from app.rules import apply_rules_to_all
 from app.scheduler import (
     get_state as get_sched_state,
@@ -196,6 +196,42 @@ class VehicleModeIn(BaseModel):
     mode: str  # always_pro | always_perso | mixte
 
 
+# Motorisation canonique contrôlée — vocabulaire réel du projet
+# (mapping POWERTRAIN_FROM_FUEL_TYPE : diesel/essence→ICE, hybrid→HEV,
+#  phev→PHEV, electric→BEV, absent→UNKNOWN). Pas de texte libre.
+VEHICLE_FUEL_TYPES = ("diesel", "essence", "hybrid", "phev", "electric")
+
+
+class VehicleFuelTypeIn(BaseModel):
+    fuel_type: Optional[str] = None  # None = Inconnue (UNKNOWN)
+    source: Optional[str] = None  # provenance factuelle (ex: navixy_garage)
+
+
+@router.put("/vehicles/{vehicle_id}/fuel-type")
+async def set_vehicle_fuel_type(
+    vehicle_id: str, payload: VehicleFuelTypeIn,
+    user=Depends(require_roles("admin")),
+):
+    """Motorisation prouvée uniquement — jamais déduite du nom/plaque/modèle.
+    Influence le garde-fou legacy 0,085 pour les NOUVELLES synchros seulement."""
+    if payload.fuel_type is not None and payload.fuel_type not in VEHICLE_FUEL_TYPES:
+        raise HTTPException(400, f"Motorisation invalide — valeurs autorisées : {', '.join(VEHICLE_FUEL_TYPES)} ou null (Inconnue)")
+    db = get_db()
+    veh = await db.vehicles.find_one(
+        {"id": vehicle_id}, {"_id": 0, "id": 1, "plate": 1, "fuel_type": 1})
+    if not veh:
+        raise HTTPException(404, "Véhicule introuvable")
+    await db.vehicles.update_one({"id": vehicle_id},
+                                 {"$set": {"fuel_type": payload.fuel_type}})
+    from app.audit import log_audit
+    await log_audit("vehicle.fuel_type_updated", user, {
+        "vehicle_id": vehicle_id, "plate": veh.get("plate"),
+        "before": veh.get("fuel_type"), "after": payload.fuel_type,
+        "source": payload.source or "manual_admin"})
+    return {"updated": True, "vehicle_id": vehicle_id,
+            "fuel_type": payload.fuel_type}
+
+
 @router.put("/vehicles/{vehicle_id}/mode")
 async def set_vehicle_mode(
     vehicle_id: str, payload: VehicleModeIn,
@@ -257,7 +293,8 @@ async def list_trips(
     )
     trips = await db.trips.find(q, {"_id": 0}).sort("start_time", -1).to_list(limit)
     trips = [apply_privacy(t, settings, user["role"]) for t in trips]
-    return {"trips": trips, "settings_mode": settings.get("mode")}
+    return {"trips": trips, "settings_mode": settings.get("mode"),
+            "fuel_l_meta": LEGACY_FUEL_META}
 
 
 class ClassifyIn(BaseModel):

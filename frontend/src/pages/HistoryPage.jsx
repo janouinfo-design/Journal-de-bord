@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, fmtKm, fmtDateTime, fmtDuration, downloadBlob } from "@/lib/api";
 import { TEST_IDS } from "@/constants/testIds";
@@ -12,8 +12,9 @@ import { ClassificationBadge } from "@/components/livre/Badges";
 import { toast } from "sonner";
 import {
   Loader2, ArrowLeftRight, Briefcase, User, EyeOff, Gauge,
-  MapPin, Fuel, Clock, Calendar, FileText, FileSpreadsheet, FileDown,
+  MapPin, Fuel, Clock, Calendar, FileText, FileSpreadsheet, FileDown, Zap,
 } from "lucide-react";
+import { TripEnergyBlock } from "@/components/energy/TripEnergyBlock";
 import { useAuth } from "@/contexts/AuthContext";
 import SubTabs from "@/components/layout/SubTabs";
 
@@ -180,6 +181,21 @@ export default function HistoryPage({ kind }) {
     const min = trips.reduce((s, t) => s + (t.duration_min || 0), 0);
     return { count: trips.length, km, min };
   }, [trips]);
+
+  // Résumé énergie par trajet — fourni par le module Énergie (jamais calculé ici)
+  const [energyById, setEnergyById] = useState({});
+  const [energyOpen, setEnergyOpen] = useState({});
+  async function toggleEnergy(t) {
+    setEnergyOpen(o => ({ ...o, [t.id]: !o[t.id] }));
+    if (energyById[t.id]) return;
+    try {
+      const { data } = await api.post("/livre/energy/trips", { trip_ids: [t.id] });
+      setEnergyById(m => ({ ...m, [t.id]: data.results?.[0]
+        || { availability: "UNAVAILABLE", reason: "no_data" } }));
+    } catch {
+      setEnergyById(m => ({ ...m, [t.id]: { availability: "UNAVAILABLE", reason: "energy_unreachable" } }));
+    }
+  }
 
   return (
     <div data-testid={TEST_IDS.history.page} className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -367,15 +383,17 @@ export default function HistoryPage({ kind }) {
                   {!isMasked && <th className="text-left py-3 px-4">Départ → Arrivée</th>}
                   <th className="text-right py-3 px-4">Distance</th>
                   <th className="text-right py-3 px-4">Durée</th>
-                  {!isMasked && <th className="text-right py-3 px-4">Carb.</th>}
+                  {!isMasked && <th className="text-right py-3 px-4" title="Estimation locale (8,5 L/100 km) — ne provient pas du module Énergie">Carb. (est.)</th>}
                   {!isMasked && <th className="text-right py-3 px-4">Vit. max</th>}
+                  {!isMasked && <th className="text-center py-3 px-4">Énergie</th>}
                   <th className="text-center py-3 px-4">Type</th>
                   {canEdit && <th className="text-right py-3 px-5">Affectation</th>}
                 </tr>
               </thead>
               <tbody>
                 {trips.map((t) => (
-                  <tr key={t.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                  <Fragment key={t.id}>
+                  <tr className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-5">
                       <div className="text-slate-800 text-sm flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
@@ -403,12 +421,27 @@ export default function HistoryPage({ kind }) {
                     </td>
                     {!isMasked && (
                       <td className="py-3 px-4 text-right text-slate-600 whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1"><Fuel className="w-3 h-3 text-amber-500" />{(t.fuel_l ?? 0).toFixed(2)} L</span>
+                        {t.fuel_l != null ? (
+                          <span title="Estimation locale (8,5 L/100 km) — ne provient pas du module Énergie" className="inline-flex items-center gap-1"><Fuel className="w-3 h-3 text-amber-500" />{t.fuel_l.toFixed(2)} L</span>
+                        ) : (
+                          <span data-testid={`trip-fuel-na-${t.id}`} title="Aucune estimation carburant — motorisation non thermique ou donnée absente" className="text-slate-400">—</span>
+                        )}
                       </td>
                     )}
                     {!isMasked && (
                       <td className="py-3 px-4 text-right text-slate-600 whitespace-nowrap">
                         <span className="inline-flex items-center gap-1"><Gauge className="w-3 h-3 text-slate-400" />{(t.max_speed ?? 0).toFixed(0)} km/h</span>
+                      </td>
+                    )}
+                    {!isMasked && (
+                      <td className="py-3 px-4 text-center">
+                        <Button size="sm" variant="ghost"
+                          className={`h-7 ${energyOpen[t.id] ? "text-[#2196F3]" : "text-slate-400"}`}
+                          onClick={() => toggleEnergy(t)}
+                          data-testid={`trip-energy-btn-${t.id}`}
+                          title="Résumé énergie (module Énergie)">
+                          <Zap className="w-3.5 h-3.5" />
+                        </Button>
                       </td>
                     )}
                     <td className="py-3 px-4 text-center"><ClassificationBadge value={t.classification} /></td>
@@ -436,6 +469,14 @@ export default function HistoryPage({ kind }) {
                       </td>
                     )}
                   </tr>
+                  {!isMasked && energyOpen[t.id] && (
+                    <tr className="border-t border-slate-100 bg-slate-50/40">
+                      <td colSpan={12} className="px-5 py-2.5">
+                        <TripEnergyBlock data={energyById[t.id]} loading={!energyById[t.id]} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

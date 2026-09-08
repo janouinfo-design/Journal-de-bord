@@ -20,6 +20,58 @@ affectation manuelle, droits par rôle.
   `app_state` (scheduler), `assignments` (driver↔vehicle assignments).
 
 ## Implemented — 16/06/2026
+### Iteration 44 — PARAMÈTRES SEUIL RAPPROCHEMENT + EXPORT EXCEL (25/08/2026)
+- **Seuils** : GET/PUT /api/livre/energy/reconciliation/settings — stockés dans le doc settings existant (reconciliation_threshold_percent / _liters), isolés par tenant (proxy Mongo), AUCUNE valeur par défaut métier (null = mode diagnostic), validation 0<%≤100 et L>0 sinon 400, RBAC admin+manager (convention PUT /livre/settings), chauffeur 403, audit log_audit `energy.reconciliation_settings.update` (tenant/old/new/user/ts) réutilisé.
+- **Statuts** : `_reconciliation_status(..., threshold_pct, threshold_l)` — À contrôler UNIQUEMENT si MEASURED exploitable + achat réel + écart calculable + mappé + dépassement (|%|>seuil OU |L|>seuil, valeur absolue) ; ESTIMATED/REFERENCE/STALE/NONE/non mappé jamais À contrôler (testé seuils extrêmes 1%/1L). Frontend ne recalcule rien.
+- **Export Excel** : GET /reconciliation/export.xlsx (admin/manager/lecture_seule) — source unique `_build_reconciliation` partagée avec le preview (refactor), filtres backend `_apply_recon_filters` (vehicle_id/group/powertrain/measurement/reliability/status) + période ; `reconciliation_to_xlsx` (app/reports.py, openpyxl existant) : entête méta (tenant name via get_raw_db().tenants, période, généré le, filtres, seuils, « Alertes automatiques : désactivées », note fixture/non connecté), 20 colonnes dont électrique séparée (kWh/type/source — PHEV jamais fusionné), null→cellule vide jamais 0, libellés FR (Mesuré/Estimé/Référence/Aucun, statuts, fiabilité, motorisation), nom fichier rapprochement_carburant_{from}_{to}.xlsx, export audité.
+- **Frontend** : ReconciliationSettingsCard.jsx (Paramètres, après NotificationsPreferencesCard — champs % et L, refetch post-save, toast robuste, testids settings-recon-*) ; EnergyReconciliationPage : ligne recon-threshold-info (« Seuil configuré : X % · Y L — alertes désactivées » ou « Aucun seuil configuré — mode diagnostic »), bouton recon-export-btn (blob + garde content-type + download nommé), intro mobile corrigée.
+- **Tests** : test_energy_settings_export.py (22 : config/validation/RBAC manager OK-chauffeur 403/audit/isolation tenant 12.5≠33/statuts liters+valeur absolue+jamais À contrôler hors MEASURED/export ouvrable openpyxl 18 lignes/null≠0/6 non mappés exportés/libellés FR/filtres/IDOR vehicle_id cross-tenant/export audité, seuils = valeurs FIXTURE/TEST, cleanup auto) → suites énergie 50/50 PASS ; **RÉGRESSION COMPLÈTE 524 PASS/1 skip** ; frontend testing_agent iteration_27.json **9/9 PASS** (persistance, validation 150 rejetée, download réel xlsx 7521o, export filtré, RBAC UI, responsive 390px, NETTOYAGE seuils confirmé). Post-review : refetch, toast fallback, content-type guard, intro mobile.
+- **CONCLUSION** : PARAMÉTRAGE SEUIL PASS · EXPORT PASS · ALERTES DÉSACTIVÉES · ENERGY RÉEL NON TESTÉ · MAPPING 12/18 FIABLE · RÉGRESSION 524/0/1 · PRÊT REAL ENERGY OUI. État final : seuils null, mode non connecté, aucune variable ENERGY_* en .env.
+
+### Iteration 43 — ÉCRAN RAPPROCHEMENT ACHATS ↔ CONSOMMATION (25/08/2026)
+- **Onglet Rapprochement** dans Énergie & carburant (ordre : Vue d'ensemble, Consommations, Approvisionnements, Rapprochement, Anomalies). Route /livre/energie/rapprochement (admin/manager/lecture_seule), page EnergyReconciliationPage.jsx.
+- **Backend** : reconciliation/preview étendu (pas de nouveau modèle) — roles + lecture_seule, param vehicle_id, statuts métier centralisés `_reconciliation_status()` (OK/A_CONTROLER/INDICATIF/IMPOSSIBLE + raison FR : non mappé→tracker absent, conso absente, aucun achat, ESTIMATED/REFERENCE→INDICATIF jamais anomalie, STALE mesuré→INDICATIF périmé, MEASURED→OK ou A_CONTROLER selon seuil), `_powertrain()` depuis vehicles.fuel_type uniquement (0/18 → UNKNOWN, jamais déduit du modèle), achats avec breakdown sources (csv/manual), consumed_electric séparé (PHEV jamais fusionné), gap seulement si tx_count>0 ET conso présente (IMPOSSIBLE ≠ écart zéro), seuil `settings.reconciliation_gap_alert_pct` structure configurable NON configurée (alerting: disabled).
+- **Frontend** : bannières non connecté/fixture, 4 KPI (analysables/à contrôler/indicatifs/impossibles), 7 filtres + presets période (Ce mois/Mois préc./30j/Année/Personnalisé, 1 seul appel par période, autres filtres client) + bouton reset, tableau responsive (hidden md/lg, plaque = libellé principal), badge Non mappé (6 véhicules visibles), drawer Sheet détail (statut+raison, véhicule/achats/conso/rapprochement, PHEV électricité séparée), FilterSelect extrait hors composant. Testids recon-*.
+- **Tests** : test_energy_reconciliation.py (10 branches statuts unitaires avec seuils marqués FIXTURE/TEST, E2E non connecté 18 lignes/6 non mappés/gap null, filtre véhicule, période vide, RBAC driver 403/manager 200/anonyme, isolation tenant + vehicle_id manipulé sans fuite) → 45/45 PASS suites énergie ; **RÉGRESSION COMPLÈTE 496 PASS/1 skip** ; frontend testing_agent iteration_26.json **9/9 PASS** (fixture 0/0/1/17, drawer, filtres, responsive 390px, RBAC UI, non-régression onglets/Journal/Dashboard) ; screenshot final défaut non connecté (18 IMPOSSIBLE) OK.
+- **CONCLUSION** : ÉCRAN RAPPROCHEMENT PASS · ALERTES DÉSACTIVÉES · ENERGY RÉEL NON TESTÉ (URL manquante) · MAPPING 12/18 FIABLE · PRÊT POUR CAMPAGNE REAL ENERGY : OUI.
+- Risques constatés : 6 véhicules sans tracker ; filtre Groupe dérivé de la plaque (convention /groups, libellé « Groupe (plaque) ») ; bruit console 401 post-login pré-existant ; pas de compte lecture_seule testable UI. État env : aucune variable ENERGY_* → défaut non connecté.
+
+### Iteration 42 — PRÉPARATION REAL ENERGY + SÉCURISATION FISCALE (19/08/2026)
+- **Client Energy durci** (energy_client.py) : bascule réel par config seule (ENERGY_API_BASE_URL + ENERGY_API_TOKEN optionnel), timeout 10 s, tenant_id transmis (payload + header X-Tenant-Id), vin/navixy_tracker_id/plate par trajet. Robustesse réel : HTTP 5xx/réseau → energy_unreachable ; payload hors contrat → energy_invalid_response ; réponse partielle → missing_in_energy_response ; enveloppes malformées assainies (_sanitize_envelope). Jamais de 0 inventé.
+- **Priorité centralisée** : CONSUMPTION_PRIORITY + best_metric() = MEASURED > ESTIMATED > REFERENCE, sinon None (NONE ≠ 0) ; STALE utilisable mais marqué.
+- **Fiscalité étiquetée ESTIMATED partout (valeurs conservées)** : LEGACY_FUEL_META (navixy_sync.py) exposé par /livre/dashboard (fuel_meta) et /livre/trips (fuel_l_meta) ; PDF fiscal suisse « Carburant pro/perso (L) — Estimé* » + note FUEL_ESTIMATED_NOTE (app/reports.py) ; exports CSV/XLSX « Carburant estimé (L) » ; PDF trajets « Carb. est. L » + total « (est.) ».
+- **Rapprochement préparatoire** GET /api/livre/energy/reconciliation/preview (admin/manager, alerting:disabled) : achats (fuel_transactions par véhicule/période) vs consommé (energy_client.vehicle_energy_summary) vs gap_l/gap_pct ; fiabilité MEASURED→EXPLOITABLE, ESTIMATED/REFERENCE→INDICATIF, NONE→IMPOSSIBLE. Aucune alerte réelle.
+- **Fixtures étendues à 10 scénarios** (% 10) : +HEV mesuré (deux énergies séparées), +powertrain UNKNOWN (rien d'inventé). vehicle_energy_summary fixture 3 variantes.
+- **Frontend** : REASON_LABEL += energy_invalid_response, missing_in_energy_response (TripEnergyBlock). Aucun autre changement UI (pas de refonte nav — interdit).
+- **Tests** : test_energy_real_prep.py (pannes simulées par doubles techniques locaux, priorité, fiscalité e2e, reconciliation e2e, fixtures étendues) + test_energy_contract.py mis à jour (10 scénarios) + test_iteration25_energy_fixture.py auto-skip si mode ≠ fixture → 32 PASS/1 skip ; **RÉGRESSION COMPLÈTE backend 474 PASS / 1 skip**.
+- **Mapping véhicule Journal↔Energy (prouvé DB)** : tenant_id UNKNOWN côté Energy ; vehicle_id UUID 18/18 UNKNOWN côté Energy ; navixy_tracker_id 12/18 PARTIAL (meilleur candidat clé) ; VIN 0/18 MISMATCH ; powertrain 0/18 UNKNOWN ; plaque jamais utilisée comme clé.
+- **CONCLUSION** : CONTRACT ENERGY PASS ; ENERGY RÉEL NON TESTÉ — URL MANQUANTE ; FISCALITÉ SAFE (étiquetée) ; RAPPROCHEMENT PRÊT (préparatoire). Bloquants REAL ENERGY : URL+token, validation contrat par projet Energy, clé véhicule commune (6 véhicules sans tracker), convention trip_ref, auth inter-services.
+- État env : aucune variable ENERGY_* dans backend/.env → défaut non connecté (honnête).
+
+### Iteration 41 — INTÉGRATION ÉNERGIE (consommateur) + NAVIGATION MÉTIER (19/08/2026)
+- **Navigation** : Vue d'ensemble / Journal & trajets / Conducteurs / Énergie & carburant / Amendes / Rapports / Administration (admin seul) / Paramètres. Console PWA retirée du menu sauf rôle driver. AppLayout TABS réécrits (nav-drivers, nav-energy).
+- **Domaine Conducteurs** (`/livre/conducteurs`, admin+manager) : DriversLayout + Vue d'ensemble (DriversOverviewPage, KPI team+ble/dashboard), Chauffeurs (TeamDriversPage déplacée), Identification (IdentificationPage), Sessions (IdentificationPage view="sessions" — KPI masqués, zéro duplication), Éco-conduite (placeholder honnête, dépendance Energy).
+- **Domaine Énergie & carburant** (`/livre/energie`) : EnergyLayout + Vue d'ensemble (EnergyOverviewPage : bannière connexion, KPI conso module Énergie ou « Non disponible », flotte honnête 0/18 motorisation, approvisionnements séparés via /livre/fuel/widget), Consommations (EnergyConsumptionPage : 30 trajets récents + TripEnergyBlock batch), Approvisionnements (= FuelLayout intégral : apercu/transactions/cartes/rapprochements/decomptes/importations/parametres/mes-transactions), Anomalies (remontée au niveau domaine).
+- **Redirections legacy** (query préservée) : /livre/carburant/* → /livre/energie/approvisionnements/* (LegacyFuelRedirect dans App.js, anomalies → /livre/energie/anomalies), /livre/identification → /livre/conducteurs/identification, /livre/administration/chauffeurs → /livre/conducteurs/chauffeurs. Liens internes mis à jour (FuelWidget, FuelStatements*, FuelOverviewPage).
+- **Client Energy** `backend/app/energy_client.py` : contrat v1, modes not_connected (défaut, ENERGY_API_BASE_URL absente) / real (HTTP batch POST /api/energy/v1/trips/energy:batch, GET health, GET fleet/summary) / fixture (ENERGY_API_MODE=fixture, 8 scénarios déterministes sha256%8, marqués mode='fixture'). Inconnu = null JAMAIS 0. Zéro calcul dans Journal.
+- **Routes** `backend/app/routes/energy.py` : GET /api/livre/energy/status, POST /api/livre/energy/trips (RBAC driver=ses trajets via filter_trips_query, trip_not_found pour le reste), GET /api/livre/energy/overview (admin/manager/lecture_seule ; driver 403). Tenant scoping via db proxy (vérifié : TenantCollection scope tout).
+- **UI Énergie** : components/energy/EnergyBadge.jsx (Mesuré/Estimé/Référence/Périmé/Indisponible) + TripEnergyBlock.jsx (électrique: SoC dép/arr masqués si absents, kWh, kWh/100 ; carburant: L, L/100 ; PHEV blocs séparés ; raisons: non connecté/injoignable/no_data/trip_not_found ; flag fixture partout y compris UNAVAILABLE). HistoryPage : bouton ⚡ par trajet (trip-energy-btn-{id}) + ligne dépliable ; colonne « Carb. (est.) » + tooltip estimation locale. DashboardPage : sous-titres KPI carburant « Estimation locale — en attente du module Énergie » + clé composite table (fix warning React).
+- **Tests** : backend/tests/test_energy_contract.py 9/9 PASS (modes not_connected ET fixture) + testing_agent iteration_25.json : 25 PASS/3 SKIP 0 échec (contrat 8 scénarios, RBAC, isolation tenant B, nav 3 rôles, 5/5 redirections, non-régression Carburant/exports/dashboard, responsive 390px). Fix post-test : hydration <p>→<div> TripEnergyBlock, flag fixture sur bloc UNAVAILABLE, limit=30 côté API.
+- **État final** : ENERGY_API_MODE retiré du .env → défaut non connecté (bannière ambre, « Non disponible » partout). TEST CONTRACTUEL RÉALISÉ ; TEST ENERGY RÉEL NON RÉALISÉ (en attente ENERGY_API_BASE_URL du projet Énergie).
+- **Reste/décisions** : legacy fuel_l (navixy_sync 0,085 L/km) conservé mais étiqueté estimé (suppression après branchement Energy réel) ; litres estimés du PDF fiscal suisse non modifiés (décision utilisateur en attente) ; Jean Dupont sans trajets (scénario driver-énergie skippé) ; pas de VIN en base ; date pickers natifs (design, pré-existant).
+
+### Iteration 40 — AUDIT ÉNERGIE rôle consommateur (juin 2026) — LECTURE SEULE, AUCUN CODE MODIFIÉ
+- **Décision utilisateur** : Journal = consommateur uniquement du futur projet Energy (option c). Aucun moteur de calcul énergie dans ce repo. Energy calcule → Journal consomme → App mobile affiche. Donnée absente d'Energy → « Non disponible » ou champ masqué. Zéro recalcul, zéro fallback inventé.
+- **Preuves DB (lecture seule)** : 18 véhicules — fuel_type 0/18 (champ lu par fuel_engine.py L221 et /fuel/refs mais JAMAIS écrit nulle part), tank_capacity_l 1/18, battery_capacity_kwh 0/18 ; 5297 trips dont 5296 avec fuel_l ; 28 fuel_transactions toutes unit=L, 0 kWh.
+- **Constat critique 1** : trips.fuel_l = formule locale fixe 0,085 L/km (navixy_sync.py L39+L267), ESTIMATED non marqué, affiché dans HistoryPage L406, KPI Dashboard (dashboard.py L51-52, DashboardPage L172-175), exports PDF/Excel/CSV (app/reports.py) et rapport fiscal suisse PDF (reports.py L256-257). Seed mock : mock_navixy.py L92 (0,07–0,11 L/km aléatoire). À remplacer par le contrat Energy.
+- **Constat critique 2** : deux domaines distincts — trips.fuel_l (estimation locale, à remplacer par Energy) vs fuel_transactions (achats cartes carburant à la pompe, MEASURED transactionnel, indépendant d'Energy, reste dans Journal).
+- **navixy_client.py** : uniquement tracker/employee/zone/track list + commands — AUCUN endpoint capteur/OBD/CAN. SoC, kWh télémétrique, niveau carburant : UNAVAILABLE partout.
+- **Cartographie écrans consommateurs Energy** : HistoryPage (énergie trajet + badge Mesuré/Estimé), futur bloc Énergie détail trajet (EV : SoC dép/arr, ΔSoC, kWh, kWh/100km ; thermique : L, L/100km ; PHEV : électrique ET fuel séparés), Dashboard KPI + tableau chauffeur, rapport fiscal suisse (omettre lignes carburant si non fourni), exports Livre (colonnes qualifiées), module Carburant transactionnel = hors périmètre Energy, FuelSettingsPage (capacités = REFERENCE), app Expo via Journal uniquement.
+- **Contrat Energy → Journal v1 PROPOSÉ (n'existe pas)** : GET /api/energy/v1/vehicles/{ref}/capabilities (powertrain ICE/HEV/PHEV/BEV/UNKNOWN + capabilities booléennes jamais déduites du powertrain), GET .../summary?from=&to=, GET /api/energy/v1/trips/{trip_ref}/energy, POST .../trips/energy:batch, GET .../health + contract_version. Schéma métrique : {value(null=inconnu, 0=vrai zéro), unit, availability AVAILABLE/STALE/UNAVAILABLE, measurement_type MEASURED/ESTIMATED/REFERENCE, source OBD/CAN/NAVIXY_SENSOR/FUEL_TRANSACTION/VEHICLE_SPEC/ENERGY_MODEL, timestamp}. PHEV : blocs electric/fuel séparés, jamais fusionnés.
+- **Composants à modifier (futur, après validation contrat par projet Energy)** : backend energy_client.py proxy sans calcul, dashboard.py, reports.py, navixy_sync.py (cesser fuel_l estimé ou marquer legacy) ; frontend HistoryPage, DashboardPage, TaxSwissPage, ReportsPage, nouveau bloc Énergie détail trajet, FuelSettingsPage.
+- **Blocages inter-projets** : identifiant véhicule commun (plaque/navixy_tracker_id/VIN ?), provenance du powertrain (fuel_type jamais renseigné), litres estimés dans PDF fiscal officiel (retirer/marquer/attendre ?), trip_ref=navixy_track_id à confirmer, auth inter-services.
+- STATUT : audit RÉALISÉ ; implémentation Journal NON COMMENCÉE (volontaire) ; contrat côté Energy NON RÉALISÉ (projet séparé).
+
 ### Iteration 39 — CLÔTURE PHASE 3 (18/08/2026) — SUITE COMPLÈTE 442/442 PASS (première fois que tests/ entier est vert)
 - **BLE chauffeur** : normalisation MAC/UUID confirmée (strip séparateurs+upper, toutes casses), unicité tag 409 re-testée, script ble_proof.py enrichi (étapes traceur→beacon→identifiant→recherche chauffeur→verdict ; « CHAUFFEUR RECONNU » détaillé : chauffeur/tag/canon/véhicule/tracker/timestamp/rssi/source BLE). STATUT : PARTIEL — attente test physique utilisateur (aucun drivers.ble_id assigné).
 - **Purge 6 traceurs obsolètes (ids 5000-5005 = seed mock, jamais existés côté Navixy)** : classification MAPPING_OBSOLÈTE, dissociation RÉVERSIBLE (navixy_tracker_id→None + navixy_tracker_id_archived + navixy_tracker_status='mapping_obsolete_mock' + audit vehicle.tracker_unlinked par véhicule). 619 trajets + sessions CONSERVÉS. Vérifié réel : 12/12 traceurs valides, batch beacon/data/read sans code 217 (55 records reçus), fallback testé avec mock (batch 217 + traceur supprimé → tracker/list → per-tracker : 5/5 PASS /tmp/test_beacon_fallback.py).
@@ -734,3 +786,117 @@ affectation manuelle, droits par rôle.
 - VPS : docker compose -p journal_logitrak exec journal_backend python seed_fuel_demo.py [--clean]
 - AVERTISSEMENT donnees completes : POST /api/livre/bootstrap sans force ne fait rien si des trajets existent ; avec force=true il EFFACE drivers/vehicles/trips/geofences (interdit en prod avec donnees Navixy reelles)
 - Backlog conserve par decision utilisateur (NE PAS developper sans demande explicite) : rappel de cloture, tendance carburant 6 mois, taux fournisseur/correction manuelle FX, connecteurs fournisseurs Phase 3, e-mail anomalies reste optionnel/off
+
+
+---
+
+## Phase : Préparation alertes « À contrôler » + Export PDF rapprochement (25/08/2026)
+
+### Livré
+- **Verrou alertes par tenant** : `real_energy_validated=false` dans le document `settings` (tenant-isolé). AUCUN endpoint ne permet de le passer à true (ni `PUT /livre/settings` strictement typé, ni le PUT alertes — champ hors modèle Pydantic ignoré). Seule une future campagne REAL ENERGY validée pourra le faire.
+- `GET/PUT /api/livre/energy/reconciliation/alerts/config` : `enabled=true` → **409** tant que non validé ; destinataires futurs stockés (validés, max 20, normalisés, AUCUN envoi) ; audit `energy.reconciliation_alerts.config_update` (dispatch=disabled).
+- **Candidats d'alerte** : `POST /alerts/candidates/generate` + `GET /alerts/candidates`. Builder pur `_alert_candidates` : UNIQUEMENT statut A_CONTROLER + MEASURED + mappé (ESTIMATED/REFERENCE/STALE/NONE/non mappé jamais candidats). Anti-doublonnage par index unique Mongo `(tenant_id, dedup_key)` avec `dedup_key=recon-alert:{vehicle_id}:{from}:{to}`. Docs `preview_only=true, dispatched=false, dispatch=disabled`. JAMAIS transmis à notifications_service/SMTP (vérifié par test sur notifications_log).
+- **Export PDF** : `GET /api/livre/energy/reconciliation/export.pdf` — même source `_build_reconciliation` que l'écran/Excel via helper commun `_export_dataset`, mêmes 7 filtres, RBAC (admin/manager/lecture_seule, driver 403), isolation tenant, audit `energy.reconciliation.export` avec `format=pdf` (xlsx désormais audité avec `format=xlsx`). ReportLab existant (`reconciliation_to_pdf` dans reports.py), paysage A4 paginé (repeatRows), null → « — » jamais 0, L/kWh séparés (PHEV), lignes A_CONTROLER surlignées, mentions « Alertes automatiques : désactivées » + « Module Énergie non connecté ». Pas de caractères hors cp1252 (↔/→ interdits dans ce PDF).
+- **Frontend** : bouton « Exporter PDF » (recon-export-pdf-btn) à côté d'Excel ; panneau AlertsPreparationPanel dans l'écran Rapprochement (bannière « APERÇU — AUCUN MESSAGE ENVOYÉ », génération admin/manager, lien Paramètres) ; carte ReconciliationAlertsCard dans Paramètres (interrupteur désactivé + badge verrou, destinataires futurs, compteur candidats).
+
+### Tests (25/08/2026)
+- `tests/test_energy_alerts_pdf.py` : **43/43 PASS** (verrou 409, real_energy_validated inaccessible en écriture, RBAC, isolation tenant config+candidats, index unique dédup, zéro dispatch notifications, PDF lu via PyMuPDF : 18 véhicules dont non mappés, filtres, null→—, PHEV L/kWh séparés, pagination multi-pages avec entête répétée, audit).
+- Régression backend complète : **567 PASS / 0 FAIL / 1 SKIP** (5 tests BLE flaky au 1er run, tous PASS isolément et au 2e run complet).
+- Testing agent frontend iteration_28 : **11/11 PASS**, nettoyage effectué (destinataires vides).
+- État final vérifié : Energy `not_connected`, seuils `null`, recipients `[]`, 0 candidat, verrou actif.
+- **ENERGY RÉEL : NON TESTÉ** (ENERGY_API_BASE_URL manquante). MAPPING : 12/18 fiable (6 véhicules sans tracker, non auto-associés).
+
+### Backlog (inchangé + suite)
+- P0 : campagne REAL ENERGY dès URL fournie (validation réelle → seul chemin futur pour real_energy_validated=true, à implémenter à ce moment-là).
+- P1 : activation effective des alertes post-validation (dispatch via notifications_service existant, destinataires déjà stockés).
+- P2 : compléter le mapping des 6 véhicules sans tracker (action utilisateur/Navixy) ; renseigner fuel_type/VIN.
+
+
+---
+
+## Campagne REAL ENERGY — tentative du 25/08/2026 : BLOQUÉE (aucune modification de code)
+
+- Demande utilisateur : campagne REAL ENERGY de bout en bout. Prérequis absolu : `ENERGY_API_BASE_URL` réelle.
+- Audit de configuration (lecture seule) : variables lues exclusivement via `os.environ` backend, aucune URL codée en dur dans `energy_client.py`, timeout httpx présent, aucune exposition URL/token frontend. CONFORME.
+- Utilisateur confirme : URL réelle NON disponible, authentification inconnue, routes contrat v1 non documentées. Instruction explicite : ne rien supposer, aucun mock pour valider REAL ENERGY, conclure BLOQUÉ.
+- Preuves d'état (lecture seule) : `GET /livre/energy/status` → connected=false, mode=not_connected, base_url_configured=false ; verrou alertes enabled=false / real_energy_validated=false / dispatch=disabled ; 18 véhicules, 12 mappés tracker, 0 VIN, 0 fuel_type, 0 candidat d'alerte ; aucune variable ENERGY_ en environnement.
+- **Conclusion : REAL ENERGY : BLOQUÉ — ENERGY_API_BASE_URL MANQUANTE. CONTRAT V1 RÉEL : NON TESTÉ. 0/12 véhicules testés. real_energy_validated=false conservé. Alertes désactivées. Mapping 12/18 inchangé.**
+- Relance de la campagne uniquement lorsque l'utilisateur fournira : URL réelle + mécanisme d'authentification vérifié + routes du contrat v1 vérifiées.
+
+
+---
+
+## Campagne REAL ENERGY — 2e tentative du 25/08/2026 : NON CONNECTÉ par décision utilisateur
+
+- Réponse du projet ÉNERGIE rapportée : backend preview joignable (`energy-telemetry-1.preview.emergentagent.com`), AUCUNE auth, routes socle seulement (`/api/energy/health|mapping|trackers/{id}/metrics|capabilities`), endpoints métier v1 A–E NON développés, contrat v1 PARTIEL, PRÊT À CONNECTER : NON (verdict Energy lui-même).
+- Vérifications Journal (lecture seule) : mapping tracker_id **12/12 MATCH exact** entre `vehicles.navixy_tracker_id` (Journal) et les 12 trackers reconnus côté Energy. Routes du client Journal (`/api/energy/v1/health`, `POST /v1/trips/energy:batch`, `/v1/fleet/summary`, `/v1/vehicles/{ref}/summary`) ≠ routes exposées par Energy → 404 garanti si branché tel quel.
+- Décision utilisateur (option d) : NE PAS connecter, NE PAS adapter le client Journal aux routes socle temporaires (contrat v1 reste la cible), EXIGER l'auth d'abord, URL preview reconnue mais NON autorisée comme ENERGY_API_BASE_URL. Prompt de spécification préparé pour le projet ÉNERGIE (archivé : /app/memory/energy_v1_spec_prompt.md) : 4 routes v1 exactes, enveloppe métrique, auth Bearer (`ENERGY_API_TOKEN` déjà supporté par le client Journal + `X-Tenant-Id`), résolution par navixy_tracker_id uniquement.
+- Aucune modification de code Journal. Verrou intact : real_energy_validated=false, alertes désactivées, 0 candidat. Régression 567 PASS / 0 FAIL / 1 SKIP toujours valide.
+- **Conclusion : ENERGY BACKEND RÉEL : NON CONNECTÉ · CONTRAT V1 RÉEL : NON TESTÉ (aucun appel réel émis par le Journal ; d'après ÉNERGIE, routes métier absentes) · 0/12 véhicules testés · MAPPING 12/18 fiable (tracker_id 12/12 corroborés sur pièces).**
+- Relance : lorsque ÉNERGIE aura livré les 4 routes v1 + auth Bearer et fourni l'URL + le token.
+
+## Campagne REAL ENERGY — 26/08/2026 : PROD energie.logitrak.ch — CHAÎNE END-TO-END PROUVÉE
+- Détail complet : /app/memory/CHANGELOG.md (entrée 26/08/2026).
+- ÉNERGIE déployé en production sur le VPS utilisateur (https://energie.logitrak.ch, TLS + Bearer).
+- Mapping tenant : settings.energy_tenant_id, fail-closed, tenant-isolé, audité, UI Paramètres.
+  default → paas_13588 (persisté via PUT admin audité). Client Test B : aucun mapping, fail-closed prouvé.
+- Correctifs client prouvés : batch wire ref/start/end ; vehicle summary {ref}=navixy_tracker_id.
+- Donnée réelle traversant toute la chaîne : AUDI 781479 = 28.0 L / STALE / MEASURED / NAVIXY_CAN
+  (Energy → backend → API → UI badge Périmé → XLSX « Mesuré (périmé) » → PDF).
+- Batch par trajet : UNAVAILABLE no_per_trip_energy (honnête — Energy ne fournit pas d'énergie par trajet).
+- Tests : ciblés 26/26 · RÉGRESSION 582 PASS / 0 FAIL / 3 SKIP · testing agent iteration_29 : 7/7 PASS.
+- real_energy_validated : FALSE (bloquants : pas d'énergie par trajet côté Energy ; legacy 0,085 latent BEV ;
+  flip réservé à une décision utilisateur explicite).
+- P1 externe : fallback tenant par défaut côté Energy (neutralisé par fail-closed Journal) ;
+  écarts contrat : health "v1" vs batch "1.0", summaries sans contract_version.
+
+## Garde-fou BEV — 26/08/2026 : legacy 0,085 L/km filtré par motorisation — LIVRÉ
+- Détail : /app/memory/CHANGELOG.md. Helper central `legacy_fuel_estimation_allowed` (navixy_sync.py),
+  mapping canonique unique réutilisé par routes/energy.py. ICE+UNKNOWN → legacy ; BEV/HEV/PHEV → fuel_l ABSENT.
+- UNKNOWN conserve le legacy = dette résiduelle documentée (0/18 fuel_type renseignés). Aucune migration Mongo.
+- Affichage : HistoryPage « — », exports cellule vide, PDF « — » — jamais 0 pour absence.
+- Tests : garde-fou 22/22 · régression 603 PASS / 0 FAIL réel / 3 SKIP · testing agent iteration_30 : 5/5 PASS.
+- P0 BEV : FERMÉ pour les nouvelles écritures (BEV explicite). real_energy_validated=false inchangé.
+- En attente GO utilisateur : cache rapprochement · durcissement multi-tenant Energy (côté ÉNERGIE) · déploiement Journal VPS.
+
+## Motorisations réelles — 26/08/2026 : LIVRÉ (2/18 prouvés, 16 UNKNOWN honnêtes)
+- Détail : CHANGELOG.md. Source prouvée : garage Navixy réel (champ structuré fuel_type, lien tracker_id).
+- LOGITRAK AUDI = essence · 5-Alliance 01 = essence · 16 UNKNOWN (déduction par nom INTERDITE et respectée).
+- Endpoint PUT /vehicles/{id}/fuel-type (admin, audité) + UI Paramètres colonne Motorisation (Select contrôlé).
+- Tests 17/17 · régression 621 PASS / 0 FAIL / 3 SKIP · testing agent iteration_31 : 5/5 PASS.
+- real_energy_validated=false inchangé. Historique 5 437 trips intact. Energy non modifié.
+- Liste À RENSEIGNER MANUELLEMENT (admin, via la nouvelle UI) : 1-Enyaq 01 Bern, KAIO Skoda Enyaq 07,
+  KAIO Volvo EX30 08, KAIO Renault Zoe, Skoda Enyaq BE 579 928, 2-ORHAN, 3-IVAN 03, 4-NEDIR 04,
+  Iphone Rabi, Tab Rabi Samsung, + 6 GE-* archivés (démo) — aucune source structurée disponible.
+- En attente GO : cache rapprochement · déploiement Journal VPS · durcissement multi-tenant Energy (côté ÉNERGIE).
+
+## Accès véhicules par chauffeur — 27/08/2026 : LIVRÉ (socle backend + admin UI)
+- ALL/SELECTED/SINGLE + default_vehicle_id sur drivers ; absent = ALL implicite (zéro migration,
+  aucun chauffeur ne perd de véhicule). Résolveur central app/vehicle_access.py = source d'autorité.
+- GET /driver/vehicles ; claim/fleet-tags/historique 403-filtrés hors périmètre ; cross-tenant impossible.
+- UI fiche chauffeur (DriverSheet) : section Accès aux véhicules complète, admin only, auditée.
+- Tests 25/25 · régression 646 PASS / 0 FAIL / 3 SKIP · testing agent iteration_32 : 8/8 PASS.
+- PHASE SUIVANTE (attente GO) : DriverConsolePage consomme /driver/vehicles (auto-select SINGLE/default).
+- Toujours en attente GO : cache rapprochement · déploiement Journal VPS.
+
+## Console Chauffeur — accès véhicules — 08/09/2026 : LIVRÉ (frontend)
+- DriverVehiclePicker (components/livre/) dans DriverConsolePage : source d'autorité unique
+  GET /api/livre/driver/vehicles ; aucune liste globale, aucun fallback (fail-closed sur erreur API).
+- Sélection : active valide > localStorage validé/purgé > default backend > unique > aucune
+  (lib/driverVehicleSelection.js, testé jest T1–T10). SINGLE verrouillé « ATTRIBUÉ ».
+- Révocation en session via driver-refresh : désélection + notice + purge localStorage.
+- Claim « Je conduis ce véhicule » → POST /driver/claim (403 hors périmètre conservé, conflit géré).
+- Backend inchangé. Tests : jest 11/11 · testing agent iteration_33 7/7 PASS · régression 646/0/3 SKIP.
+- En attente GO : cache rapprochement · déploiement Journal VPS · badge global accès restreint.
+
+## Cache rapprochement Energy — 08/09/2026 : LIVRÉ
+- app/energy_cache.py : cache mémoire éphémère TTL 60 s (erreur : 30 s, jamais TTL normal),
+  clé tenant Journal + tenant Energy + véhicule|ref + période + type. Non persistant, zéro Mongo.
+- Réponses Energy brutes cachées ; rapprochement recalculé localement. null≠0, STALE/MEASURED/
+  source/timestamp strictement conservés (rows MISS == rows HIT prouvé). Fail-closed inchangé.
+- preview/XLSX/PDF = pipeline unique partageant le cache ; refresh=true + bouton « Actualiser » = bypass réel.
+- Perf : MISS 7,9 s → HIT 0,16 s ; XLSX 0,15 s ; PDF 0,18 s. Tests 24/24 · agent iteration_34 PASS ·
+  régression 670 PASS / 0 FAIL / 3 SKIP. real_energy_validated=false.
+- Pré-déploiement vérifié (08/09) : 1 worker uvicorn/1 replica = cache OK prod ; BLOQUANT env :
+  ENERGY_API_BASE_URL/TOKEN à ajouter au compose + .env VPS avant déploiement (patch proposé, non appliqué).
+- En attente GO : déploiement Journal VPS (via Save to GitHub + deploy.sh) · badge global accès restreint.

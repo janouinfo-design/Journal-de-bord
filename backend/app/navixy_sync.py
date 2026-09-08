@@ -35,8 +35,45 @@ PRO_KEYWORDS = ("dépôt", "depot", "entrepôt", "entrepot", "chantier",
                 "atelier", "garage", "client", "bureau", "depôt", "site")
 PERSO_KEYWORDS = ("domicile", "home", "maison", "perso", "privé", "prive")
 
-# Heuristic fuel estimate: 8.5 L / 100 km
+# Heuristic fuel estimate: 8.5 L / 100 km — LEGACY, jamais une mesure.
 FUEL_L_PER_KM = 0.085
+# Métadonnées obligatoires pour toute valeur issue de ce calcul fixe :
+# elle doit TOUJOURS être identifiable comme ESTIMATED (jamais mesurée).
+LEGACY_FUEL_META = {
+    "measurement_type": "ESTIMATED",
+    "source": "LOGITRAK_HISTORICAL",
+    "method": "distance_km × 0.085 L/km (8,5 L/100 km)",
+    "unit": "L",
+}
+
+# Mapping canonique motorisation — UNIQUEMENT depuis vehicles.fuel_type,
+# JAMAIS déduit du nom/modèle/plaque/label Navixy. Non prouvé → UNKNOWN.
+POWERTRAIN_FROM_FUEL_TYPE = {
+    "ice": "ICE", "diesel": "ICE", "essence": "ICE", "petrol": "ICE",
+    "hybrid": "HEV", "hev": "HEV", "phev": "PHEV",
+    "electric": "BEV", "bev": "BEV", "ev": "BEV",
+}
+
+
+def powertrain_from_fuel_type(fuel_type) -> str:
+    return POWERTRAIN_FROM_FUEL_TYPE.get((fuel_type or "").lower(), "UNKNOWN")
+
+
+def legacy_fuel_estimation_allowed(vehicle: dict | None) -> bool:
+    """Le legacy litres/km (0,085) est-il autorisé pour ce véhicule ?
+
+    ICE (ice/diesel/essence/petrol) → OUI.
+    BEV (electric/bev/ev) → NON — aucun litre ne doit jamais être créé.
+    HEV/PHEV → NON — aucune convention thermique n'a été validée pour le
+      legacy 8,5 L/100 km sur hybrides : cas ambigu ⇒ pas de calcul (documenté).
+    UNKNOWN → OUI — dette résiduelle assumée : le comportement historique est
+      conservé pour ne pas casser la fiscalité de la flotte actuelle (0/18
+      motorisations renseignées). UNKNOWN n'est JAMAIS converti en BEV ni ICE.
+    """
+    pt = powertrain_from_fuel_type((vehicle or {}).get("fuel_type"))
+    if pt in ("BEV", "HEV", "PHEV"):
+        return False
+    return True  # ICE + UNKNOWN (dette résiduelle documentée)
 
 # Navixy track/list span limit
 TRACK_CHUNK_DAYS = 7
@@ -247,7 +284,7 @@ async def _build_trip_doc(
         if dd:
             resolved_driver_name = dd["name"]
 
-    return {
+    doc = {
         "tenant_id": "default",
         "driver_id": resolved_driver_id,
         "driver_name": resolved_driver_name or vehicle.get("plate"),
@@ -264,10 +301,14 @@ async def _build_trip_doc(
         "end_zone_type": _classify_point(end_lat, end_lng, zones_local),
         "distance_km": round(length_km, 1),
         "duration_min": dur_min,
-        "fuel_l": round(length_km * FUEL_L_PER_KM, 2),
         "avg_speed": float(tr.get("avg_speed", 0) or 0),
         "max_speed": float(tr.get("max_speed", 0) or 0),
     }
+    # Garde-fou BEV : le legacy 0,085 L/km n'est écrit que si la motorisation
+    # l'autorise (jamais BEV/HEV/PHEV). Sinon fuel_l reste ABSENT — jamais 0.
+    if legacy_fuel_estimation_allowed(vehicle):
+        doc["fuel_l"] = round(length_km * FUEL_L_PER_KM, 2)
+    return doc
 
 
 async def _upsert_trip(db, doc: dict) -> str:

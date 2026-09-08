@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 
 from app.auth import get_current_user
 from app.db import get_db
+from app.navixy_sync import LEGACY_FUEL_META
 
 from app.routes._helpers import (
     filter_trips_query,
@@ -105,6 +106,7 @@ async def dashboard(
 
     return {
         "settings_mode": settings.get("mode"),
+        "fuel_meta": LEGACY_FUEL_META,
         "kpi": {
             "pro_km": round(pro_km, 1),
             "perso_km": round(perso_km, 1),
