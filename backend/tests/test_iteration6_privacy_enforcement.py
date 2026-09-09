@@ -8,17 +8,36 @@ Covers:
 - compute_expected_state unit tests
 - AST safety check — send_raw_command only inside `not simulation` branch
 - APScheduler privacy_enforcement_job is registered
+
+SÉCURITÉ TESTS (défense en profondeur — jamais de commande réelle vers un tracker) :
+A. Hygiène DB : `tracker_privacy_state` purgé en début de module (déterministe).
+B. Barrière anti-device-write : pendant TOUT le module, l'URL Navixy du tenant est
+   remplacée par un sinkhole local injoignable (via PATCH superadmin, qui rafraîchit
+   le cache tenant du serveur). Même avec une cible `private` accidentelle, aucune
+   requête ne peut atteindre Navixy. Restaurée en fin de module.
+C. Aucune cible `private` avant tout appel kill-switch (assertion explicite).
 """
 import ast
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 import requests
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+load_dotenv("/app/backend/.env")
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = f"{BASE}/api"
+MONGO_URL = os.environ["MONGO_URL"]
+DB_NAME = os.environ["DB_NAME"]
+
+# Sinkhole local : port 9 (discard) fermé -> connexion refusée immédiatement.
+SINKHOLE_URL = "http://127.0.0.1:9/navixy-test-barrier"
+REAL_NAVIXY_DEFAULT = "https://api.navixy.com/v2"
 
 
 # ---------- Auth helpers ----------
@@ -44,14 +63,80 @@ def driver():
     return _login("chauffeur@logitrak.ch", "chauffeur123")
 
 
+@pytest.fixture(scope="module")
+def superadmin():
+    pwd = os.environ["SUPERADMIN_PASSWORD"]
+    return _login("superadmin@logitrak.ch", pwd)
+
+
+@pytest.fixture(scope="module")
+def mongo():
+    client = MongoClient(MONGO_URL)
+    yield client[DB_NAME]
+    client.close()
+
+
+# ---------- B. Barrière anti-device-write (posée AVANT tout, retirée APRÈS tout) ----------
 @pytest.fixture(scope="module", autouse=True)
-def ensure_safe_teardown(admin):
-    """Make sure we reset enabled=False at the end + kill_switch if anything in private."""
+def navixy_write_barrier(superadmin, mongo):
+    """Pointe l'URL Navixy du tenant vers un sinkhole local pour toute la durée du module.
+    Le PATCH superadmin rafraîchit le cache tenant du serveur -> effet immédiat côté API.
+    Aucune requête réelle vers Navixy n'est donc possible, même en cas de cible private."""
+    t = mongo.tenants.find_one({"id": "default"}, {"_id": 0, "navixy_api_url": 1})
+    original = (t or {}).get("navixy_api_url") or REAL_NAVIXY_DEFAULT
+    r = superadmin.patch(f"{API}/admin/tenants/default",
+                         json={"navixy_api_url": SINKHOLE_URL}, timeout=20)
+    assert r.status_code == 200, f"pose de la barrière refusée: {r.status_code} {r.text[:200]}"
+    assert mongo.tenants.find_one({"id": "default"})["navixy_api_url"] == SINKHOLE_URL
+    try:
+        yield
+    finally:
+        restored = False
+        for _ in range(2):
+            r = superadmin.patch(f"{API}/admin/tenants/default",
+                                 json={"navixy_api_url": original}, timeout=20)
+            if r.status_code == 200:
+                restored = True
+                break
+        if not restored:
+            # dernier recours : restauration DB directe (cache serveur rafraîchi au
+            # prochain PATCH/refresh) + signal bruyant.
+            mongo.tenants.update_one({"id": "default"},
+                                     {"$set": {"navixy_api_url": original}})
+            print("[BARRIER] AVERTISSEMENT: restauration via PATCH échouée, DB restaurée directement")
+        assert mongo.tenants.find_one({"id": "default"})["navixy_api_url"] == original
+
+
+# ---------- A. Hygiène DB (déterminisme, aucun résidu d'anciens runs) ----------
+@pytest.fixture(scope="module", autouse=True)
+def privacy_state_hygiene(mongo, navixy_write_barrier):
+    """Purge les états tracker_privacy_state en début de module : tout doc 'real' ou
+    'private' résiduel d'un run précédent disparaît. Les tests enforce-now recréent
+    des états 'simulation' propres."""
+    mongo.tracker_privacy_state.delete_many({})
+    yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def ensure_safe_teardown(admin, mongo, navixy_write_barrier):
+    """Fin de module : enforcement désactivé. Kill-switch de sécurité UNIQUEMENT s'il
+    n'existe aucune cible private (C) — sinon on normalise en DB, sans commande."""
     yield
     try:
         admin.put(f"{API}/livre/privacy/enforcement-config",
                   json={"enabled": False, "simulation": True}, timeout=20)
-        # Kill switch sécurité
+        # C. Jamais de kill-switch avec des cibles : normaliser d'abord.
+        private_targets = mongo.tracker_privacy_state.count_documents(
+            {"expected_state": "private"})
+        if private_targets:
+            mongo.tracker_privacy_state.update_many(
+                {"expected_state": "private"},
+                {"$set": {"expected_state": "tracking"}})
+            print(f"[TEARDOWN] {private_targets} cible(s) private normalisée(s) en DB — "
+                  "kill-switch non nécessaire")
+        assert mongo.tracker_privacy_state.count_documents(
+            {"expected_state": "private"}) == 0
+        # Kill switch sécurité (0 cible garanti => 0 commande ; barrière encore active)
         admin.post(f"{API}/livre/privacy/kill-switch", timeout=30)
     except Exception:
         pass
@@ -195,16 +280,22 @@ class TestKillSwitch:
     def test_manager_blocked(self, manager):
         assert manager.post(f"{API}/livre/privacy/kill-switch", timeout=20).status_code == 403
 
-    def test_admin_no_targets(self, admin):
-        # In working hours (Mon-Fri 07-18 UTC?), most should be 'tracking'.
-        # If some happen to be 'private' (e.g. weekend / out-of-hours), accept that
-        # but verify the response shape.
+    def test_admin_no_targets(self, admin, mongo):
+        # C. Déterministe : on garantit AUCUNE cible private avant l'appel (les états
+        # 'private' éventuels créés par enforce-now simulation hors heures ouvrées
+        # sont normalisés en DB — jamais envoyés à un device).
+        mongo.tracker_privacy_state.update_many(
+            {"expected_state": "private"}, {"$set": {"expected_state": "tracking"}})
+        assert mongo.tracker_privacy_state.count_documents(
+            {"expected_state": "private"}) == 0, "cibles private inattendues avant kill-switch"
         r = admin.post(f"{API}/livre/privacy/kill-switch", timeout=60)
         assert r.status_code == 200
         d = r.json()
         for k in ("targets", "sent", "errors", "rows"):
             assert k in d
         assert isinstance(d["rows"], list)
+        assert d["targets"] == 0, f"kill-switch devait avoir 0 cible, reçu {d['targets']}"
+        assert d["sent"] == 0, f"kill-switch ne devait envoyer AUCUNE commande, reçu {d['sent']}"
 
 
 # ---------- compute_expected_state unit ----------
@@ -312,3 +403,55 @@ class TestSchedulerJobRegistered:
         assert "_run_privacy_enforcement" in out.stdout, (
             "APScheduler should have added _run_privacy_enforcement job at startup"
         )
+
+
+# ---------- Preuve finale : aucune écriture device réelle possible ni effectuée ----------
+class TestNoRealDeviceWrite:
+    def test_barrier_is_active(self, mongo):
+        """La barrière anti-device-write est bien en place pendant le module."""
+        url = mongo.tenants.find_one({"id": "default"}, {"navixy_api_url": 1})["navixy_api_url"]
+        assert url == SINKHOLE_URL, "barrière sinkhole absente pendant le module"
+
+    def test_kill_switch_cannot_reach_navixy_even_with_target(self, admin, mongo):
+        """Défense en profondeur prouvée e2e : MÊME avec une cible private (fictive),
+        le kill-switch ne peut pas atteindre Navixy (sinkhole) -> erreur transport,
+        0 envoi réussi, état jamais marqué real/success."""
+        vid = f"test-barrier-{uuid.uuid4()}"
+        try:
+            # véhicule FICTIF inactif (invisible des listes métier) + cible private
+            mongo.vehicles.insert_one({
+                "id": vid, "tenant_id": "default", "plate": "TEST-BARRIER",
+                "model": "telfmu130_fmc130", "navixy_tracker_id": 999999999,
+                "active": False,
+            })
+            mongo.tracker_privacy_state.insert_one({
+                "tenant_id": "default",
+                "vehicle_id": vid, "tracker_id": 999999999, "family": "teltonika",
+                "expected_state": "private", "current_state": "private",
+            })
+            r = admin.post(f"{API}/livre/privacy/kill-switch", timeout=60)
+            assert r.status_code == 200
+            d = r.json()
+            assert d["targets"] == 1
+            assert d["sent"] == 0, f"AUCUN envoi ne doit réussir derrière la barrière: {d}"
+            assert d["errors"] == 1
+            row = next(x for x in d["rows"] if x.get("vehicle_id") == vid)
+            assert row.get("result") == "error"
+            # l'état n'a jamais été marqué real/success
+            st = mongo.tracker_privacy_state.find_one({"vehicle_id": vid}, {"_id": 0})
+            assert (st or {}).get("last_command_result") != "success"
+            assert (st or {}).get("last_command_mode") != "real" or \
+                (st or {}).get("last_command_result") != "success"
+        finally:
+            mongo.vehicles.delete_one({"id": vid})
+            mongo.tracker_privacy_state.delete_many({"vehicle_id": vid})
+            mongo.audit_log.delete_many({"vehicle_id": vid, "scope": "tracker_privacy"})
+
+    def test_no_real_command_recorded_during_module(self, mongo):
+        """La DB a été purgée en début de module : tout doc 'real' + success trouvé ici
+        aurait été créé PENDANT le module. Preuve qu'aucune commande réelle n'est partie."""
+        real_success = list(mongo.tracker_privacy_state.find(
+            {"last_command_mode": "real", "last_command_result": "success"},
+            {"_id": 0, "tracker_id": 1, "last_command": 1, "last_command_at": 1}))
+        assert real_success == [], (
+            f"Commande(s) réelle(s) détectée(s) pendant le module: {real_success}")
