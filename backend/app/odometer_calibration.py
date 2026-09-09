@@ -47,8 +47,14 @@ PARAM_MIN_KM = 0
 PARAM_MAX_KM = 4_294_967           # borne Teltonika (Configurator)
 CONFIRM_TOLERANCE_KM = 1.0         # écart max toléré entre valeur demandée et AVL16 relu
 
-# --- Source de distance (profil AVL16 validé) ---
-SOURCE_TELTONIKA_AVL16 = "TELTONIKA_AVL16"
+# --- Source de distance : UNE seule valeur canonique métier ---
+# La source PERSISTÉE/interne est TELTONIKA_TOTAL_ODOMETER (importée d'odometer_capability),
+# cohérente avec la gate `vehicle_private_mode_allowed` et la capability FMC003 terrain.
+# `TELTONIKA_AVL16` n'est PLUS une source métier : c'est un simple LABEL d'affichage UI.
+# AVL16 (raw_avl_id=16 / avl_io_16) reste la REPRÉSENTATION télématique de cette source.
+AVL16_SOURCE_LABEL = "Teltonika AVL16"          # label UI/API uniquement (jamais persisté comme source)
+# Rétro-compat : alias pointant sur la valeur canonique (au cas où un import externe subsiste).
+SOURCE_TELTONIKA_AVL16 = SOURCE_TELTONIKA_TOTAL_ODOMETER
 
 # --- Marqueur d'évènement de calibration (rupture de baseline) ---
 CALIBRATION_EVENT = "CALIBRATION_EVENT"
@@ -325,7 +331,7 @@ async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
     Retour : {value_km, raw_value, timestamp, source, sensor_id, recent, reason?}
     """
     empty = {"value_km": None, "raw_value": None, "timestamp": None,
-             "source": SOURCE_TELTONIKA_AVL16, "sensor_id": None, "recent": False}
+             "source": SOURCE_TELTONIKA_TOTAL_ODOMETER, "sensor_id": None, "recent": False}
 
     vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0})
     if not vehicle:
@@ -363,7 +369,7 @@ async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
     # raw (mètres) reconstitué à titre indicatif (value normalisée × divider).
     raw_value = round(value_km * divider, 0) if value_km is not None else None
     return {"value_km": value_km, "raw_value": raw_value, "timestamp": ts,
-            "source": SOURCE_TELTONIKA_AVL16, "sensor_id": sensor_id, "recent": recent}
+            "source": SOURCE_TELTONIKA_TOTAL_ODOMETER, "sensor_id": sensor_id, "recent": recent}
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +394,7 @@ async def _update_capability_baseline(db, *, tracker_id: int, vehicle_id: str,
         "tracker_id": int(tracker_id),
         "vehicle_id": vehicle_id,
         "device_model": device_model,
-        "private_distance_source": SOURCE_TELTONIKA_AVL16,  # source explicite (jamais odomètre Navixy)
+        "private_distance_source": SOURCE_TELTONIKA_TOTAL_ODOMETER,  # source canonique (jamais odo générique)
         "raw_avl_id": AVL_TOTAL_ODOMETER,
         "navixy_input": "avl_io_16",
         "navixy_sensor_id": sensor_id,
