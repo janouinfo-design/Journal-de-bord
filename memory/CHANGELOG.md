@@ -253,3 +253,10 @@ real_energy_validated (false).
 - Tests : régression combinée 830 PASS / 0 FAIL / 3 SKIP · testing agent iteration_35 : 12/12 + frontend 100 %,
   0 défaut (deux lignées). real_energy_validated=false. AUCUN déploiement VPS.
 - P3 connu : warning a11y DialogContent (picker véhicule, préexistant lignée prod) ; warning eslint VehicleOdometerPage.
+
+## 9 juin 2026 — Correctifs A+B Console Chauffeur (incident « pas de véhicules »)
+- Diagnostic prod : backend SAIN (Orhan → ALL → 14 véhicules, prouvé par curl interne + proxy public). Cause : index.html servi sans Cache-Control (ancien bundle en cache possible) + état « Aucun véhicule sélectionné » mal interprété.
+- Correctif A : frontend/nginx.conf → `location = /index.html { add_header Cache-Control "no-cache"; }` (assets /static/ restent immutable 30j). Effet au prochain rebuild frontend.
+- Correctif B : DriverConsolePage.jsx → picker inline remplacé par le composant autoritaire DriverVehiclePicker (GET /livre/driver/vehicles exclusif) dans la modal ; états erreur (Réessayer) / vide (« Aucun véhicule autorisé ») distincts ; pré-sélection du défaut si autorisé ; claim explicite ; auto-ouverture de la modal si aucun véhicule (ref autoOpenedRef). Anciens testids driver-picker-item-*/driver-picker-empty supprimés.
+- Backend NON modifié. Tests : unit 11/11, testing agent iteration_36 6/6 PASS, auto-open self-testé (compte temporaire créé puis supprimé), build prod OK (my-vehicles absent du bundle).
+- Déploiement prod : rebuild journal_frontend UNIQUEMENT requis (backend inchangé).

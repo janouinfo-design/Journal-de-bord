@@ -1,0 +1,28 @@
+{
+  "summary": "Correctif B validé côté frontend (viewport mobile 390x844). La Console Chauffeur (/driver) utilise exclusivement le composant DriverVehiclePicker (GET /api/livre/driver/vehicles). 6/6 scénarios critiques PASS. Backend non modifié. Données du chauffeur de test (Jean Dupont) restaurées en fin de run (mode=ALL, default_vehicle_id=null).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "T1_picker_load_ALL_mode": "PASS — badge mode='Tous les véhicules', 19 driver-vehicle-option-{id}, driver-claim-btn DISABLED (aucune auto-sélection arbitraire du premier), aucun driver-vehicle-selected-badge initial",
+    "T2_select_and_claim": "PASS — clic sur une option → badge SÉLECTIONNÉ + claim activé ; clic sur driver-claim-btn → modal se ferme, driver-vehicle-plate mis à jour ('1-Enyaq 01 Bern')",
+    "T3_default_preselection": "PASS — PUT vehicle-access {mode:ALL, default_vehicle_id:<v>} + localStorage.clear() puis reload → l'option correspondant au défaut est pré-sélectionnée (exactement 1 badge total), driver-claim-btn ENABLED",
+    "T4_empty_list_UI": "PASS — driver-vehicles-empty affiché avec texte 'Aucun véhicule autorisé pour votre compte. Contactez un administrateur.', 0 option, driver-claim-btn absent, badge mode='Accès restreint'. NB: testé via route.fulfill (200 vehicles=[]) car le backend refuse (400) mode=SELECTED avec allowed_vehicle_ids vide ('SELECTED exige au moins un véhicule') — comportement backend correct, non modifié.",
+    "T5_error_fail_closed_retry": "PASS — page.route → 500 sur /api/livre/driver/vehicles : driver-vehicles-error visible ('Impossible de charger vos véhicules autorisés' + 'Par sécurité, aucun véhicule n'est proposé'), driver-vehicles-retry présent, 0 option, pas de claim ; après unroute + clic Réessayer → 19 options, error disparu",
+    "T6_pro_prive_regression_no_my_vehicles": "PASS — driver-mode-pro, driver-mode-private, driver-km-pro-value='0.0 km', driver-km-private-value='0.0 km' rendus sans erreur JS. Endpoints appelés côté /api/livre/driver/*: {km-summary, my-vehicle, private-mode}. AUCUN appel à /api/livre/driver/my-vehicles (0)."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Le payload PUT /api/livre/team/drivers/{id}/vehicle-access utilise le champ 'vehicle_ids' côté backend (Pydantic VehicleAccessIn) alors que l'énoncé du review request mentionne 'allowed_vehicle_ids'. Le champ 'allowed_vehicle_ids' est silencieusement ignoré — c'est acceptable pour l'existant mais mérite d'aligner la doc ou d'ajouter un alias Pydantic pour éviter les erreurs côté clients futurs.",
+    "Backend rejette SELECTED avec vehicle_ids=[] (400 'SELECTED exige au moins un véhicule'). Le scénario 'liste réellement vide' ne peut donc pas être créé côté backend via cette API ; il ne se manifeste que si (a) tenant sans véhicules actifs ou (b) intersection ALL/SELECTED devient vide côté runtime. La branche UI driver-vehicles-empty reste correcte et testable via mock — pas de régression, mais à mentionner en documentation.",
+    "Le warning console a11y 'Missing Description or aria-describedby for DialogContent' (déjà signalé itération 35) persiste sur le picker — non bloquant."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (non testé, non modifié)", "frontend": "100% (6/6)"},
+  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (Jean Dupont, driver_id=1580345e-6b8e-45a2-88e7-513a008b6b12) ; admin@logitrak.ch/admin123",
+  "seed_data_creation": "Aucune. Modifications temporaires du vehicle-access de Jean Dupont (ALL→default_vid→SELECTED[]→ALL), toutes RESTAURÉES à l'état initial (mode=ALL, allowed_vehicle_ids=[], default_vehicle_id=null) en fin de run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Le picker Correctif B utilise DriverVehiclePicker uniquement. Testids: driver-vehicle-picker (modal), driver-vehicles-card, driver-vehicles-mode, driver-vehicles-loading, driver-vehicles-error, driver-vehicles-retry, driver-vehicles-empty, driver-vehicle-option-{id}, driver-vehicle-selected-badge, driver-claim-btn, driver-vehicles-notice. Les anciens testids 'driver-picker-item-*' / 'driver-picker-empty' N'EXISTENT PLUS. Pour tester la pré-sélection du défaut, PARTIR D'UN CONTEXTE PROPRE (nouveau browser context OU localStorage.clear() sur les clés 'logitrak.driver.vehicle.*') car la sélection stockée l'emporte sur le défaut backend (logique voulue). Chauffeur@logitrak.ch redirige d'abord vers /livre/dashboard après login puis il faut naviguer manuellement vers /driver. L'auto-ouverture (Test 6 du review request) n'est PAS testable avec Jean Dupont (il a des sessions historiques) ; skippé pour éviter la création/suppression d'un compte de test.",
+  "rca of the issue": "N/A — pas de bug identifié dans le Correctif B ; tous les états (loading/error/empty/ready) et la logique de pré-sélection fonctionnent conformément aux spécifications."
+}
