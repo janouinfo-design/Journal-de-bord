@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://private-mode-debug.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,14 +25,14 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://private-mode-debug.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://trip-classifier-2.preview.emergentagent.com"
       }
     },
     "production": {
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://documents-web.logitrak.ch"
+        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
       }
     }
   },

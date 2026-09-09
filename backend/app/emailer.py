@@ -16,7 +16,7 @@ def is_smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_FROM"))
 
 
-def _send_sync(to: str, subject: str, text: str, html: str):
+def _send_sync(to: str, subject: str, text: str, html: str, attachments=None):
     host = os.environ["SMTP_HOST"]
     port = int(os.environ.get("SMTP_PORT") or 587)
     user = os.environ.get("SMTP_USER")
@@ -28,6 +28,8 @@ def _send_sync(to: str, subject: str, text: str, html: str):
     msg["Subject"] = subject
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
+    for fname, content, maintype, subtype in (attachments or []):
+        msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=fname)
 
     if port == 465:  # TLS implicite (SMTPS)
         with smtplib.SMTP_SSL(host, port, timeout=20) as s:
@@ -54,6 +56,19 @@ async def send_email(to: str, subject: str, text: str, html: str) -> bool:
         return True
     except Exception as e:
         logger.error("SMTP: échec d'envoi à %s: %s", to, e)
+        return False
+
+
+async def send_email_with_attachments(to_list: list[str], subject: str, text: str,
+                                      html: str, attachments: list[tuple]) -> bool:
+    """Un seul email à tous les destinataires — attachments: [(filename, bytes, maintype, subtype)]."""
+    try:
+        await asyncio.to_thread(_send_sync, ", ".join(to_list), subject, text, html, attachments)
+        logger.info("SMTP: email envoyé à %d destinataire(s) (%s, %d pièce(s) jointe(s))",
+                    len(to_list), subject, len(attachments))
+        return True
+    except Exception as e:
+        logger.error("SMTP: échec d'envoi (%s): %s", subject, e)
         return False
 
 

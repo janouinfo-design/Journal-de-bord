@@ -917,3 +917,14 @@ affectation manuelle, droits par rôle.
 - Prod VPS : branche reconcile-energy-private-mode, HEAD 0aad5fd (correctifs A+B Console Chauffeur + hotfix odomètre + cache Energy). Workspace resynchronisé byte-identique sur les 4 fichiers du hotfix.
 - Régression backend complète : 845 PASS / 0 FAIL / 3 skip. Chemin tests→trackers réels fermé (barrière sinkhole + hygiène + garde 0 cible, preuves automatisées à chaque run).
 - Reste à faire (validation utilisateur) : contrôle terrain Console Chauffeur prod (Orhan : recharger → « Changer de véhicule » → 14 véhicules) ; relecture READ-ONLY du FMC130 781479 juste avant tout nouvel essai terrain PRO/PRIVÉ ; premier upload réel d'un justificatif d'amende pour valider Object Storage en prod.
+
+## Rapport hebdomadaire chauffeurs — 9 juin 2026 : LIVRÉ EN PREVIEW, NON DÉPLOYÉ
+- Chaque lundi 06:00 Europe/Zurich (semaine précédente lundi→dimanche) : par chauffeur km PRO/PRIVÉ/non classifiés/TOTAL, nb trajets, véhicules utilisés, non classifiés restants — PDF + XLSX (même dataset), envoi SMTP aux destinataires configurables dans Paramètres (admin/manager), idempotence par tenant+semaine, SMTP absent = rapport généré + téléchargeable, e-mail sauté sans faire échouer le job.
+- Fichiers : `backend/app/weekly_driver_report.py`, `backend/app/routes/weekly_report.py`, renderers dans `reports.py`, job dans `scheduler.py`, `emailer.send_email_with_attachments`, `frontend/src/components/livre/WeeklyDriverReportCard.jsx`.
+- Régression complète : 862 PASS / 0 FAIL / 3 skip ; post-run sécurité vert (0 commande réelle, URL Navixy restaurée, assignments intacts). Backend REGELÉ après ce chantier.
+- Reste : sortie de la vérification SMTP VPS (CONFIGURED/NOT_CONFIGURED) ; activation + destinataires réels en prod après déploiement (sur GO).
+
+## Backlog priorisé (post-rapport hebdo)
+- P0 (validation utilisateur) : test Expo Go téléphone (picker mobile P0+P1) · contrôle terrain Orhan Console web prod · sortie vérification SMTP VPS.
+- P1 : dev build EAS (BLE + push réels) · déploiement VPS du rapport hebdo (sur GO explicite, via Save to GitHub + runbook).
+- P2 : justificatif amende réel prod (Object Storage e2e) · relecture READ-ONLY FMC130 781479 avant prochain essai PRO/PRIVÉ.

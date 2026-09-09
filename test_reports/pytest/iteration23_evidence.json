@@ -3,8 +3,8 @@
     "verdict": "PASS",
     "detail": "Driver + user cr\u00e9\u00e9s, hash bcrypt $2b$, liens users.driver_id/drivers.user_id OK, pas de mot de passe en clair. Note: pr\u00e9nom/nom s\u00e9par\u00e9s + mdp temporaire one-shot non impl\u00e9ment\u00e9s (Phase 3) \u2192 sous-item PARTIEL document\u00e9.",
     "proof": {
-      "driver_id": "3ae28471-188a-4f78-84e8-1c83c3c58f82",
-      "user_id": "5f7aad58-6de7-4dd6-a5a8-852498088ce6",
+      "driver_id": "7d04444b-3467-4a77-8f29-d8aac1b31a2a",
+      "user_id": "b6416f62-e784-4bac-b3b8-54bc3a45fe9c",
       "hash_prefix": "$2b$12$"
     }
   },
@@ -35,9 +35,9 @@
         401
       ],
       "audit_actions_seen": [
+        "auth.login_failed",
         "auth.login_locked_attempt",
-        "auth.login_locked",
-        "auth.login_failed"
+        "auth.login_locked"
       ]
     }
   },
@@ -59,7 +59,7 @@
     "verdict": "PASS",
     "detail": "Claim APP confirm\u00e9, session coh\u00e9rente, audit_log driver_claim pr\u00e9sent.",
     "proof": {
-      "session_id": "5fea762f-573f-42ef-97b5-4b654151d77b",
+      "session_id": "2ba401a7-3e3c-47f4-92c5-2e6ade8396f7",
       "vehicle_id": "b3151ad3-40b9-4b7b-b948-ded5e35f3cb3"
     }
   },
@@ -68,7 +68,7 @@
     "detail": "SIMULATION uniquement \u2014 la cha\u00eene physique Teltonika\u2192Navixy n'est pas prouv\u00e9e. identification_source=APP+BLE, active_driver_count=1, other_active=0",
     "proof": {
       "src": "APP+BLE",
-      "session_id": "3f87333d-47f7-4ca1-b61c-bd150dea98ae"
+      "session_id": "87594725-ced6-4b78-a6d3-357832404d85"
     }
   },
   "TEST_09": {
@@ -76,40 +76,40 @@
     "detail": "Deux claims \u2192 conflit, aucune session active; resolve \u2192 gagnant confirmed MANUEL, perdant closed.",
     "proof": {
       "vehicle_id": "b3151ad3-40b9-4b7b-b948-ded5e35f3cb3",
-      "winner": "b56842fa-f681-47e5-97e2-996fb9206bd7",
-      "loser": "1f180fa4-c1ee-4805-9327-c1b2faf59bf1"
+      "winner": "ae1b2d13-42ed-4d18-bcd2-1de76c1d3f48",
+      "loser": "f4281133-6ef4-48be-a7df-5e812b4b6d83"
     }
   },
   "TEST_10": {
     "verdict": "PASS",
-    "detail": "Trips pr\u00e9serv\u00e9s (total=5715, unident=3410); dashboard trips.unidentified pr\u00e9sent.",
+    "detail": "Trips pr\u00e9serv\u00e9s (total=5720, unident=3412); dashboard trips.unidentified pr\u00e9sent.",
     "proof": {
       "trips": {
-        "total": 5715,
-        "unidentified": 3410,
+        "total": 5720,
+        "unidentified": 3412,
         "identification_rate": 40.3,
         "forced_pro": 0,
         "forced_perso": 0
       },
-      "mongo_total": 5715,
-      "mongo_unident": 3410
+      "mongo_total": 5720,
+      "mongo_unident": 3412
     }
   },
   "TEST_11": {
     "verdict": "PASS",
     "detail": "Ancienne session Jean ferm\u00e9e avec end_reason='driver_change', Paul actif, 1 seule session active, audit OK.",
     "proof": {
-      "jean_sid": "e84712aa-4a00-4eec-9a39-2746fe048695",
-      "paul_sid": "7cd84a32-e27d-4142-8fee-2d53caa8bebe"
+      "jean_sid": "6c3d058d-74b5-419d-bf74-9c2093716a17",
+      "paul_sid": "6aeedf64-f3ea-48d3-8ce6-9ddec892dd4c"
     }
   },
   "TEST_12": {
     "verdict": "PASS",
-    "detail": "2 claims simultan\u00e9s \u2192 codes 200, active_driver_count=0 (<=1). statuts observ\u00e9s: {'confirmed', 'conflict'}",
+    "detail": "2 claims simultan\u00e9s \u2192 codes 200, active_driver_count=0 (<=1). statuts observ\u00e9s: {'conflict', 'confirmed'}",
     "proof": {
       "statuses": [
-        "confirmed",
-        "conflict"
+        "conflict",
+        "confirmed"
       ],
       "active_ct": 0
     }
@@ -159,7 +159,7 @@
     "detail": "Script pr\u00e9sent et ex\u00e9cut\u00e9 sans crash (preuve terrain physique NON valid\u00e9e).",
     "proof": {
       "returncode": 0,
-      "tail": "EDIR)\n   \u2022 tracker=1067939 hw=8a553a0fd49e24330826342da42de5ad (canon 8A553A0FD49E24330826342DA42DE5AD) rssi=-101 t=2026-09-09 14:45:31 | beacon inconnu (aucun chauffeur avec ce tag) | v\u00e9hicule 5-VD 358-707 (NEDIR)\n   \u2022 tracker=1067939 hw=e20a39f473f54bc4186417d1ad07a962 (canon E20A39F473F54BC4186417D1AD07A962) rssi=-99 t=2026-09-09 14:45:31 | beacon inconnu (aucun chauffeur avec ce tag) | v\u00e9hicule 5-VD 358-707 (NEDIR)\n\n=== VERDICT ===\n\u2717 Cha\u00eene NON prouv\u00e9e sur cette fen\u00eatre : aucun enregistrement Navixy ne\n  correspond \u00e0 un tag chauffeur configur\u00e9. V\u00e9rifiez : 1) le tag \u00e9met (pile),\n  2) le traceur Teltonika a \u00ab Beacon List/Detection \u00bb activ\u00e9 (ex. FMC130 :\n  Bluetooth 4.0 \u2192 Beacon Detection = All / Configured), 3) la fen\u00eatre de temps,\n  4) drivers.ble_id correspond bien au MAC/UUID du tag.\n"
+      "tail": "NEDIR)\n   \u2022 tracker=1067939 hw=aea3e3014bbc4ecfad172573922a5f4f (canon AEA3E3014BBC4ECFAD172573922A5F4F) rssi=-99 t=2026-09-09 16:09:40 | beacon inconnu (aucun chauffeur avec ce tag) | v\u00e9hicule 5-VD 358-707 (NEDIR)\n   \u2022 tracker=1067939 hw=e2c56db5dffb48d2b060d0f5a71096e0 (canon E2C56DB5DFFB48D2B060D0F5A71096E0) rssi=-97 t=2026-09-09 16:09:40 | beacon inconnu (aucun chauffeur avec ce tag) | v\u00e9hicule 5-VD 358-707 (NEDIR)\n\n=== VERDICT ===\n\u2717 Cha\u00eene NON prouv\u00e9e sur cette fen\u00eatre : aucun enregistrement Navixy ne\n  correspond \u00e0 un tag chauffeur configur\u00e9. V\u00e9rifiez : 1) le tag \u00e9met (pile),\n  2) le traceur Teltonika a \u00ab Beacon List/Detection \u00bb activ\u00e9 (ex. FMC130 :\n  Bluetooth 4.0 \u2192 Beacon Detection = All / Configured), 3) la fen\u00eatre de temps,\n  4) drivers.ble_id correspond bien au MAC/UUID du tag.\n"
     }
   },
   "CLEANUP": {

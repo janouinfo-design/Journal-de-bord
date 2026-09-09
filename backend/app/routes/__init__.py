@@ -27,6 +27,7 @@ from app.routes import (
     reports as _reports,
     settings as _settings,
     team as _team,
+    weekly_report as _weekly_report,
 )
 
 # Re-export the auth router (kept under /auth — sibling of /livre)
@@ -48,5 +49,6 @@ livre_router.include_router(_fuel_statements.router)
 livre_router.include_router(_fuel.router)
 livre_router.include_router(_energy.router)
 livre_router.include_router(_odometer_calibration.router)
+livre_router.include_router(_weekly_report.router)
 
 __all__ = ["auth_router", "livre_router"]

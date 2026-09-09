@@ -119,6 +119,25 @@ async def _run_fuel_fx():
 BEACON_JOB_ID = "beacon_poll"
 SWEEP_JOB_ID = "session_sweep"
 CONFLICT_ALERT_JOB_ID = "conflict_alerts"
+WEEKLY_REPORT_JOB_ID = "weekly_driver_report"
+
+
+async def _run_weekly_report():
+    """Lundi 06:00 Europe/Zurich — rapport hebdomadaire chauffeurs (semaine précédente)."""
+    try:
+        from app.weekly_driver_report import run_weekly_report_job
+        res = await run_weekly_report_job()
+        if res:
+            logger.info("Rapport hebdomadaire chauffeurs: %s", res)
+    except Exception as e:
+        logger.error("Weekly driver report job error: %s", e)
+
+
+def weekly_report_next_run() -> str | None:
+    if _scheduler is None:
+        return None
+    job = _scheduler.get_job(WEEKLY_REPORT_JOB_ID)
+    return job.next_run_time.isoformat() if job and job.next_run_time else None
 
 
 async def _run_beacon_poll():
@@ -218,6 +237,12 @@ async def init_scheduler():
     _scheduler.add_job(
         _run_conflict_alerts, IntervalTrigger(minutes=10),
         id=CONFLICT_ALERT_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # Rapport hebdomadaire chauffeurs — chaque lundi 06:00 Europe/Zurich
+    _scheduler.add_job(
+        _run_weekly_report,
+        CronTrigger(day_of_week="mon", hour=6, minute=0, timezone="Europe/Zurich"),
+        id=WEEKLY_REPORT_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
     )
     await _persist_next_run(db)
     logger.info("Scheduler initialised (enabled=%s, interval_min=%s)",

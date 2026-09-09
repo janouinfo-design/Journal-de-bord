@@ -24,6 +24,7 @@ import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
 import NotificationsPreferencesCard from "@/components/livre/NotificationsPreferencesCard";
 import ReconciliationSettingsCard from "@/components/livre/ReconciliationSettingsCard";
 import ReconciliationAlertsCard from "@/components/livre/ReconciliationAlertsCard";
+import WeeklyDriverReportCard from "@/components/livre/WeeklyDriverReportCard";
 import EnergyTenantCard from "@/components/livre/EnergyTenantCard";
 import SmtpTestCard from "@/components/livre/SmtpTestCard";
 
@@ -495,6 +496,7 @@ export default function SettingsPage() {
       <EnergyTenantCard />
       <ReconciliationSettingsCard />
       <ReconciliationAlertsCard />
+      <WeeklyDriverReportCard />
     </div>
   );
 }

@@ -534,3 +534,163 @@ def swiss_tax_report_pdf(stats: dict, year: int, owner: str = "") -> bytes:
 
     doc.build(flow)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Rapport hebdomadaire chauffeur — PDF (prêt à archiver) + XLSX (exploitable).
+# Les deux formats consomment le MÊME dataset (weekly_driver_report.aggregate_week)
+# — aucune logique métier ici, mise en forme uniquement.
+# Polices standard PDF (cp1252) : pas de caractères ↔ ou → dans ce document.
+# ---------------------------------------------------------------------------
+WEEKLY_TOTAL_NOTE = ("Km total = tous les kilomètres réellement parcourus "
+                     "(PRO + PRIVÉ + non classifiés).")
+
+WEEKLY_HEADERS = [
+    "Chauffeur", "Km PRO", "Km PRIVÉ", "Km non classifiés", "Km total",
+    "Trajets", "Trajets non classifiés", "Véhicules utilisés",
+]
+
+
+def weekly_driver_report_to_xlsx(dataset: dict, tenant_name: str) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Rapport hebdomadaire"
+
+    period = dataset["period"]
+    ws.append([f"Rapport hebdomadaire chauffeurs — {tenant_name}"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(WEEKLY_HEADERS))
+    ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="1F2937")
+    ws.append([f"Période : semaine {period['label']} (lundi à dimanche, Europe/Zurich)"])
+    ws.append([f"Généré le : {_fmt_dt(dataset['generated_at'])}"])
+    ws.append([WEEKLY_TOTAL_NOTE])
+    ws.append([])
+
+    ws.append(WEEKLY_HEADERS)
+    header_row = ws.max_row
+    for col_idx in range(1, len(WEEKLY_HEADERS) + 1):
+        c = ws.cell(row=header_row, column=col_idx)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="2196F3")
+        c.alignment = Alignment(horizontal="left", vertical="center")
+
+    rows = dataset["rows"]
+    if not rows:
+        ws.append(["Aucun trajet sur la période", "", "", "", "", "", "", ""])
+    for r in rows:
+        ws.append([
+            r["driver_name"],
+            round(r["km_pro"], 2), round(r["km_private"], 2),
+            round(r["km_unclassified"], 2), round(r["km_total"], 2),
+            r["trip_count"], r["unclassified_trip_count"],
+            ", ".join(r["vehicles_used"]),
+        ])
+
+    t = dataset["totals"]
+    ws.append([])
+    ws.append(["TOTAL", round(t["km_pro"], 2), round(t["km_private"], 2),
+               round(t["km_unclassified"], 2), round(t["km_total"], 2),
+               t["trip_count"], t["unclassified_trip_count"], ""])
+    for c in ws[ws.max_row]:
+        c.font = Font(bold=True)
+
+    from openpyxl.utils import get_column_letter
+    widths = [28, 12, 12, 16, 12, 10, 20, 60]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def weekly_driver_report_to_pdf(dataset: dict, tenant_name: str) -> bytes:
+    buf = io.BytesIO()
+    page_size = landscape(A4)
+    doc = SimpleDocTemplate(
+        buf, pagesize=page_size,
+        leftMargin=1.0 * cm, rightMargin=1.0 * cm,
+        topMargin=1.0 * cm, bottomMargin=1.5 * cm,
+        title="Rapport hebdomadaire chauffeurs")
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("wt", parent=styles["Title"], fontSize=15, alignment=0,
+                                 textColor=colors.HexColor("#0F172A"), spaceAfter=2)
+    sub = ParagraphStyle("wsb", parent=styles["Normal"], fontSize=8.5,
+                         textColor=colors.HexColor("#64748B"), leading=11)
+    cell = ParagraphStyle("wc", parent=styles["Normal"], fontSize=8.0,
+                          textColor=colors.HexColor("#0F172A"), leading=10)
+    head = ParagraphStyle("wh", parent=styles["Normal"], fontSize=8.0,
+                          textColor=colors.white, fontName="Helvetica-Bold", leading=9.6)
+    bold = ParagraphStyle("wb", parent=cell, fontName="Helvetica-Bold")
+
+    def P(text, style=cell):
+        return Paragraph("" if text is None else str(text).replace("&", "&amp;"), style)
+
+    period = dataset["period"]
+    flow = [Paragraph(f"Rapport hebdomadaire chauffeurs — {tenant_name}", title_style)]
+    flow.append(Paragraph(
+        f"Période : semaine {period['label']} (lundi à dimanche, Europe/Zurich) · "
+        f"Généré le : {_fmt_dt(dataset['generated_at'])}", sub))
+    flow.append(Paragraph(WEEKLY_TOTAL_NOTE, sub))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    rows = dataset["rows"]
+    if not rows:
+        flow.append(Paragraph("Aucun trajet sur la période.", sub))
+    else:
+        data = [[P(h, head) for h in WEEKLY_HEADERS]]
+        unclassified_rows = []
+        for i, r in enumerate(rows, start=1):
+            if r["unclassified_trip_count"] > 0:
+                unclassified_rows.append(i)
+            data.append([
+                P(f"<b>{r['driver_name']}</b>"),
+                P(f"{r['km_pro']:.2f}"), P(f"{r['km_private']:.2f}"),
+                P(f"{r['km_unclassified']:.2f}"), P(f"{r['km_total']:.2f}"),
+                P(r["trip_count"]), P(r["unclassified_trip_count"]),
+                P(", ".join(r["vehicles_used"])),
+            ])
+        t = dataset["totals"]
+        data.append([
+            P("TOTAL", bold),
+            P(f"{t['km_pro']:.2f}", bold), P(f"{t['km_private']:.2f}", bold),
+            P(f"{t['km_unclassified']:.2f}", bold), P(f"{t['km_total']:.2f}", bold),
+            P(t["trip_count"], bold), P(t["unclassified_trip_count"], bold),
+            P("", bold),
+        ])
+        col_widths = [4.6, 2.4, 2.4, 2.9, 2.4, 1.8, 3.2, 8.0]
+        table = Table(data, colWidths=[w * cm for w in col_widths], repeatRows=1)
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2196F3")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F8FAFC")]),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E2E8F0")),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E3F2FD")),
+            ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.HexColor("#1976D2")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("ALIGN", (1, 1), (6, -1), "RIGHT"),
+        ]
+        for i in unclassified_rows:
+            style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FEF3C7")))
+        table.setStyle(TableStyle(style))
+        flow.append(table)
+        if unclassified_rows:
+            flow.append(Spacer(1, 0.2 * cm))
+            flow.append(Paragraph(
+                "Lignes surlignées : trajets non classifiés restants au moment de la génération.",
+                sub))
+
+    def _footer(canvas, d):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#94A3B8"))
+        canvas.drawString(1.0 * cm, 0.65 * cm,
+                          "Logitrak — Livre de bord · Rapport hebdomadaire chauffeurs · "
+                          "Données GPS officielles LOGITRAK")
+        canvas.drawRightString(page_size[0] - 1.0 * cm, 0.65 * cm, f"Page {d.page}")
+        canvas.restoreState()
+
+    doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+    return buf.getvalue()
