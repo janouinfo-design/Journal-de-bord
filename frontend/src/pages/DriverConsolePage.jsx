@@ -12,6 +12,7 @@ import {
   RefreshCw, ChevronRight, ShieldAlert,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import DriverVehiclePicker from "@/components/livre/DriverVehiclePicker";
 
 /**
  * Console chauffeur — MODE MANUEL (sans Bluetooth).
@@ -41,13 +42,12 @@ export default function DriverConsolePage() {
   });
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [myVehicles, setMyVehicles] = useState([]);
-  const [switching, setSwitching] = useState(false);
 
   const [sosSending, setSosSending] = useState(false);
   const sosInFlight = useRef(false);
   const pmInFlight = useRef(false);
   const lastVehicleId = useRef(undefined);
+  const autoOpenedRef = useRef(false);
 
   // --- Chargements ---
   const loadVehicle = useCallback(async () => {
@@ -55,7 +55,12 @@ export default function DriverConsolePage() {
     try {
       const { data } = await api.get("/livre/driver/my-vehicle");
       if (data?.vehicle?.id) { setVehicle(data.vehicle); setConnected(!!data.current); }
-      else { setVehicle(null); setConnected(false); }
+      else {
+        setVehicle(null); setConnected(false);
+        // Aucun véhicule (ni session, ni historique) : on propose directement le
+        // choix — évite un écran « vide » trompeur. Une seule fois par visite.
+        if (!autoOpenedRef.current) { autoOpenedRef.current = true; setPickerOpen(true); }
+      }
     } catch { setVehicle(null); setConnected(false); }
     finally { setLoadingVehicle(false); }
   }, []);
@@ -114,25 +119,14 @@ export default function DriverConsolePage() {
   }, [vehicle?.id, loadKm]);
 
   // --- Actions ---
-  const openPicker = useCallback(async () => {
-    setPickerOpen(true);
-    // Source d'autorité : périmètre véhicules du chauffeur (ALL/SELECTED/SINGLE).
-    // Fail-closed : erreur = liste vide, jamais de liste globale de repli.
-    try { const { data } = await api.get("/livre/driver/vehicles"); setMyVehicles(data?.vehicles || []); }
-    catch { setMyVehicles([]); }
-  }, []);
+  // Le contenu du picker (liste, erreurs, auto-sélection du défaut, claim) est géré
+  // par DriverVehiclePicker — source d'autorité exclusive : GET /livre/driver/vehicles.
+  const openPicker = useCallback(() => setPickerOpen(true), []);
 
-  const selectVehicle = useCallback(async (v) => {
-    if (switching) return;
-    setSwitching(true);
-    try {
-      await api.post("/livre/driver/claim", { vehicle_id: v.id });
-      setPickerOpen(false);
-      await refreshAll();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Impossible de sélectionner ce véhicule");
-    } finally { setSwitching(false); }
-  }, [switching, refreshAll]);
+  const onClaimed = useCallback(async () => {
+    setPickerOpen(false);
+    await refreshAll();
+  }, [refreshAll]);
 
   const setMode = useCallback(async (mode) => {
     if (pmInFlight.current) return;   // anti double-clic
@@ -331,33 +325,12 @@ export default function DriverConsolePage() {
         </Button>
       </main>
 
-      {/* Modal : Choisir un véhicule (assignés) */}
+      {/* Modal : Choisir un véhicule — périmètre autorisé backend (ALL/SELECTED/SINGLE),
+          pré-sélection du véhicule par défaut si autorisé, claim explicite. */}
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
         <DialogContent className="bg-slate-900 border-slate-700 text-white" data-testid="driver-vehicle-picker">
           <DialogHeader><DialogTitle>Choisir un véhicule</DialogTitle></DialogHeader>
-          {myVehicles.length === 0 ? (
-            <p className="text-sm text-slate-400 py-4" data-testid="driver-picker-empty">Aucun véhicule disponible</p>
-          ) : (
-            <div className="max-h-[60vh] overflow-y-auto space-y-2">
-              {myVehicles.map((v) => {
-                const selected = v.id === vehicle?.id;
-                return (
-                  <button key={v.id} disabled={switching}
-                    onClick={() => selectVehicle(v)}
-                    data-testid={`driver-picker-item-${v.id}`}
-                    className={`w-full flex items-center justify-between p-3 rounded-lg border text-left ${selected ? "border-[#2196F3] bg-blue-500/10" : "border-slate-700 bg-slate-800 hover:border-slate-600"}`}
-                  >
-                    <span>
-                      <span className="block font-mono font-semibold">{v.plate || "Véhicule"}</span>
-                      {v.model ? <span className="block text-xs text-slate-400">{v.model}</span> : null}
-                    </span>
-                    {selected ? <span className="text-[10px] text-[#2196F3] font-bold">Actuel</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {switching ? <div className="flex justify-center pt-2"><Loader2 className="w-5 h-5 animate-spin text-[#2196F3]" /></div> : null}
+          <DriverVehiclePicker userKey={user?.id || user?.email} onClaimed={onClaimed} />
         </DialogContent>
       </Dialog>
     </div>
