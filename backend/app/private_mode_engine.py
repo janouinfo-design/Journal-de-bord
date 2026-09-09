@@ -25,6 +25,7 @@ from app.odometer_capability import (
     resolve_model, get_capability, VehicleOdometerCapability,
     vehicle_private_mode_allowed, get_pilot_capability,
     SOURCE_TELTONIKA_TOTAL_ODOMETER, AVL_TOTAL_ODOMETER, SCALE_VERIFIED,
+    CONFIRM_STRATEGY_FROZEN_POSITION, CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
 )
 
 logger = logging.getLogger(__name__)
@@ -183,12 +184,52 @@ async def _default_confirm(tracker_id: int, expected_state: str) -> tuple[Option
 # (gps.updated progresse à nouveau après l'envoi de la commande OFF).
 # ---------------------------------------------------------------------------
 def _model_supports_telemetry_confirm(capability) -> bool:
-    """La confirmation télémétrique n'est autorisée que pour un profil FIELD_VALIDATED
-    (aujourd'hui : FMC003 prouvé terrain). Jamais généralisée à un modèle non validé."""
+    """La confirmation télémétrique n'est autorisée que pour un profil FIELD_VALIDATED.
+    Deux cas (jamais généralisé automatiquement) :
+      - FMC003 prouvé terrain (comportement existant, gel de position) ;
+      - tout tracker field_validated avec stratégie explicite LAST_KNOWN_POSITION (ex FMC130 781479).
+    """
     if not capability:
         return False
-    model = getattr(capability, "device_model", None)
-    return bool(getattr(capability, "field_validated", False)) and str(model).upper() == "FMC003"
+    if not getattr(capability, "field_validated", False):
+        return False
+    model = str(getattr(capability, "device_model", "") or "").upper()
+    strategy = getattr(capability, "private_confirmation_strategy", None)
+    if model == "FMC003":
+        return True                                   # comportement existant INCHANGÉ
+    if strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION:
+        return True                                   # profil explicite (jamais tous les FMC130)
+    return False
+
+
+def _confirm_strategy(capability) -> str:
+    """Stratégie de confirmation effective d'une capability.
+    FMC003 sans stratégie explicite -> FROZEN_POSITION (comportement historique)."""
+    strat = getattr(capability, "private_confirmation_strategy", None)
+    if strat:
+        return strat
+    model = str(getattr(capability, "device_model", "") or "").upper()
+    return CONFIRM_STRATEGY_FROZEN_POSITION if model == "FMC003" else CONFIRM_STRATEGY_FROZEN_POSITION
+
+
+def _haversine_m(lat1, lng1, lat2, lng2) -> Optional[float]:
+    """Distance en mètres entre 2 points GPS. None si une coordonnée est invalide."""
+    try:
+        import math
+        a1, o1, a2, o2 = map(lambda v: math.radians(float(v)), (lat1, lng1, lat2, lng2))
+    except (TypeError, ValueError):
+        return None
+    import math
+    dlat = a2 - a1
+    dlng = o2 - o1
+    h = math.sin(dlat / 2) ** 2 + math.cos(a1) * math.cos(a2) * math.sin(dlng / 2) ** 2
+    return 2 * 6371000.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+# Rayons (m) : dans MASK_RADIUS = position "dernière connue" (masquée) ; au-delà de RESUME_MIN
+# = position réellement reprise (retour Business prouvé).
+_MASK_RADIUS_M = float(os.environ.get("PRIVATE_MASK_RADIUS_M", "200"))
+_RESUME_MIN_M = float(os.environ.get("PRIVATE_RESUME_MIN_M", "200"))
 
 
 async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
@@ -228,15 +269,20 @@ def _is_zero(lat, lng) -> bool:
 
 
 async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: str,
-                            command_sent_at_iso: Optional[str], capability) -> tuple[Optional[str], str]:
+                            command_sent_at_iso: Optional[str], capability,
+                            *, state_doc: Optional[dict] = None,
+                            read_odo_km: Optional[Callable[[int], Awaitable[Optional[float]]]] = None
+                            ) -> tuple[Optional[str], str]:
     """Tente de confirmer l'état RÉEL du device par télémétrie (Niveau C).
 
-    Retour (confirmed_state|None, source) :
-      - (PRIVATE,  TELEMETRY_CONFIRMED) si position GELÉE (ou 0,0) alors que device actif,
-        et le gel est APOSTÉRIEUR à l'envoi de la commande.
-      - (BUSINESS, TELEMETRY_CONFIRMED) si position REPRISE (gps.updated > command_sent_at).
-      - (None, UNCONFIRMED) si pas de preuve suffisante (reste PENDING).
-    Gated : profil field_validated (FMC003). Anti-stale : compare à command_sent_at.
+    Deux stratégies (gated par capability field_validated) :
+      - FROZEN_POSITION (FMC003) : PRIVATE si position 0,0 ou gelée depuis l'envoi (device actif).
+      - LAST_KNOWN_POSITION (FMC130 781479) : gps_updated peut bouger, mais les coordonnées
+        RESTENT au voisinage de l'ancre d'entrée (masquées) TANDIS QUE l'AVL16 AUGMENTE.
+    BUSINESS : position postérieure à l'envoi OFF, coords réelles ; si une ancre PRIVATE existe,
+    la position doit être SORTIE du voisinage masqué (> RESUME_MIN) pour confirmer.
+    Un simple `applied:true` Navixy n'est JAMAIS une preuve. Anti-stale : compare à command_sent_at.
+    Retour (confirmed_state|None, source).
     """
     if not _model_supports_telemetry_confirm(capability):
         return None, SRC_UNCONFIRMED
@@ -246,20 +292,55 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
     sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
     gps_upd = _parse(st.get("gps_updated"))
     active = (st.get("movement_status") == "moving") or st.get("ignition")
+    strategy = _confirm_strategy(capability)
+    sd = state_doc or {}
 
+    # ----- Stratégie LAST_KNOWN_POSITION (profil FMC130 781479 field-validated) -----
+    if strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION:
+        anchor_lat = sd.get("private_gps_anchor_lat")
+        anchor_lng = sd.get("private_gps_anchor_lng")
+        cur_lat, cur_lng = st.get("lat"), st.get("lng")
+
+        if requested_state == PRIVATE:
+            # AVL16 doit AUGMENTER depuis le snapshot de départ (roulage réel en privé).
+            odo_start = sd.get("private_start_odometer_km")
+            odo_now = await read_odo_km(int(tracker_id)) if read_odo_km else None
+            odo_increases = (odo_start is not None and odo_now is not None
+                             and float(odo_now) > float(odo_start))
+            if not (active and odo_increases):
+                return None, SRC_UNCONFIRMED
+            # Coordonnées MASQUÉES : 0,0 OU au voisinage de l'ancre (dernière position connue).
+            if _is_zero(cur_lat, cur_lng):
+                return PRIVATE, SRC_TELEMETRY
+            if anchor_lat is not None and anchor_lng is not None:
+                d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
+                if d is not None and d <= _MASK_RADIUS_M:
+                    return PRIVATE, SRC_TELEMETRY
+            # position réellement en mouvement (loin de l'ancre) -> PAS masqué -> non confirmé
+            return None, SRC_UNCONFIRMED
+
+        if requested_state == BUSINESS:
+            if not (sent and gps_upd and gps_upd > sent):
+                return None, SRC_UNCONFIRMED
+            if _is_zero(cur_lat, cur_lng):
+                return None, SRC_UNCONFIRMED
+            # Si ancre connue : exiger que la position soit SORTIE du voisinage masqué.
+            if anchor_lat is not None and anchor_lng is not None:
+                d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
+                if d is None or d < _RESUME_MIN_M:
+                    return None, SRC_UNCONFIRMED
+            return BUSINESS, SRC_TELEMETRY
+        return None, SRC_UNCONFIRMED
+
+    # ----- Stratégie FROZEN_POSITION (FMC003 — comportement existant INCHANGÉ) -----
     if requested_state == PRIVATE:
-        # Preuve PRIVATE : position 0,0 (masquée) OU position gelée depuis l'envoi (gps_updated
-        # antérieur/égal à l'envoi) alors que le device est actif (roule/contact).
         if _is_zero(st.get("lat"), st.get("lng")):
             return PRIVATE, SRC_TELEMETRY
         if sent and gps_upd and gps_upd <= sent and active:
-            # la position n'a pas progressé depuis la commande, mais le véhicule bouge -> gel = masqué
             return PRIVATE, SRC_TELEMETRY
         return None, SRC_UNCONFIRMED
 
     if requested_state == BUSINESS:
-        # Preuve BUSINESS : position reprise -> gps_updated STRICTEMENT postérieur à l'envoi OFF,
-        # avec coordonnées réelles (pas 0,0).
         if sent and gps_upd and gps_upd > sent and not _is_zero(st.get("lat"), st.get("lng")):
             return BUSINESS, SRC_TELEMETRY
         return None, SRC_UNCONFIRMED
@@ -380,6 +461,15 @@ async def request_mode(
         base["private_start_time"] = _now()
         base["private_start_odometer_km"] = odo_start
         base["odometer_source"] = SOURCE_TELTONIKA_TOTAL_ODOMETER
+        # Ancre GPS de dernière position connue (stratégie LAST_KNOWN_POSITION) — INTERNE :
+        # sert uniquement à confirmer/masquer, jamais exposée au frontend. Best-effort.
+        try:
+            gps0 = await _fetch_gps_state(tid, int(tracker_id))
+        except Exception:
+            gps0 = None
+        if gps0 and gps0.get("lat") is not None and gps0.get("lng") is not None:
+            base["private_gps_anchor_lat"] = gps0.get("lat")
+            base["private_gps_anchor_lng"] = gps0.get("lng")
 
     await _save_mode_state(db, {**cur, **base, "state": requested_state})
 
@@ -489,7 +579,8 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
     vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
 
     confirmed, source = await telemetry_confirm(
-        tid, int(tracker_id), requested, st.get("command_sent_at"), vc)
+        tid, int(tracker_id), requested, st.get("command_sent_at"), vc,
+        state_doc=st, read_odo_km=read_odo_km)
 
     if confirmed == requested:
         new_doc = {**st, "state": requested, "confirmation_source": source,
@@ -502,6 +593,10 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
             new_doc["private_end_odometer_km"] = odo_end
             new_doc["private_distance_km"] = _private_distance(
                 st.get("private_start_odometer_km"), odo_end)
+        # Nettoyage des coordonnées d'ancre (usage interne de confirmation uniquement).
+        if requested == BUSINESS:
+            new_doc.pop("private_gps_anchor_lat", None)
+            new_doc.pop("private_gps_anchor_lng", None)
         await _save_mode_state(db, new_doc)
         await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
                           "requested_mode": requested, "resulting_state": requested,

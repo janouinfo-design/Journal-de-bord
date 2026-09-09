@@ -93,6 +93,16 @@ SCALE_UNVERIFIED = "UNVERIFIED"
 SCALE_RUNTIME_PENDING = "RUNTIME_PENDING"   # forte présomption /1000, à confirmer via API + incrément
 SCALE_VERIFIED = "VERIFIED"
 
+# ---------------------------------------------------------------------------
+# Stratégie de CONFIRMATION du Mode Privé par télémétrie (par tracker field-validated).
+# - FROZEN_POSITION  : la position transmise GÈLE en privé (profil FMC003 prouvé terrain).
+# - LAST_KNOWN_POSITION : gps_updated peut continuer, MAIS les coordonnées restent sur la
+#   dernière position connue (masquée) tandis que l'AVL16 continue d'augmenter (profil FMC130
+#   781479 prouvé terrain, config 11813=2). Jamais généralisé automatiquement à tous les FMC130.
+# ---------------------------------------------------------------------------
+CONFIRM_STRATEGY_FROZEN_POSITION = "FROZEN_POSITION"
+CONFIRM_STRATEGY_LAST_KNOWN_POSITION = "LAST_KNOWN_POSITION"
+
 
 @dataclass
 class HardwareOdometerCapability:
@@ -321,6 +331,9 @@ class VehicleOdometerCapability:
     private_increment_verified: bool = False     # continue quand GPS masqué (D3-B)
     field_validated: bool = False                # D3 terrain PASS complet
     capability: str = CAP_NOT_TESTED             # CAP_* (statut lisible)
+    # Stratégie de confirmation télémétrique du Mode Privé (par tracker field-validated).
+    # None = pas de confirmation télémétrique dédiée (fallback profil modèle, ex FMC003).
+    private_confirmation_strategy: Optional[str] = None   # CONFIRM_STRATEGY_*
     # rétro-compat : ancien champ 'source_type'/'unit'/'last_value'/'last_timestamp'
     source_type: str = "UNKNOWN"
     unit: Optional[str] = None

@@ -279,3 +279,172 @@ def test_production_simulation_impossible(monkeypatch):
     # restore dev for other tests
     monkeypatch.setenv("APP_ENV", "development")
     importlib.reload(pm)
+
+
+# ===========================================================================
+# STRATÉGIE LAST_KNOWN_POSITION (FMC130 781479 field-validated) — D3 PASS.
+# Jamais généralisée : exige field_validated ET private_confirmation_strategy explicite.
+# _fetch_gps_state MOCKÉ ; read_odo MOCKÉ. Aucun réseau, aucune commande device.
+# ===========================================================================
+from app.odometer_capability import CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+
+FMC130_LKP_VC = VehicleOdometerCapability(
+    vehicle_id="v130", tracker_id=781479, device_model="FMC130",
+    private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
+    navixy_input="avl_io_16", navixy_sensor_id=5577108, scale_status=SCALE_VERIFIED,
+    runtime_verified=True, cumulative_verified=True, private_increment_verified=True,
+    field_validated=True, private_confirmation_strategy=CONFIRM_STRATEGY_LAST_KNOWN_POSITION)
+
+FMC130_NO_STRATEGY_VC = VehicleOdometerCapability(
+    vehicle_id="v130", tracker_id=781479, device_model="FMC130",
+    private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
+    navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
+    runtime_verified=True, cumulative_verified=True, private_increment_verified=True,
+    field_validated=True, private_confirmation_strategy=None)   # pas de stratégie -> jamais confirmé
+
+FMC130_NOT_VALIDATED_VC = VehicleOdometerCapability(
+    vehicle_id="v130", tracker_id=781479, device_model="FMC130",
+    private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
+    navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
+    runtime_verified=True, cumulative_verified=True, private_increment_verified=True,
+    field_validated=False, private_confirmation_strategy=CONFIRM_STRATEGY_LAST_KNOWN_POSITION)
+
+ANCHOR = {"lat": 46.5000, "lng": 6.6000}
+NEAR = {"lat": 46.50010, "lng": 6.60010}   # ~ 13 m de l'ancre (masqué)
+FAR = {"lat": 46.5120, "lng": 6.6200}      # > 1 km (position reprise)
+
+
+def _mock_gps(monkeypatch, *, lat, lng, gps_updated, moving=True, ignition=True):
+    async def fake_state(tenant, tracker):
+        return {"connection_status": "active",
+                "movement_status": "moving" if moving else "parked",
+                "ignition": ignition, "gps_updated": gps_updated,
+                "speed": 30 if moving else 0, "lat": lat, "lng": lng}
+    monkeypatch.setattr(pm, "_fetch_gps_state", fake_state)
+
+
+def _odo(seq):
+    it = iter(seq)
+    async def _r(tid):
+        try:
+            return next(it)
+        except StopIteration:
+            return seq[-1]
+    return _r
+
+
+# 1. FMC130 sans field_validated -> jamais confirmé
+def test_lkp_not_validated_never_confirms(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=NEAR["lat"], lng=NEAR["lng"], gps_updated=_iso(datetime.now(timezone.utc)))
+    sd = {"private_start_odometer_km": 56443.20,
+          "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, _iso(sent),
+                      FMC130_NOT_VALIDATED_VC, state_doc=sd, read_odo_km=_odo([56444.22])))
+    assert state is None and src == pm.SRC_UNCONFIRMED
+
+
+# 2. FMC130 field-validé mais SANS stratégie -> jamais généralisé
+def test_lkp_no_strategy_never_generalized(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=NEAR["lat"], lng=NEAR["lng"], gps_updated=_iso(datetime.now(timezone.utc)))
+    sd = {"private_start_odometer_km": 56443.20,
+          "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, _iso(sent),
+                      FMC130_NO_STRATEGY_VC, state_doc=sd, read_odo_km=_odo([56444.22])))
+    assert state is None and src == pm.SRC_UNCONFIRMED
+
+
+# 3. LAST_KNOWN_POSITION + coords proches ancre + AVL16 augmente -> PRIVATE confirmé
+def test_lkp_private_confirmed_masked_position_avl16_increases(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=NEAR["lat"], lng=NEAR["lng"], gps_updated=_iso(datetime.now(timezone.utc)))
+    sd = {"private_start_odometer_km": 56443.20,
+          "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, _iso(sent),
+                      FMC130_LKP_VC, state_doc=sd, read_odo_km=_odo([56444.22])))  # +1.02 km
+    assert state == pm.PRIVATE and src == pm.SRC_TELEMETRY
+
+
+# 4. coords proches mais AVL16 n'augmente pas -> UNCONFIRMED
+def test_lkp_private_unconfirmed_when_avl16_flat(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=NEAR["lat"], lng=NEAR["lng"], gps_updated=_iso(datetime.now(timezone.utc)))
+    sd = {"private_start_odometer_km": 56443.20,
+          "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, _iso(sent),
+                      FMC130_LKP_VC, state_doc=sd, read_odo_km=_odo([56443.20])))  # inchangé
+    assert state is None and src == pm.SRC_UNCONFIRMED
+
+
+# 5. position qui continue réellement le trajet (loin de l'ancre) en PRIVATE -> UNCONFIRMED
+def test_lkp_private_unconfirmed_when_position_moves_away(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=FAR["lat"], lng=FAR["lng"], gps_updated=_iso(datetime.now(timezone.utc)))
+    sd = {"private_start_odometer_km": 56443.20,
+          "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, _iso(sent),
+                      FMC130_LKP_VC, state_doc=sd, read_odo_km=_odo([56444.22])))
+    assert state is None and src == pm.SRC_UNCONFIRMED
+
+
+# 6. BUSINESS : position post-OFF sortie du voisinage masqué -> confirmé BUSINESS
+def test_lkp_business_confirmed_when_position_resumes(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=FAR["lat"], lng=FAR["lng"],
+              gps_updated=_iso(sent + timedelta(seconds=10)))
+    sd = {"private_start_odometer_km": 56443.20,
+          "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(sent),
+                      FMC130_LKP_VC, state_doc=sd, read_odo_km=_odo([56444.54])))
+    assert state == pm.BUSINESS and src == pm.SRC_TELEMETRY
+
+
+# 6b. BUSINESS : position toujours dans le voisinage masqué -> pas encore confirmé
+def test_lkp_business_unconfirmed_if_still_masked(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    _mock_gps(monkeypatch, lat=NEAR["lat"], lng=NEAR["lng"],
+              gps_updated=_iso(sent + timedelta(seconds=10)))
+    sd = {"private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(sent),
+                      FMC130_LKP_VC, state_doc=sd, read_odo_km=_odo([56444.54])))
+    assert state is None and src == pm.SRC_UNCONFIRMED
+
+
+# 7. distance privée = delta AVL16 uniquement (resolve_pending BUSINESS, LKP)
+def test_lkp_resolve_pending_business_distance_from_avl16(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=20)
+    db = _DB()
+    _run(db.vehicles.update_one({"id": "v130"}, {"$set": {
+        "id": "v130", "tenant_id": "default", "model": "telfmu130_fmc130",
+        "navixy_tracker_id": 781479}}, upsert=True))
+    _run(pm.upsert_vehicle_capability(db, FMC130_LKP_VC))
+    doc = {"vehicle_id": "v130", "tenant_id": "default", "tracker_id": 781479,
+           "state": pm.PENDING_CONFIRMATION, "requested_target": pm.BUSINESS,
+           "command_sent_at": _iso(sent),
+           "private_start_odometer_km": 56443.20,
+           "private_gps_anchor_lat": ANCHOR["lat"], "private_gps_anchor_lng": ANCHOR["lng"]}
+    _run(db.private_mode_state.update_one({"vehicle_id": "v130"}, {"$set": doc}, upsert=True))
+    _mock_gps(monkeypatch, lat=FAR["lat"], lng=FAR["lng"], gps_updated=_iso(sent + timedelta(seconds=10)))
+    async def fake_odo(tid):
+        return 56444.54
+    st = _run(pm.resolve_pending_confirmation(db, "v130", "default", read_odo_km=fake_odo))
+    assert st["state"] == pm.BUSINESS
+    assert st["private_distance_km"] == round(56444.54 - 56443.20, 3)  # 1.34, delta AVL16 pur
+    # ancre nettoyée après confirmation BUSINESS
+    assert "private_gps_anchor_lat" not in st and "private_gps_anchor_lng" not in st
+
+
+# 10. Le mapping de commandes n'utilise jamais 11807 ni Deep Sleep 11000
+def test_no_11807_no_deep_sleep_in_commands():
+    for cmd in pm._CMD.values():
+        assert "11807" not in cmd
+        assert "11000" not in cmd
+
+
+# 12. FMC003 non-régression : la confirmation FROZEN_POSITION reste inchangée
+def test_fmc003_frozen_position_unchanged(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=30)
+    _mock_gps(monkeypatch, lat=46.5, lng=6.6, gps_updated=_iso(sent - timedelta(seconds=5)))
+    state, src = _run(pm.telemetry_confirm("default", 3657864, pm.PRIVATE, _iso(sent), FMC003_VC))
+    assert state == pm.PRIVATE and src == pm.SRC_TELEMETRY
