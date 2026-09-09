@@ -45,7 +45,8 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
     # Fail-closed & honnête : indispo -> None (UI affiche N/A). Aucune écriture, aucune commande.
     telematics_km = None
     last_update = None
-    source = oc.SOURCE_TELTONIKA_AVL16
+    source = oc.SOURCE_TELTONIKA_TOTAL_ODOMETER   # valeur canonique interne (jamais TELTONIKA_AVL16)
+    source_label = oc.AVL16_SOURCE_LABEL          # label d'affichage UI ("Teltonika AVL16")
     avl16_recent = False
     avl16_raw = None
     if supported:
@@ -82,6 +83,7 @@ async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles
         "supported": supported,
         "telematics_km": telematics_km,
         "source": source,
+        "source_label": source_label,
         "last_update": last_update,
         "avl16_recent": avl16_recent,
         "avl16_raw": avl16_raw,

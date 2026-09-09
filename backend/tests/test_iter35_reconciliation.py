@@ -19,6 +19,16 @@ def _login(creds):
     return r.json()["access_token"]
 
 
+def _active_vehicle_count(headers) -> int:
+    """Nombre réel de véhicules actifs du tenant (jamais codé en dur)."""
+    r = requests.get(f"{BASE_URL}/api/livre/vehicles", headers=headers, timeout=20)
+    assert r.status_code == 200, f"GET /vehicles {r.status_code}"
+    return sum(1 for v in r.json()
+               if v.get("active") is not False
+               and v.get("deleted") is not True
+               and v.get("archived") is not True)
+
+
 @pytest.fixture(scope="module")
 def admin_token():
     return _login(ADMIN)
@@ -42,13 +52,14 @@ def driver_h(driver_token):
 # -------- LIGNÉE PRIVATE-MODE --------
 
 class TestPrivateModeLineage:
-    def test_driver_vehicles_list(self, driver_h):
+    def test_driver_vehicles_list(self, driver_h, admin_h):
         r = requests.get(f"{BASE_URL}/api/livre/driver/vehicles", headers=driver_h, timeout=20)
         assert r.status_code == 200
         data = r.json()
         assert data.get("access_mode") == "ALL"
         vehicles = data.get("vehicles", [])
-        assert len(vehicles) == 18, f"Expected 18 vehicles ALL mode, got {len(vehicles)}"
+        expected = _active_vehicle_count(admin_h)
+        assert len(vehicles) == expected, f"Expected {expected} vehicles ALL mode, got {len(vehicles)}"
 
     def test_private_mode_gate_fail_closed(self, driver_h):
         # GET private-mode status
@@ -95,11 +106,12 @@ class TestEnergyVehicleAccess:
         )
         print(f"[CLEANUP] restore ALL -> {r.status_code}")
 
-    def test_a_get_18_vehicles_all(self, driver_h):
+    def test_a_get_18_vehicles_all(self, driver_h, admin_h):
         r = requests.get(f"{BASE_URL}/api/livre/driver/vehicles", headers=driver_h, timeout=20)
         assert r.status_code == 200
         vehicles = r.json().get("vehicles", [])
-        assert len(vehicles) == 18
+        expected = _active_vehicle_count(admin_h)
+        assert len(vehicles) == expected, f"Expected {expected} vehicles, got {len(vehicles)}"
         # keep 2 for SELECTED mode
         TestEnergyVehicleAccess.two_vids = [v["id"] for v in vehicles[:2]]
         TestEnergyVehicleAccess.third_vid = vehicles[2]["id"]

@@ -26,6 +26,16 @@ ADMIN_B = {"email": "admin-b@test.ch", "password": "testb123"}
 
 SETTINGS_URL = f"{API}/livre/energy/reconciliation/settings"
 EXPORT_URL = f"{API}/livre/energy/reconciliation/export.xlsx"
+
+
+def _active_vehicle_count(headers) -> int:
+    """Nombre réel de véhicules actifs du tenant (jamais codé en dur)."""
+    r = requests.get(f"{API}/livre/vehicles", headers=headers, timeout=20)
+    assert r.status_code == 200, f"GET /vehicles {r.status_code}"
+    return sum(1 for v in r.json()
+               if v.get("active") is not False
+               and v.get("deleted") is not True
+               and v.get("archived") is not True)
 PARAMS_YEAR = {"date_from": "2026-01-01", "date_to": "2026-12-31"}
 
 
@@ -224,7 +234,9 @@ class TestExport:
         assert "rapprochement_carburant_2026-01-01_2026-12-31.xlsx" in r.headers["content-disposition"]
         ws = _load_ws(r)
         rows = _data_rows(ws)
-        assert len(rows) == 18, "les 18 véhicules (y compris non mappés) doivent être exportés"
+        expected = _active_vehicle_count(admin_h)
+        assert len(rows) == expected, \
+            f"tous les véhicules actifs ({expected}, y compris non mappés) doivent être exportés"
 
     def test_metadata_header(self, admin_h):
         ws = _load_ws(_export(admin_h))

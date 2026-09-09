@@ -31,6 +31,16 @@ LECTURE = {"email": "lecture@logitrak.ch", "password": "lecture123"}
 ADMIN_B = {"email": "admin-b@test.ch", "password": "testb123"}
 
 CONFIG_URL = f"{API}/livre/energy/reconciliation/alerts/config"
+
+
+def _active_vehicle_count(headers) -> int:
+    """Nombre réel de véhicules actifs du tenant (jamais codé en dur)."""
+    r = requests.get(f"{API}/livre/vehicles", headers=headers, timeout=20)
+    assert r.status_code == 200, f"GET /vehicles {r.status_code}"
+    return sum(1 for v in r.json()
+               if v.get("active") is not False
+               and v.get("deleted") is not True
+               and v.get("archived") is not True)
 CAND_URL = f"{API}/livre/energy/reconciliation/alerts/candidates"
 GEN_URL = f"{API}/livre/energy/reconciliation/alerts/candidates/generate"
 PDF_URL = f"{API}/livre/energy/reconciliation/export.pdf"
@@ -346,10 +356,12 @@ class TestPdfExportE2E:
             assert "Module Énergie non connecté" in text
         assert "jamais assimilée à zéro" in text
 
-    def test_all_18_vehicles_including_unmapped(self, pdf_default, preview):
+    def test_all_18_vehicles_including_unmapped(self, pdf_default, preview, admin_h):
         text = _pdf_text(pdf_default.content)
         plates = [r["plate"] for r in preview["rows"] if r.get("plate")]
-        assert len(preview["rows"]) == 18
+        expected = _active_vehicle_count(admin_h)
+        assert len(preview["rows"]) == expected, \
+            f"Expected {expected} rows (véhicules actifs), got {len(preview['rows'])}"
         for p in plates:
             assert p in text, f"plaque {p} absente du PDF"
         assert "Non mappé" in text, "les véhicules non mappés doivent rester visibles"

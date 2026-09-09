@@ -17,6 +17,16 @@ BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL")
             or frontend_env.get("REACT_APP_BACKEND_URL")).rstrip("/")
 API = f"{BASE_URL}/api"
 
+
+def _active_vehicle_count(headers) -> int:
+    """Nombre réel de véhicules actifs du tenant (jamais codé en dur)."""
+    r = requests.get(f"{API}/livre/vehicles", headers=headers, timeout=20)
+    assert r.status_code == 200, f"GET /vehicles {r.status_code}"
+    return sum(1 for v in r.json()
+               if v.get("active") is not False
+               and v.get("deleted") is not True
+               and v.get("archived") is not True)
+
 ADMIN = {"email": "admin@logitrak.ch", "password": "admin123"}
 MANAGER = {"email": "manager@logitrak.ch", "password": "manager123"}
 DRIVER = {"email": "chauffeur@logitrak.ch", "password": "chauffeur123"}
@@ -121,13 +131,15 @@ class TestStatusLogic:
 # E2E — Energy NON CONNECTÉ (défaut)
 # ---------------------------------------------------------------------------
 class TestPreviewE2E:
-    def test_shape_and_flags(self, preview):
+    def test_shape_and_flags(self, preview, admin_h):
         assert preview["preview"] is True
         assert preview["alerting"] == "disabled"
         assert preview["thresholds"]["configured"] is False
         assert preview["thresholds"]["percent"] is None
         assert preview["thresholds"]["liters"] is None
-        assert len(preview["rows"]) == 18
+        expected = _active_vehicle_count(admin_h)
+        assert len(preview["rows"]) == expected, \
+            f"Expected {expected} rows (véhicules actifs), got {len(preview['rows'])}"
 
     def test_all_impossible_when_disconnected(self, preview):
         if preview["mode"] == "fixture":
