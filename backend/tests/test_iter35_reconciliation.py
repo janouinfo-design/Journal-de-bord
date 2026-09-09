@@ -7,7 +7,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://trip-classifier-2.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
 ADMIN = {"email": "admin@logitrak.ch", "password": "admin123"}
 DRIVER = {"email": "chauffeur@logitrak.ch", "password": "chauffeur123"}
 DRIVER_ID = "1580345e-6b8e-45a2-88e7-513a008b6b12"

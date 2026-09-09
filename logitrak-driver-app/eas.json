@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://private-mode-debug.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://github-import-138.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,7 +25,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://private-mode-debug.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://github-import-138.preview.emergentagent.com"
       }
     },
     "production": {

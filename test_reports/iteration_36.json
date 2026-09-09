@@ -19,7 +19,7 @@
   ],
   "updated_files": [],
   "success_rate": {"backend": "N/A (non testé, non modifié)", "frontend": "100% (6/6)"},
-  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (Jean Dupont, driver_id=1580345e-6b8e-45a2-88e7-513a008b6b12) ; admin@logitrak.ch/admin123",
+  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (Jean Dupont, driver_id=github-import-138) ; admin@logitrak.ch/admin123",
   "seed_data_creation": "Aucune. Modifications temporaires du vehicle-access de Jean Dupont (ALL→default_vid→SELECTED[]→ALL), toutes RESTAURÉES à l'état initial (mode=ALL, allowed_vehicle_ids=[], default_vehicle_id=null) en fin de run.",
   "retest_needed": false,
   "should_main_agent_self_test": false,

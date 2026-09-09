@@ -24,7 +24,7 @@
   ],
   "updated_files": [],
   "success_rate": {"backend": "100%", "frontend": "100%"},
-  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (driver_id=1580345e-6b8e-45a2-88e7-513a008b6b12, user_id=17224b4f-2925-4d80-99fe-07970a7f4a06); admin@logitrak.ch/admin123",
+  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (driver_id=github-import-138, user_id=github-import-138); admin@logitrak.ch/admin123",
   "seed_data_creation": "None. Only PUT vehicle-access mutations, fully reverted to mode=ALL at end.",
   "retest_needed": false,
   "should_main_agent_self_test": false,

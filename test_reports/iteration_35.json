@@ -29,7 +29,7 @@
   ],
   "updated_files": ["/app/backend/tests/test_iter35_reconciliation.py"],
   "success_rate": {"backend": "100% (12/12)", "frontend": "100%"},
-  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (Jean Dupont, driver_id=1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch/admin123",
+  "test_credentials": "chauffeur@logitrak.ch/chauffeur123 (Jean Dupont, driver_id=github-import-138), admin@logitrak.ch/admin123",
   "seed_data_creation": "Aucune. Uniquement PUT vehicle-access temporaire (SELECTED → ALL), restauré via fixture teardown.",
   "retest_needed": false,
   "should_main_agent_self_test": false,
