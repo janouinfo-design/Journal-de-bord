@@ -269,3 +269,11 @@ real_energy_validated (false).
 - t15 (driver_vehicle_access) : baseline filtré `^TEST-` (artefacts d'autres suites exclus) ; 2 orphelins TEST-ASGN purgés ; hygiène anti-accumulation ajoutée au module fines.
 - RÉGRESSION FINALE : **845 PASS / 0 FAIL / 3 skip** (409 s). Post-run : 0 commande real+success, 0 private, navixy_api_url restaurée, 4 assignments navixy réels intacts.
 - Rien déployé ; prod reste sur 0aad5fd (contient déjà correctifs A+B Console Chauffeur + hotfix odomètre).
+
+## 9 juin 2026 — App mobile : P0+P1 (picker autoritaire, périmètre, WebSocket)
+- Audit écran par écran mobile vs backend : 3 écarts (picker manuel sur /driver/my-vehicles = bug Orhan reproduit en live ; flotte globale /livre/vehicles exposée en mode BLE/VehiclePicker ; WS token en query param → 4401 systématique).
+- P0 : DriverScreenManual → GET /driver/vehicles exclusif ; états loading/error(Réessayer)/vide distincts ; pré-sélection (actuel autorisé > défaut autorisé > unique, jamais le 1er arbitraire — module pur src/utils/driverVehicleSelection.ts, parité web T1–T10) ; claim explicite « Je conduis ce véhicule » ; auto-ouverture si aucun véhicule ; badge mode ALL/SELECTED/SINGLE (SINGLE verrouillé).
+- P1 : vehiclesStore réécrit sur /driver/vehicles (fail-closed, accessMode/defaultVehicleId exposés) → recherche/récents/VehiclePicker/mode BLE tous scopés ; getVehicles+getMyVehicles supprimés de l'API mobile.
+- P1 WS : buildRealtimeConnection (token JAMAIS dans l'URL, header Authorization via 3e arg WebSocket RN) ; close 4401 → attente plafond 30s (pas de boucle agressive).
+- Tests : 73/73 PASS (15 nouveaux : sélection T1–T10, store SELECTED/EMPTY/ERROR fail-closed, garde statique anti /livre/vehicles + /driver/my-vehicles, WS sans token dans URL). tsc propre. Backend : 0 fichier modifié (845/0/3 intact).
+- Reste : validation réelle sur téléphone (Expo Go mode manuel, puis BLE en dev build).

@@ -112,6 +112,12 @@ export function VehiclePickerScreen() {
             <Text style={styles.retryText}>Réessayer</Text>
           </TouchableOpacity>
         </View>
+      ) : !loading && !error && vehicles.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={styles.emptyText} testID="vehicle-none-authorized">
+            Aucun véhicule autorisé pour votre compte. Contactez un administrateur.
+          </Text>
+        </View>
       ) : (
         <FlatList
           data={results}

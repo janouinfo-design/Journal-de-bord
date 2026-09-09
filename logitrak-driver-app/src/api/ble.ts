@@ -114,16 +114,23 @@ export type Vehicle = {
   mode?: string;
 };
 
-// Liste des véhicules de la flotte (source des vehicle_id réels pour « Je conduis »).
-export async function getVehicles(): Promise<Vehicle[]> {
-  const { data } = await apiClient.get('/api/livre/vehicles');
-  return (Array.isArray(data) ? data : []) as Vehicle[];
-}
+// Périmètre véhicules AUTORISÉ du chauffeur — SOURCE D'AUTORITÉ EXCLUSIVE côté app.
+// Modes : ALL (tous les véhicules actifs du tenant), SELECTED (liste explicite),
+// SINGLE (véhicule attitré, sélection verrouillée). Jamais de liste globale de repli.
+export type DriverVehicleAccess = {
+  access_mode: 'ALL' | 'SELECTED' | 'SINGLE';
+  default_vehicle_id: string | null;
+  vehicles: Vehicle[];
+};
 
-// Véhicules AFFECTÉS au chauffeur (sélection manuelle, mode sans BLE).
-export async function getMyVehicles(): Promise<Vehicle[]> {
-  const { data } = await apiClient.get('/api/livre/driver/my-vehicles');
-  return (data?.vehicles ?? []) as Vehicle[];
+export async function getDriverVehicles(): Promise<DriverVehicleAccess> {
+  const { data } = await apiClient.get('/api/livre/driver/vehicles');
+  const mode = data?.access_mode;
+  return {
+    access_mode: mode === 'SELECTED' || mode === 'SINGLE' ? mode : 'ALL',
+    default_vehicle_id: data?.default_vehicle_id ?? null,
+    vehicles: (data?.vehicles ?? []) as Vehicle[],
+  };
 }
 
 export type KmSummary = {

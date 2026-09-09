@@ -1,16 +1,18 @@
 import { create } from 'zustand';
-import { Vehicle, getVehicles } from '@/api/ble';
+import { Vehicle, DriverVehicleAccess, getDriverVehicles } from '@/api/ble';
 import { logger } from '@/utils/logger';
 
 /**
- * Store de la flotte de véhicules (source : GET /api/livre/vehicles, tenant-scopé côté serveur).
- * - Chargé une seule fois (liste mutualisée, pas d'appel par véhicule).
- * - Recherche LOCALE : insensible à la casse, tolérante aux espaces (plaque/marque/modèle).
- * - Prêt pour 6 / 50 / 100 / 200 véhicules (la virtualisation est gérée par FlatList côté écran).
+ * Store des véhicules AUTORISÉS du chauffeur (source : GET /api/livre/driver/vehicles).
+ * - Source d'autorité EXCLUSIVE côté chauffeur : jamais la flotte globale du tenant.
+ * - Fail-closed : en cas d'erreur, liste vide + erreur explicite (aucun repli global).
+ * - Recherche LOCALE : insensible à la casse, tolérante aux espaces (plaque/modèle).
  */
 
 type VehiclesState = {
   vehicles: Vehicle[];
+  accessMode: DriverVehicleAccess['access_mode'] | null;
+  defaultVehicleId: string | null;
   loading: boolean;
   error: string | null;
   loaded: boolean;
@@ -25,6 +27,8 @@ function norm(s: string | null | undefined): string {
 
 export const useVehiclesStore = create<VehiclesState>((set, get) => ({
   vehicles: [],
+  accessMode: null,
+  defaultVehicleId: null,
   loading: false,
   error: null,
   loaded: false,
@@ -34,18 +38,32 @@ export const useVehiclesStore = create<VehiclesState>((set, get) => ({
     if (get().loaded && !force) return; // cache : on ne recharge pas inutilement
     set({ loading: true, error: null });
     try {
-      const list = await getVehicles();
-      // Tri par plaque pour une liste lisible.
+      const access = await getDriverVehicles();
+      const list = [...access.vehicles];
       list.sort((a, b) => (a.plate || '').localeCompare(b.plate || ''));
-      set({ vehicles: list, loading: false, loaded: true });
+      set({
+        vehicles: list,
+        accessMode: access.access_mode,
+        defaultVehicleId: access.default_vehicle_id,
+        loading: false,
+        loaded: true,
+      });
     } catch (e: any) {
-      const msg = e?.response?.data?.detail || 'Impossible de charger la liste des véhicules.';
+      const msg = e?.response?.data?.detail || 'Impossible de charger les véhicules.';
       logger.warn('vehicles', 'load failed', e);
-      set({ loading: false, error: msg });
+      // Fail-closed : aucune liste résiduelle en cas d'erreur.
+      set({
+        vehicles: [],
+        accessMode: null,
+        defaultVehicleId: null,
+        loading: false,
+        loaded: false,
+        error: msg,
+      });
     }
   },
 
-  // Recherche locale multi-champs. Une requête vide renvoie toute la flotte.
+  // Recherche locale multi-champs. Une requête vide renvoie tout le périmètre autorisé.
   search: (query: string) => {
     const q = norm(query);
     const all = get().vehicles;
