@@ -283,41 +283,132 @@ def _parse_ts(ts):
 
 
 async def _fetch_sensor_last_value(tenant_id: str, tracker_id: int, sensor_id: int) -> Optional[dict]:
-    """Lit la DERNIÈRE valeur normalisée d'un sensor metering Navixy (READ-ONLY).
+    """Lit la DERNIÈRE valeur normalisée du sensor AVL16 Navixy (READ-ONLY).
 
-    Utilise `tracker/sensor/data/read` (endpoint historique, lecture seule) sur une
-    fenêtre courte, et retourne le point le plus récent. Ne logge/expose jamais le credential.
+    Priorité :
+      1. `tracker/readings/list` : état LIVE réellement reçu du tracker ;
+      2. `tracker/sensor/data/read` : fallback historique.
+
+    IMPORTANT : `tracker/readings/list.value` est déjà la valeur normalisée du
+    sensor Navixy. Pour AVL16 avec le mapping actuel, elle est donc déjà en km.
+    Ne JAMAIS appliquer un second /1000 ici.
+
     Retour : {value, time} ou None si indisponible.
     """
     from datetime import timedelta
     from app.integrations import get_integration_credential
+    import httpx
+
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
         return None
-    base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
-            or "https://api.navixy.com/v2").rstrip("/")
-    now = datetime.now(timezone.utc)
-    # Fenêtre large (48 h) pour capter la dernière valeur même si peu de trames récentes.
-    d_from = (now - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
-    d_to = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
-    import httpx
+
+    base = (
+        cred.get("api_url")
+        or os.environ.get("NAVIXY_API_URL")
+        or "https://api.navixy.com/v2"
+    ).rstrip("/")
+
+    # ------------------------------------------------------------------
+    # 1. LIVE : tracker/readings/list
+    # ------------------------------------------------------------------
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{base}/tracker/sensor/data/read", json={
-                "hash": cred["credential"], "tracker_id": int(tracker_id),
-                "sensor_id": int(sensor_id), "from": d_from, "to": d_to,
-                "raw_data": False})
+            r = await c.post(
+                f"{base}/tracker/readings/list",
+                json={
+                    "hash": cred["credential"],
+                    "tracker_id": int(tracker_id),
+                },
+            )
+
+        if r.status_code == 200:
             data = r.json() or {}
+
+            if data.get("success") is True:
+
+                def _walk(obj):
+                    if isinstance(obj, dict):
+                        yield obj
+                        for value in obj.values():
+                            yield from _walk(value)
+                    elif isinstance(obj, list):
+                        for value in obj:
+                            yield from _walk(value)
+
+                for item in _walk(data):
+                    if not isinstance(item, dict):
+                        continue
+
+                    try:
+                        sid = int(item.get("sensor_id"))
+                    except (TypeError, ValueError):
+                        sid = None
+
+                    if sid != int(sensor_id):
+                        continue
+
+                    value = item.get("value")
+                    if value is None:
+                        continue
+
+                    ts = (
+                        item.get("update_time")
+                        or item.get("updated_at")
+                        or item.get("timestamp")
+                        or item.get("time")
+                        or item.get("get_time")
+                    )
+
+                    return {
+                        "value": value,
+                        "time": ts,
+                    }
+
+    except Exception:
+        # Fail-closed côté live ; on tente seulement le fallback historique.
+        pass
+
+    # ------------------------------------------------------------------
+    # 2. FALLBACK : tracker/sensor/data/read
+    # ------------------------------------------------------------------
+    now = datetime.now(timezone.utc)
+    d_from = (now - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+    d_to = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(
+                f"{base}/tracker/sensor/data/read",
+                json={
+                    "hash": cred["credential"],
+                    "tracker_id": int(tracker_id),
+                    "sensor_id": int(sensor_id),
+                    "from": d_from,
+                    "to": d_to,
+                    "raw_data": False,
+                },
+            )
+
+        data = r.json() or {}
+
     except Exception:
         return None
+
     vals = data.get("value") or data.get("list") or []
+
     if not isinstance(vals, list) or not vals:
         return None
+
     last = vals[-1]
+
     if not isinstance(last, dict):
         return None
-    return {"value": last.get("value"),
-            "time": last.get("time") or last.get("get_time")}
+
+    return {
+        "value": last.get("value"),
+        "time": last.get("time") or last.get("get_time"),
+    }
 
 
 async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
