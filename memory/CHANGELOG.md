@@ -260,3 +260,12 @@ real_energy_validated (false).
 - Correctif B : DriverConsolePage.jsx → picker inline remplacé par le composant autoritaire DriverVehiclePicker (GET /livre/driver/vehicles exclusif) dans la modal ; états erreur (Réessayer) / vide (« Aucun véhicule autorisé ») distincts ; pré-sélection du défaut si autorisé ; claim explicite ; auto-ouverture de la modal si aucun véhicule (ref autoOpenedRef). Anciens testids driver-picker-item-*/driver-picker-empty supprimés.
 - Backend NON modifié. Tests : unit 11/11, testing agent iteration_36 6/6 PASS, auto-open self-testé (compte temporaire créé puis supprimé), build prod OK (my-vehicles absent du bundle).
 - Déploiement prod : rebuild journal_frontend UNIQUEMENT requis (backend inchangé).
+
+## 9 juin 2026 (suite) — Resync hotfix + sécurisation tests + régression 0 FAIL
+- Resync workspace ← prod 0aad5fd : 4 fichiers backend (odometer_calibration, odometer_capability, private_mode_engine, routes/odometer_calibration) — byte-identiques (sha256 4/4 vérifiés contre prod).
+- 5 assertions `== 18` remplacées par comptage dynamique des véhicules actifs (4 fichiers de tests Energy/Reconciliation + iter35).
+- DÉCOUVERTE CRITIQUE : test_iteration6_privacy_enforcement appelait POST /privacy/kill-switch qui envoie TOUJOURS des commandes réelles ; la preview a un credential Navixy actif → des `setparam 11000:0` réels sont partis vers 8 trackers (12:49 et 13:53 UTC) lors des suites complètes (mécanisme présent depuis l'itération 6). Tracker 781479 vérifié READ-ONLY après coup : TRACKING, télémétrie fraîche, AVL16 vivant — pas de dégât.
+- Sécurisation (tests uniquement, kill_switch() produit INTACT) : (A) purge tracker_privacy_state en début de module ; (B) barrière anti-device-write = navixy_api_url tenant → sinkhole 127.0.0.1:9 pendant le module (posée/retirée via PATCH superadmin) ; (C) assert 0 cible private avant tout kill-switch ; + 3 tests de preuve dont kill-switch avec cible fictive → sent:0/errors:1.
+- t15 (driver_vehicle_access) : baseline filtré `^TEST-` (artefacts d'autres suites exclus) ; 2 orphelins TEST-ASGN purgés ; hygiène anti-accumulation ajoutée au module fines.
+- RÉGRESSION FINALE : **845 PASS / 0 FAIL / 3 skip** (409 s). Post-run : 0 commande real+success, 0 private, navixy_api_url restaurée, 4 assignments navixy réels intacts.
+- Rien déployé ; prod reste sur 0aad5fd (contient déjà correctifs A+B Console Chauffeur + hotfix odomètre).

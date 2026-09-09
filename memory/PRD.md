@@ -912,3 +912,8 @@ affectation manuelle, droits par rôle.
   (checkout branche réconciliée, PAS un pull de feat/private-mode-pilot) + patch .env Energy VPS.
 - RISQUE À GÉRER : si la session parallèle « Logitrak VPS » continue de committer sur
   feat/private-mode-pilot, une re-divergence apparaîtra — geler ou re-réconcilier avant déploiement.
+
+## État du socle technique — 9 juin 2026 (fin de phase)
+- Prod VPS : branche reconcile-energy-private-mode, HEAD 0aad5fd (correctifs A+B Console Chauffeur + hotfix odomètre + cache Energy). Workspace resynchronisé byte-identique sur les 4 fichiers du hotfix.
+- Régression backend complète : 845 PASS / 0 FAIL / 3 skip. Chemin tests→trackers réels fermé (barrière sinkhole + hygiène + garde 0 cible, preuves automatisées à chaque run).
+- Reste à faire (validation utilisateur) : contrôle terrain Console Chauffeur prod (Orhan : recharger → « Changer de véhicule » → 14 véhicules) ; relecture READ-ONLY du FMC130 781479 juste avant tout nouvel essai terrain PRO/PRIVÉ ; premier upload réel d'un justificatif d'amende pour valider Object Storage en prod.

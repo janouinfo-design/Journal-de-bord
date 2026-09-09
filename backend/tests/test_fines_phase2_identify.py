@@ -100,6 +100,14 @@ def cleanup_tracker():
 
 @pytest.fixture(scope="module", autouse=True)
 def _cleanup_after_module(cleanup_tracker, admin_s):
+    # Hygiène d'entrée : purge des artefacts TEST-ASGN-* orphelins laissés par
+    # d'anciens runs dont le cleanup silencieux a échoué (anti-accumulation).
+    async def _purge_orphans(db):
+        await db.assignments.delete_many({"id": {"$regex": "^TEST-ASGN-"}})
+    try:
+        _mongo_do(_purge_orphans)
+    except Exception:
+        pass
     yield
     for fid in cleanup_tracker["fine_ids"]:
         try:

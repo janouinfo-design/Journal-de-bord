@@ -64,8 +64,13 @@ def env(mongo):
     cross = {"id": f"va-cross-{tag}", "tenant_id": tenant_b,
              "plate": f"VA-CROSS-{tag}", "label": "Test cross-tenant"}
     mongo.vehicles.insert_many([dict(v) for v in vehicles] + [dict(inactive), dict(cross)])
+    # Baseline = affectations LÉGITIMES uniquement : les artefacts d'autres suites
+    # (ids TEST-*) sont exclus — ils subissent une churn (rétrogradation/suppression
+    # par test_iteration3, recréation par le sync) qui rendrait ce test non déterministe.
     baseline_assignment_ids = [a["id"] for a in
-                               mongo.assignments.find({}, {"_id": 0, "id": 1})]
+                               mongo.assignments.find(
+                                   {"id": {"$not": {"$regex": "^TEST-"}}},
+                                   {"_id": 0, "id": 1})]
     yield {"A": vehicles[0]["id"], "B": vehicles[1]["id"], "C": vehicles[2]["id"],
            "D": vehicles[3]["id"], "inactive": inactive["id"], "cross": cross["id"],
            "tenant_b": tenant_b, "baseline_assignment_ids": baseline_assignment_ids}
