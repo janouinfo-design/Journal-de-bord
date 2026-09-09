@@ -190,14 +190,16 @@ def test_t5_t6_delta_classification_pro_private():
     assert pro == 8.0
 
 
-# ---------- T7 : odomètre Navixy générique jamais utilisé (source explicite AVL16) ----------
-def test_t7_navixy_odometer_not_used_source_is_avl16():
+# ---------- T7 : source canonique TELTONIKA_TOTAL_ODOMETER (jamais TELTONIKA_AVL16) ----------
+def test_t7_navixy_odometer_not_used_source_is_canonical():
     db = _db_fmc130()
     _run(oc.calibrate_vehicle_odometer(
         db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
         send_command=_mock_send("REAL"), read_avl16_km=_mock_read([56377.978, 139620.0])))
     cap = _run(db.vehicle_private_capabilities.find_one({"tracker_id": 781479}))
-    assert cap["private_distance_source"] == oc.SOURCE_TELTONIKA_AVL16
+    # source PERSISTÉE = valeur canonique métier (cohérente avec la gate private-mode)
+    assert cap["private_distance_source"] == "TELTONIKA_TOTAL_ODOMETER"
+    assert cap["private_distance_source"] != "TELTONIKA_AVL16"   # jamais l'ancienne constante
     assert cap["raw_avl_id"] == 16 and cap["navixy_input"] == "avl_io_16"
     assert cap["divider"] == 1000.0 and cap["multiplier"] == 1.0
 
@@ -468,7 +470,7 @@ def test_live_t1_valid_sensor_value():
     res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
                fetch_sensor=_fetch_ok(56377.978)))
     assert res["value_km"] == 56377.978
-    assert res["source"] == oc.SOURCE_TELTONIKA_AVL16
+    assert res["source"] == "TELTONIKA_TOTAL_ODOMETER"   # source canonique (jamais TELTONIKA_AVL16)
     assert res["sensor_id"] == 5577108
 
 
@@ -570,3 +572,84 @@ def test_live_freshness_flag():
               fetch_sensor=_fetch_ok(56377.978, time=old_ts)))
     assert r1["recent"] is True
     assert r2["recent"] is False and r2["value_km"] == 56377.978  # ancienne mais visible
+
+
+# ===========================================================================
+# NORMALISATION SOURCE — une seule valeur canonique TELTONIKA_TOTAL_ODOMETER.
+# Objectif : aucune persistance de "TELTONIKA_AVL16" ; compat FMC003 + FMC130.
+# ===========================================================================
+from app.odometer_capability import SOURCE_TELTONIKA_TOTAL_ODOMETER as CANON, get_pilot_capability
+
+
+def test_src_t1_canonical_constant_is_total_odometer():
+    # L'ancien nom reste importable (rétro-compat) MAIS pointe sur la valeur canonique.
+    assert oc.SOURCE_TELTONIKA_AVL16 == CANON == "TELTONIKA_TOTAL_ODOMETER"
+    # Le label UI est distinct de la source métier.
+    assert oc.AVL16_SOURCE_LABEL == "Teltonika AVL16"
+
+
+def test_src_t2_t6_calibration_writes_canonical_mapping():
+    db = _db_fmc130()
+    _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_mock_send("REAL"), read_avl16_km=_mock_read([56377.978, 139620.0])))
+    cap = _run(db.vehicle_private_capabilities.find_one({"tracker_id": 781479}))
+    assert cap["private_distance_source"] == CANON        # T2 source canonique
+    assert cap["raw_avl_id"] == 16                          # T2 raw AVL
+    assert cap["navixy_input"] == "avl_io_16"               # T3 input
+    assert cap["navixy_sensor_id"] == 5577108               # T4 sensor
+    assert cap["multiplier"] == 1.0                          # T5 multiplier
+    assert cap["divider"] == 1000.0                          # T6 divider
+
+
+def test_src_t7_live_reader_source_canonical():
+    db = _db_fmc130()
+    res = _run(oc.read_live_avl16_km(db, tenant_id="default", vehicle_id="v130",
+               fetch_sensor=_fetch_ok(56377.978)))
+    assert res["source"] == CANON
+
+
+def test_src_t8_baseline_keeps_canonical_after_confirm():
+    db = _db_fmc130()
+    _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_mock_send("REAL"), read_avl16_km=_mock_read([56377.978, 139620.0])))
+    cap = _run(db.vehicle_private_capabilities.find_one({"tracker_id": 781479}))
+    assert cap["odometer_calibrated"] is True
+    assert cap["private_distance_source"] == CANON
+
+
+def test_src_t9_no_teltonika_avl16_string_persisted():
+    db = _db_fmc130()
+    _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_mock_send("REAL"), read_avl16_km=_mock_read([56377.978, 139620.0])))
+    cap = _run(db.vehicle_private_capabilities.find_one({"tracker_id": 781479}))
+    # Aucune valeur "TELTONIKA_AVL16" ne doit apparaître dans le doc persisté.
+    assert "TELTONIKA_AVL16" not in str(cap)
+
+
+def test_src_t11_fmc003_pilot_capability_unchanged():
+    # NON-RÉGRESSION : la capability FMC003 pilote (3657864) reste canonique et field_validated.
+    vc = get_pilot_capability(3657864)
+    assert vc is not None
+    assert vc.private_distance_source == CANON
+    assert vc.raw_avl_id == 16 and vc.navixy_input == "avl_io_16"
+    assert vc.field_validated is True   # FMC003 reste validé terrain (inchangé)
+
+
+def test_src_t12_fmc130_gate_source_matches_private_mode_requirement():
+    # La source écrite par la calibration = celle exigée par la gate private-mode.
+    from app.odometer_capability import VehicleOdometerCapability, vehicle_private_mode_allowed
+    db = _db_fmc130()
+    _run(oc.calibrate_vehicle_odometer(
+        db, tenant_id="default", vehicle_id="v130", dashboard_km=139620, actor="admin@x",
+        send_command=_mock_send("REAL"), read_avl16_km=_mock_read([56377.978, 139620.0])))
+    doc = _run(db.vehicle_private_capabilities.find_one({"tracker_id": 781479}))
+    allowed_fields = VehicleOdometerCapability.__dataclass_fields__.keys()
+    clean = {k: v for k, v in doc.items() if k in allowed_fields}
+    vc = VehicleOdometerCapability(**clean)
+    # La source est bien la valeur canonique attendue par la gate (mais field_validated reste False
+    # -> la gate refuse encore, ce qui est correct tant que le D_calibration terrain n'est pas fait).
+    assert vc.private_distance_source == CANON
+    assert vehicle_private_mode_allowed("FMC130", vc) is False  # field_validated False -> refus (OK)
