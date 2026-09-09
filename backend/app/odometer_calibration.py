@@ -47,8 +47,14 @@ PARAM_MIN_KM = 0
 PARAM_MAX_KM = 4_294_967           # borne Teltonika (Configurator)
 CONFIRM_TOLERANCE_KM = 1.0         # écart max toléré entre valeur demandée et AVL16 relu
 
-# --- Source de distance (profil AVL16 validé) ---
-SOURCE_TELTONIKA_AVL16 = "TELTONIKA_AVL16"
+# --- Source de distance : UNE seule valeur canonique métier ---
+# La source PERSISTÉE/interne est TELTONIKA_TOTAL_ODOMETER (importée d'odometer_capability),
+# cohérente avec la gate `vehicle_private_mode_allowed` et la capability FMC003 terrain.
+# `TELTONIKA_AVL16` n'est PLUS une source métier : c'est un simple LABEL d'affichage UI.
+# AVL16 (raw_avl_id=16 / avl_io_16) reste la REPRÉSENTATION télématique de cette source.
+AVL16_SOURCE_LABEL = "Teltonika AVL16"          # label UI/API uniquement (jamais persisté comme source)
+# Rétro-compat : alias pointant sur la valeur canonique (au cas où un import externe subsiste).
+SOURCE_TELTONIKA_AVL16 = SOURCE_TELTONIKA_TOTAL_ODOMETER
 
 # --- Marqueur d'évènement de calibration (rupture de baseline) ---
 CALIBRATION_EVENT = "CALIBRATION_EVENT"
@@ -277,41 +283,132 @@ def _parse_ts(ts):
 
 
 async def _fetch_sensor_last_value(tenant_id: str, tracker_id: int, sensor_id: int) -> Optional[dict]:
-    """Lit la DERNIÈRE valeur normalisée d'un sensor metering Navixy (READ-ONLY).
+    """Lit la DERNIÈRE valeur normalisée du sensor AVL16 Navixy (READ-ONLY).
 
-    Utilise `tracker/sensor/data/read` (endpoint historique, lecture seule) sur une
-    fenêtre courte, et retourne le point le plus récent. Ne logge/expose jamais le credential.
+    Priorité :
+      1. `tracker/readings/list` : état LIVE réellement reçu du tracker ;
+      2. `tracker/sensor/data/read` : fallback historique.
+
+    IMPORTANT : `tracker/readings/list.value` est déjà la valeur normalisée du
+    sensor Navixy. Pour AVL16 avec le mapping actuel, elle est donc déjà en km.
+    Ne JAMAIS appliquer un second /1000 ici.
+
     Retour : {value, time} ou None si indisponible.
     """
     from datetime import timedelta
     from app.integrations import get_integration_credential
+    import httpx
+
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
         return None
-    base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
-            or "https://api.navixy.com/v2").rstrip("/")
-    now = datetime.now(timezone.utc)
-    # Fenêtre large (48 h) pour capter la dernière valeur même si peu de trames récentes.
-    d_from = (now - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
-    d_to = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
-    import httpx
+
+    base = (
+        cred.get("api_url")
+        or os.environ.get("NAVIXY_API_URL")
+        or "https://api.navixy.com/v2"
+    ).rstrip("/")
+
+    # ------------------------------------------------------------------
+    # 1. LIVE : tracker/readings/list
+    # ------------------------------------------------------------------
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{base}/tracker/sensor/data/read", json={
-                "hash": cred["credential"], "tracker_id": int(tracker_id),
-                "sensor_id": int(sensor_id), "from": d_from, "to": d_to,
-                "raw_data": False})
+            r = await c.post(
+                f"{base}/tracker/readings/list",
+                json={
+                    "hash": cred["credential"],
+                    "tracker_id": int(tracker_id),
+                },
+            )
+
+        if r.status_code == 200:
             data = r.json() or {}
+
+            if data.get("success") is True:
+
+                def _walk(obj):
+                    if isinstance(obj, dict):
+                        yield obj
+                        for value in obj.values():
+                            yield from _walk(value)
+                    elif isinstance(obj, list):
+                        for value in obj:
+                            yield from _walk(value)
+
+                for item in _walk(data):
+                    if not isinstance(item, dict):
+                        continue
+
+                    try:
+                        sid = int(item.get("sensor_id"))
+                    except (TypeError, ValueError):
+                        sid = None
+
+                    if sid != int(sensor_id):
+                        continue
+
+                    value = item.get("value")
+                    if value is None:
+                        continue
+
+                    ts = (
+                        item.get("update_time")
+                        or item.get("updated_at")
+                        or item.get("timestamp")
+                        or item.get("time")
+                        or item.get("get_time")
+                    )
+
+                    return {
+                        "value": value,
+                        "time": ts,
+                    }
+
+    except Exception:
+        # Fail-closed côté live ; on tente seulement le fallback historique.
+        pass
+
+    # ------------------------------------------------------------------
+    # 2. FALLBACK : tracker/sensor/data/read
+    # ------------------------------------------------------------------
+    now = datetime.now(timezone.utc)
+    d_from = (now - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+    d_to = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(
+                f"{base}/tracker/sensor/data/read",
+                json={
+                    "hash": cred["credential"],
+                    "tracker_id": int(tracker_id),
+                    "sensor_id": int(sensor_id),
+                    "from": d_from,
+                    "to": d_to,
+                    "raw_data": False,
+                },
+            )
+
+        data = r.json() or {}
+
     except Exception:
         return None
+
     vals = data.get("value") or data.get("list") or []
+
     if not isinstance(vals, list) or not vals:
         return None
+
     last = vals[-1]
+
     if not isinstance(last, dict):
         return None
-    return {"value": last.get("value"),
-            "time": last.get("time") or last.get("get_time")}
+
+    return {
+        "value": last.get("value"),
+        "time": last.get("time") or last.get("get_time"),
+    }
 
 
 async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
@@ -325,7 +422,7 @@ async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
     Retour : {value_km, raw_value, timestamp, source, sensor_id, recent, reason?}
     """
     empty = {"value_km": None, "raw_value": None, "timestamp": None,
-             "source": SOURCE_TELTONIKA_AVL16, "sensor_id": None, "recent": False}
+             "source": SOURCE_TELTONIKA_TOTAL_ODOMETER, "sensor_id": None, "recent": False}
 
     vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0})
     if not vehicle:
@@ -363,7 +460,7 @@ async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
     # raw (mètres) reconstitué à titre indicatif (value normalisée × divider).
     raw_value = round(value_km * divider, 0) if value_km is not None else None
     return {"value_km": value_km, "raw_value": raw_value, "timestamp": ts,
-            "source": SOURCE_TELTONIKA_AVL16, "sensor_id": sensor_id, "recent": recent}
+            "source": SOURCE_TELTONIKA_TOTAL_ODOMETER, "sensor_id": sensor_id, "recent": recent}
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +485,7 @@ async def _update_capability_baseline(db, *, tracker_id: int, vehicle_id: str,
         "tracker_id": int(tracker_id),
         "vehicle_id": vehicle_id,
         "device_model": device_model,
-        "private_distance_source": SOURCE_TELTONIKA_AVL16,  # source explicite (jamais odomètre Navixy)
+        "private_distance_source": SOURCE_TELTONIKA_TOTAL_ODOMETER,  # source canonique (jamais odo générique)
         "raw_avl_id": AVL_TOTAL_ODOMETER,
         "navixy_input": "avl_io_16",
         "navixy_sensor_id": sensor_id,
