@@ -231,6 +231,83 @@ def _haversine_m(lat1, lng1, lat2, lng2) -> Optional[float]:
 _MASK_RADIUS_M = float(os.environ.get("PRIVATE_MASK_RADIUS_M", "200"))
 _RESUME_MIN_M = float(os.environ.get("PRIVATE_RESUME_MIN_M", "200"))
 
+# --- Confirmation LAST_KNOWN_POSITION : preuve par POSITION DOMINANTE multi-samples ---
+# Le masquage est prouvé par une position STABLE/RÉPÉTÉE sur plusieurs observations pendant
+# qu'AVL16 progresse (preuve terrain FMC130 781479 : 32/36 = 0.889). PAS par une distance à l'ancre.
+LKP_MIN_SAMPLES = int(os.environ.get("PRIVATE_LKP_MIN_SAMPLES", "5"))       # jamais sur 1 seul sample
+LKP_DOMINANT_MIN_RATIO = float(os.environ.get("PRIVATE_LKP_DOMINANT_RATIO", "0.7"))  # terrain 0.889
+LKP_DOMINANT_RADIUS_M = float(os.environ.get("PRIVATE_LKP_DOMINANT_RADIUS_M", "25"))  # jitter GPS toléré
+LKP_RESUME_MIN_M = float(os.environ.get("PRIVATE_LKP_RESUME_MIN_M", "30"))  # petit déplacement réel = reprise
+
+
+def _dominant_position(samples) -> tuple[Optional[float], int, int]:
+    """Cherche la POSITION DOMINANTE d'une liste de samples [{lat,lng},...].
+
+    Regroupe les samples à <= LKP_DOMINANT_RADIUS_M les uns des autres (cluster autour de chaque
+    point candidat) et retourne (ratio_dominant, count_dominant, total). Un point 0,0 est ignoré
+    du calcul de mouvement mais compté comme "masqué" ailleurs. Retour (None,0,0) si aucun point.
+    """
+    pts = [(s.get("lat"), s.get("lng")) for s in (samples or [])
+           if s.get("lat") is not None and s.get("lng") is not None]
+    total = len(pts)
+    if total == 0:
+        return None, 0, 0
+    best = 0
+    for cx, cy in pts:
+        c = 0
+        for lat, lng in pts:
+            d = _haversine_m(cx, cy, lat, lng)
+            if d is not None and d <= LKP_DOMINANT_RADIUS_M:
+                c += 1
+        best = max(best, c)
+    return (best / total), best, total
+
+
+def _samples_show_movement(samples) -> bool:
+    """True si les positions se DÉPLACENT réellement (progression GPS reprise) :
+    il existe au moins 2 samples distants de plus de LKP_RESUME_MIN_M (au-delà du jitter)."""
+    pts = [(s.get("lat"), s.get("lng")) for s in (samples or [])
+           if s.get("lat") is not None and s.get("lng") is not None
+           and not _is_zero(s.get("lat"), s.get("lng"))]
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            d = _haversine_m(pts[i][0], pts[i][1], pts[j][0], pts[j][1])
+            if d is not None and d > LKP_RESUME_MIN_M:
+                return True
+    return False
+
+
+async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
+                             since_iso: Optional[str]) -> list[dict]:
+    """Lit plusieurs points GPS récents (READ-ONLY) via `track/read` avec le credential du tenant.
+    Retour liste [{lat,lng,time}]. [] si indisponible. Ne logge/expose jamais le credential."""
+    from app.integrations import get_integration_credential
+    cred = get_integration_credential(tenant_id, "NAVIXY")
+    if not cred or not cred.get("credential"):
+        return []
+    base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+            or "https://api.navixy.com/v2").rstrip("/")
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    start = _parse(since_iso) or (now - timedelta(minutes=30))
+    fmt = "%Y-%m-%d %H:%M:%S"
+    body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
+            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
+            "simplify": False, "point_limit": 200}
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.post(f"{base}/track/read", json=body)
+            data = r.json() or {}
+    except Exception:
+        return []
+    out = []
+    for p in (data.get("list") or []):
+        if isinstance(p, dict):
+            out.append({"lat": p.get("lat"), "lng": p.get("lng"),
+                        "time": p.get("get_time") or p.get("time")})
+    return out
+
 
 async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
     """Lit l'état GPS transmis (READ-ONLY) via le credential du tenant. None si indispo.
@@ -271,16 +348,20 @@ def _is_zero(lat, lng) -> bool:
 async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: str,
                             command_sent_at_iso: Optional[str], capability,
                             *, state_doc: Optional[dict] = None,
-                            read_odo_km: Optional[Callable[[int], Awaitable[Optional[float]]]] = None
+                            read_odo_km: Optional[Callable[[int], Awaitable[Optional[float]]]] = None,
+                            fetch_samples: Optional[Callable[..., Awaitable[list]]] = None
                             ) -> tuple[Optional[str], str]:
     """Tente de confirmer l'état RÉEL du device par télémétrie (Niveau C).
 
     Deux stratégies (gated par capability field_validated) :
       - FROZEN_POSITION (FMC003) : PRIVATE si position 0,0 ou gelée depuis l'envoi (device actif).
-      - LAST_KNOWN_POSITION (FMC130 781479) : gps_updated peut bouger, mais les coordonnées
-        RESTENT au voisinage de l'ancre d'entrée (masquées) TANDIS QUE l'AVL16 AUGMENTE.
-    BUSINESS : position postérieure à l'envoi OFF, coords réelles ; si une ancre PRIVATE existe,
-    la position doit être SORTIE du voisinage masqué (> RESUME_MIN) pour confirmer.
+        Comportement historique INCHANGÉ.
+      - LAST_KNOWN_POSITION (FMC130 781479, prouvé terrain) : la confidentialité est prouvée par
+        une POSITION DOMINANTE STABLE/RÉPÉTÉE sur PLUSIEURS samples (ratio >= LKP_DOMINANT_MIN_RATIO)
+        TANDIS QUE l'AVL16 AUGMENTE — jamais par une simple distance à l'ancre, jamais sur 1 sample.
+        Un déplacement réel de 50/100/150 m (positions qui suivent le véhicule) -> NON confirmé.
+    BUSINESS : trame postérieure à l'envoi OFF, coords réelles, et PROGRESSION GPS reprise
+    (petit déplacement réel suffit ; on n'impose PAS >200 m).
     Un simple `applied:true` Navixy n'est JAMAIS une preuve. Anti-stale : compare à command_sent_at.
     Retour (confirmed_state|None, source).
     """
@@ -297,39 +378,49 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
 
     # ----- Stratégie LAST_KNOWN_POSITION (profil FMC130 781479 field-validated) -----
     if strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION:
-        anchor_lat = sd.get("private_gps_anchor_lat")
-        anchor_lng = sd.get("private_gps_anchor_lng")
         cur_lat, cur_lng = st.get("lat"), st.get("lng")
+        fetch = fetch_samples or _fetch_gps_samples
+        samples = await fetch(tenant_id, int(tracker_id), command_sent_at_iso)
 
         if requested_state == PRIVATE:
-            # AVL16 doit AUGMENTER depuis le snapshot de départ (roulage réel en privé).
+            # 1) AVL16 doit AUGMENTER depuis le snapshot de départ (roulage réel en privé).
             odo_start = sd.get("private_start_odometer_km")
             odo_now = await read_odo_km(int(tracker_id)) if read_odo_km else None
             odo_increases = (odo_start is not None and odo_now is not None
                              and float(odo_now) > float(odo_start))
             if not (active and odo_increases):
                 return None, SRC_UNCONFIRMED
-            # Coordonnées MASQUÉES : 0,0 OU au voisinage de l'ancre (dernière position connue).
+            # 2) Position masquée : 0,0 immédiat OU position DOMINANTE stable multi-samples.
             if _is_zero(cur_lat, cur_lng):
                 return PRIVATE, SRC_TELEMETRY
-            if anchor_lat is not None and anchor_lng is not None:
-                d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
-                if d is not None and d <= _MASK_RADIUS_M:
-                    return PRIVATE, SRC_TELEMETRY
-            # position réellement en mouvement (loin de l'ancre) -> PAS masqué -> non confirmé
+            # jamais sur un seul sample : exiger un minimum d'observations
+            if not samples or len(samples) < LKP_MIN_SAMPLES:
+                return None, SRC_UNCONFIRMED
+            ratio, dom_count, total = _dominant_position(samples)
+            # position stable/répétée (ne suit plus le véhicule) alors que l'odo progresse -> masqué
+            if ratio is not None and ratio >= LKP_DOMINANT_MIN_RATIO:
+                return PRIVATE, SRC_TELEMETRY
+            # positions qui se déplacent réellement (le GPS suit encore) -> pas encore masqué
             return None, SRC_UNCONFIRMED
 
         if requested_state == BUSINESS:
+            # trame postérieure à l'envoi OFF + coords réelles
             if not (sent and gps_upd and gps_upd > sent):
                 return None, SRC_UNCONFIRMED
             if _is_zero(cur_lat, cur_lng):
                 return None, SRC_UNCONFIRMED
-            # Si ancre connue : exiger que la position soit SORTIE du voisinage masqué.
+            # Preuve de REPRISE : progression GPS réelle (petit déplacement suffit, pas de seuil 200 m).
+            # Soit les samples post-OFF montrent un mouvement, soit la position a quitté la zone
+            # dominante privée d'au moins LKP_RESUME_MIN_M.
+            if _samples_show_movement(samples):
+                return BUSINESS, SRC_TELEMETRY
+            anchor_lat = sd.get("private_gps_anchor_lat")
+            anchor_lng = sd.get("private_gps_anchor_lng")
             if anchor_lat is not None and anchor_lng is not None:
                 d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
-                if d is None or d < _RESUME_MIN_M:
-                    return None, SRC_UNCONFIRMED
-            return BUSINESS, SRC_TELEMETRY
+                if d is not None and d >= LKP_RESUME_MIN_M:
+                    return BUSINESS, SRC_TELEMETRY
+            return None, SRC_UNCONFIRMED
         return None, SRC_UNCONFIRMED
 
     # ----- Stratégie FROZEN_POSITION (FMC003 — comportement existant INCHANGÉ) -----

@@ -25,21 +25,35 @@ INTERDITS respectés : 11807 non utilisé · FMC003 3661714 non touché · AVL39
   - `_model_supports_telemetry_confirm` : autorise si `field_validated` ET
     (`FMC003` OU `strategy==LAST_KNOWN_POSITION`). **Jamais** tous les FMC130.
   - `telemetry_confirm` : branche par stratégie. FROZEN_POSITION (FMC003) inchangé.
-    LAST_KNOWN_POSITION : PRIVATE si actif + AVL16 augmente + coords masquées (0,0 ou ≤200 m
-    de l'ancre) ; BUSINESS si trame post-OFF + coords réelles + position sortie (>200 m) de l'ancre.
-    Un `applied:true` Navixy n'est JAMAIS une preuve.
+    **LAST_KNOWN_POSITION (corrigé — preuve par POSITION DOMINANTE multi-samples)** :
+    PRIVATE confirmé si device actif + **AVL16 augmente** + soit coords 0,0, soit une
+    **position dominante/stable répétée** sur ≥ `LKP_MIN_SAMPLES` (5) samples avec
+    `ratio ≥ LKP_DOMINANT_MIN_RATIO` (0.7 ; terrain 0.889). **Jamais** sur 1 seul sample,
+    **jamais** sur une simple distance à l'ancre. Un déplacement réel de 50/100/150 m
+    (ratio ~0.167) → NON confirmé (faux positif éliminé).
+    BUSINESS confirmé si trame post-OFF + coords réelles + **reprise de progression GPS**
+    (mouvement détecté entre samples OU sortie ≥ `LKP_RESUME_MIN_M`=30 m de l'ancre) —
+    **pas** d'exigence de 200 m (petit déplacement réel suffit).
   - `request_mode` : capture une ancre GPS interne (`private_gps_anchor_lat/lng`) à l'entrée PRIVATE ;
     `resolve_pending_confirmation` la SUPPRIME après confirmation BUSINESS. Jamais exposée à l'UI.
+  - Lecture multi-samples READ-ONLY via `track/read` (credential tenant, jamais loggé).
   - `private_distance_km` = delta AVL16 uniquement. Confidentialité API inchangée.
+
+Paramètres (env-overridables) : `LKP_MIN_SAMPLES=5`, `LKP_DOMINANT_MIN_RATIO=0.7`,
+`LKP_DOMINANT_RADIUS_M=25`, `LKP_RESUME_MIN_M=30`.
 
 ## TESTS
 ```
-FMC130 CONFIRMATION STRATEGY = PASS
-PRIVATE MODE TESTS      : test_private_mode_confirmation.py = 24/24 PASS (dont 10 LKP)
+FMC130 CONFIRMATION STRATEGY = PASS (POSITION DOMINANTE multi-samples)
+LKP MULTI-SAMPLE CONFIRMATION = PASS (ratio 0.889 confirmé)
+FALSE-POSITIVE <200m TEST = PASS (déplacement 50/100/150 m, ratio 0.167 -> NON confirmé)
+BUSINESS SHORT-RESUME TEST = PASS (reprise < 200 m confirmée)
+PRIVATE MODE TESTS      : test_private_mode_confirmation.py = 28/28 PASS
 REGRESSION FMC003       : PASS (FROZEN_POSITION inchangé)
-REGRESSION globale      : 134/134 PASS
+GLOBAL REGRESSION       : 138/138 PASS
 MULTI-TENANT            : PASS (gate fail-closed inchangée)
 testing_agent           : PASS
+READY_FOR_SURGICAL_DEPLOY = YES
 ```
 
 ## FICHIERS MODIFIÉS (deploy)
