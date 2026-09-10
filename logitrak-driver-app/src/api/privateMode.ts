@@ -24,6 +24,12 @@ export interface PrivateModeStatus {
   private_odometer_supported?: boolean;
   private_distance_km?: number | null;
   last_transition_at?: string | null;
+  // Historique de transition (jamais perdu au timeout — cf. backend).
+  transition_result?: 'CONFIRMED' | 'TIMEOUT' | null;
+  requested_target?: 'PRIVATE' | 'BUSINESS' | null;
+  last_command?: string | null;
+  command_sent_at?: string | null;
+  odometer_snapshot_status?: 'OK' | 'UNAVAILABLE' | 'INVALID' | null;
 }
 
 export interface PrivateModeResult {

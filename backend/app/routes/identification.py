@@ -231,6 +231,12 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         "private_odometer_supported": private_odo_ok,
         "private_distance_km": st.get("private_distance_km"),
         "last_transition_at": st.get("updated_at"),
+        # --- Historique de transition (jamais perdu au timeout) ---
+        "transition_result": st.get("transition_result"),       # CONFIRMED|TIMEOUT|None
+        "requested_target": st.get("requested_target"),         # cible demandée si dispo
+        "last_command": st.get("last_command"),                 # dernière commande envoyée
+        "command_sent_at": st.get("command_sent_at"),           # horodatage envoi
+        "odometer_snapshot_status": st.get("odometer_snapshot_status"),  # OK|UNAVAILABLE|INVALID
     }
 
 

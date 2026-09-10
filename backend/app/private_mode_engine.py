@@ -46,6 +46,10 @@ SRC_TELEMETRY = "TELEMETRY_CONFIRMED"         # dérivé télémétrie (position
 SRC_SIMULATED = "SIMULATED_CONFIRMED"         # TEST/DEV uniquement, jamais en prod
 SRC_UNCONFIRMED = "UNCONFIRMED"               # commande envoyée, pas encore de preuve
 
+# Résultat terminal d'une transition (exposé à l'UI, jamais perdu silencieusement).
+TRANSITION_CONFIRMED = "CONFIRMED"            # preuve télémétrique obtenue
+TRANSITION_TIMEOUT = "TIMEOUT"                # fenêtre de confirmation dépassée sans preuve
+
 _TENANT = "default"
 
 # Commandes device (jamais Deep Sleep).
@@ -450,6 +454,45 @@ async def _default_read_odo_km(tracker_id: int) -> Optional[float]:
     return None
 
 
+# Statuts explicites du snapshot odomètre (jamais 0 inventé ; null reste null).
+ODO_SNAPSHOT_OK = "OK"
+ODO_SNAPSHOT_UNAVAILABLE = "UNAVAILABLE"
+ODO_SNAPSHOT_INVALID = "INVALID"
+
+
+async def _read_odometer_snapshot(db, tenant_id, vehicle_id, tracker_id,
+                                  read_odo_km) -> tuple[Optional[float], str]:
+    """Snapshot odomètre AVL16 (km) pour la bascule Privé/Business. READ-ONLY, null≠0.
+
+    Réutilise le lecteur CANONIQUE `read_live_avl16_km` en production (aucun 2e moteur).
+    Retourne (value_km|None, status) où status ∈ OK|UNAVAILABLE|INVALID.
+
+    - read_odo_km INJECTÉ (tests) : utilisé tel quel (préserve les tests avec mocks).
+    - simulate-confirm (DEV E2E) : valeur monotone simulée.
+    - PROD (lecteur par défaut) : read_live_avl16_km(db, tenant, vehicle) tenant-scopé.
+    """
+    # 1) Injection de test : le lecteur fourni prime, on ne touche pas au réseau.
+    if read_odo_km is not _default_read_odo_km:
+        v = await read_odo_km(int(tracker_id))
+        return (v, ODO_SNAPSHOT_OK if v is not None else ODO_SNAPSHOT_UNAVAILABLE)
+    # 2) DEV E2E simulate : valeur simulée monotone.
+    if simulate_confirm_enabled():
+        v = await _default_read_odo_km(int(tracker_id))
+        return (v, ODO_SNAPSHOT_OK if v is not None else ODO_SNAPSHOT_UNAVAILABLE)
+    # 3) PROD : lecteur AVL16 canonique (jamais l'odomètre générique, jamais 0).
+    if db is None or not tenant_id or not vehicle_id:
+        return (None, ODO_SNAPSHOT_UNAVAILABLE)
+    from app.odometer_calibration import read_live_avl16_km
+    reading = await read_live_avl16_km(db, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    reason = reading.get("reason")
+    val = reading.get("value_km")
+    if val is not None and reason is None:
+        return (val, ODO_SNAPSHOT_OK)
+    if reason == "VALUE_INVALID":
+        return (None, ODO_SNAPSHOT_INVALID)
+    return (None, ODO_SNAPSHOT_UNAVAILABLE)
+
+
 # ---------------------------------------------------------------------------
 # Cœur : demande de bascule de mode (backend autoritaire, gate, idempotence).
 # ---------------------------------------------------------------------------
@@ -548,9 +591,11 @@ async def request_mode(
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
-        odo_start = await read_odo_km(int(tracker_id))
+        odo_start, snap_status = await _read_odometer_snapshot(
+            db, tid, vehicle_id, tracker_id, read_odo_km)
         base["private_start_time"] = _now()
-        base["private_start_odometer_km"] = odo_start
+        base["private_start_odometer_km"] = odo_start        # null reste null (jamais 0)
+        base["odometer_snapshot_status"] = snap_status       # OK|UNAVAILABLE|INVALID
         base["odometer_source"] = SOURCE_TELTONIKA_TOTAL_ODOMETER
         # Ancre GPS de dernière position connue (stratégie LAST_KNOWN_POSITION) — INTERNE :
         # sert uniquement à confirmer/masquer, jamais exposée au frontend. Best-effort.
@@ -612,7 +657,8 @@ async def request_mode(
 
     # --- Snapshot odomètre à la SORTIE (retour Business) + distance privée ---
     if target_mode == BUSINESS and cur_state in (PRIVATE, PRIVATE_REQUESTED):
-        odo_end = await read_odo_km(int(tracker_id))
+        odo_end, _ = await _read_odometer_snapshot(
+            db, tid, vehicle_id, tracker_id, read_odo_km)
         odo_start = cur.get("private_start_odometer_km")
         new_doc["private_end_time"] = _now()
         new_doc["private_end_odometer_km"] = odo_end
@@ -675,11 +721,12 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
 
     if confirmed == requested:
         new_doc = {**st, "state": requested, "confirmation_source": source,
-                   "confirmed_at": _now()}
+                   "confirmed_at": _now(), "transition_result": TRANSITION_CONFIRMED}
         new_doc.pop("requested_target", None)
         # distance privée au retour Business (jamais inventée)
         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
-            odo_end = await read_odo_km(int(tracker_id))
+            odo_end, _ = await _read_odometer_snapshot(
+                db, tid, vehicle_id, tracker_id, read_odo_km)
             new_doc["private_end_time"] = _now()
             new_doc["private_end_odometer_km"] = odo_end
             new_doc["private_distance_km"] = _private_distance(
@@ -700,13 +747,23 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         from datetime import datetime, timezone
         age = (datetime.now(timezone.utc) - sent).total_seconds()
         if age >= PENDING_TIMEOUT_S:
-            unk = {**st, "state": UNKNOWN, "confirmation_source": SRC_UNCONFIRMED,
-                   "pending_timeout_at": _now()}
-            await _save_mode_state(db, unk)
+            # Fenêtre dépassée SANS preuve télémétrique. On ne prétend JAMAIS connaître
+            # l'état réel du device. On libère les boutons (pending=false) tout en
+            # PRÉSERVANT l'historique (requested_target/last_command/command_sent_at via **st).
+            prev = st.get("previous_state")
+            # Retour au dernier état CONFIRMÉ si connu (BUSINESS/PRIVATE) ; sinon UNKNOWN.
+            final_state = prev if prev in (BUSINESS, PRIVATE) else UNKNOWN
+            timed = {**st, "state": final_state,
+                     "confirmation_source": SRC_UNCONFIRMED,
+                     "transition_result": TRANSITION_TIMEOUT,
+                     "pending_timeout_at": _now()}
+            await _save_mode_state(db, timed)
             await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
-                              "requested_mode": requested, "resulting_state": UNKNOWN,
-                              "result": "pending_timeout"})
-            return unk
+                              "requested_mode": requested, "resulting_state": final_state,
+                              "result": "pending_timeout",
+                              "transition_result": TRANSITION_TIMEOUT,
+                              "previous_state": prev})
+            return timed
     return st  # toujours PENDING
 
 

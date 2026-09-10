@@ -112,6 +112,9 @@ export function usePrivateMode(pollMs = 15000) {
     error,
     lastDistanceKm,
     pending: status.state === 'PENDING_CONFIRMATION',
+    // Timeout de confirmation : commande envoyée mais état device NON prouvé.
+    // L'UI doit réactiver les boutons et afficher un message honnête (jamais un faux PRO/PRIVÉ).
+    timedOut: status.transition_result === 'TIMEOUT',
     privateOdometerSupported: !!status.private_odometer_supported,
     requestMode,
     refresh,
