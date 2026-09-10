@@ -160,6 +160,33 @@ async def list_commands(tracker_id: int) -> list[dict]:
     return data.get("list", [])
 
 
+async def list_tracker_history(tracker_id: int, date_from: str, date_to: str,
+                               events: Optional[list[str]] = None,
+                               limit: int = 100) -> list[dict]:
+    """READ-ONLY. Event history of a tracker over a period (`history/tracker/list`).
+
+    Officially documented endpoint (User API). Each entry may carry, in `extra.command`,
+    the DEVICE RESPONSE to a sent command:
+      extra.command = {name, param, response: {status, body, error, success}}
+    where `response.body` is the raw device answer (e.g. "Privatemode ON").
+
+    `date_from` / `date_to` format: 'YYYY-MM-DD HH:MM:SS' (server timezone).
+    Returns the raw list of history entries. Never logs/returns the credential.
+    """
+    body: dict = {
+        "trackers": [int(tracker_id)],
+        "from": date_from,
+        "to": date_to,
+        "ascending": False,
+        "limit": int(limit),
+    }
+    if events:
+        body["events"] = events
+    async with httpx.AsyncClient() as c:
+        data = await _post(c, "history/tracker/list", body)
+    return data.get("list") or []
+
+
 async def send_raw_command(tracker_id: int, command: str, reliable: bool = True) -> dict:
     """Send a raw protocol command to a tracker via Navixy (Phase 2 — write op).
 

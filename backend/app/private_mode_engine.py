@@ -349,28 +349,117 @@ def _is_zero(lat, lng) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# PREUVE AUTORITATIVE — RÉPONSE DEVICE via l'historique Navixy (READ-ONLY).
+# Endpoint documenté `history/tracker/list` : chaque entrée peut porter
+#   extra.command = {name, param, response: {status, body, error, success}}
+# où response.body est la réponse brute du device (ex: "Privatemode ON").
+# C'est une preuve DIRECTE d'exécution, indépendante du GPS (que le mode privé masque).
+# Anti-stale STRICT : l'entrée doit être POSTÉRIEURE à command_sent_at.
+# Anti-faux-positif : une absence/erreur/history vide ne confirme JAMAIS.
+# ---------------------------------------------------------------------------
+def _command_response_matches(entry: dict, target_mode: str) -> bool:
+    """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?"""
+    extra = entry.get("extra") or {}
+    cmd = extra.get("command") or {}
+    resp = cmd.get("response") or {}
+    # Corps de réponse device + nom/param de commande — on recherche 'privatemode on/off'.
+    hay = " ".join(str(x) for x in (
+        resp.get("body"), cmd.get("name"), cmd.get("param"),
+        extra.get("full_message"), entry.get("message"),
+    ) if x is not None).lower()
+    # Le statut/success ne doit pas être un échec explicite.
+    if resp.get("success") is False:
+        return False
+    if isinstance(resp.get("error"), str) and resp.get("error").strip():
+        return False
+    if target_mode == PRIVATE:
+        return ("privatemode on" in hay) or ("privatemode:1" in hay) or ("private mode on" in hay)
+    if target_mode == BUSINESS:
+        return ("privatemode off" in hay) or ("privatemode:0" in hay) or ("private mode off" in hay)
+    return False
+
+
+async def _fetch_command_responses(tenant_id: str, tracker_id: int,
+                                   since_iso: Optional[str]) -> list[dict]:
+    """Lit l'historique tracker (READ-ONLY) et renvoie les entrées de commande
+    POSTÉRIEURES à since_iso. [] si indisponible. Ne logge/expose jamais le credential."""
+    from app.integrations import get_integration_credential
+    cred = get_integration_credential(tenant_id, "NAVIXY")
+    if not cred or not cred.get("credential"):
+        return []
+    base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+            or "https://api.navixy.com/v2").rstrip("/")
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    start = _parse(since_iso) or (now - timedelta(minutes=30))
+    fmt = "%Y-%m-%d %H:%M:%S"
+    body = {"hash": cred["credential"], "trackers": [int(tracker_id)],
+            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
+            "ascending": False, "limit": 100}
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{base}/history/tracker/list", json=body)
+            data = r.json() or {}
+    except Exception:
+        return []
+    if data.get("success") is False:
+        return []
+    return [e for e in (data.get("list") or []) if isinstance(e, dict)]
+
+
+async def _device_response_confirm(tenant_id: str, tracker_id: int, requested_state: str,
+                                   command_sent_at_iso: Optional[str],
+                                   fetch_command_responses=None
+                                   ) -> tuple[Optional[str], str]:
+    """Confirmation par RÉPONSE DEVICE (preuve autoritative). Fail-closed.
+
+    Cherche dans l'historique tracker une réponse device confirmant le mode demandé,
+    STRICTEMENT postérieure à l'envoi de la commande (anti-stale). Aucune preuve -> (None, UNCONFIRMED).
+    """
+    fetch = fetch_command_responses or _fetch_command_responses
+    entries = await fetch(tenant_id, int(tracker_id), command_sent_at_iso)
+    if not entries:
+        return None, SRC_UNCONFIRMED
+    sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
+    for e in entries:
+        et = _parse(e.get("time"))
+        # Anti-stale : la réponse doit être POSTÉRIEURE à la commande envoyée.
+        if sent is not None and (et is None or et < sent):
+            continue
+        if _command_response_matches(e, requested_state):
+            return requested_state, SRC_DEVICE_RESPONSE
+    return None, SRC_UNCONFIRMED
+
+
 async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: str,
                             command_sent_at_iso: Optional[str], capability,
                             *, state_doc: Optional[dict] = None,
                             read_odo_km: Optional[Callable[[int], Awaitable[Optional[float]]]] = None,
-                            fetch_samples: Optional[Callable[..., Awaitable[list]]] = None
+                            fetch_samples: Optional[Callable[..., Awaitable[list]]] = None,
+                            fetch_command_responses: Optional[Callable[..., Awaitable[list]]] = None
                             ) -> tuple[Optional[str], str]:
-    """Tente de confirmer l'état RÉEL du device par télémétrie (Niveau C).
+    """Tente de confirmer l'état RÉEL du device (READ-ONLY, profil field_validated).
 
-    Deux stratégies (gated par capability field_validated) :
-      - FROZEN_POSITION (FMC003) : PRIVATE si position 0,0 ou gelée depuis l'envoi (device actif).
-        Comportement historique INCHANGÉ.
-      - LAST_KNOWN_POSITION (FMC130 781479, prouvé terrain) : la confidentialité est prouvée par
-        une POSITION DOMINANTE STABLE/RÉPÉTÉE sur PLUSIEURS samples (ratio >= LKP_DOMINANT_MIN_RATIO)
-        TANDIS QUE l'AVL16 AUGMENTE — jamais par une simple distance à l'ancre, jamais sur 1 sample.
-        Un déplacement réel de 50/100/150 m (positions qui suivent le véhicule) -> NON confirmé.
-    BUSINESS : trame postérieure à l'envoi OFF, coords réelles, et PROGRESSION GPS reprise
-    (petit déplacement réel suffit ; on n'impose PAS >200 m).
-    Un simple `applied:true` Navixy n'est JAMAIS une preuve. Anti-stale : compare à command_sent_at.
-    Retour (confirmed_state|None, source).
-    """
+    Ordre des preuves (fail-closed — l'absence n'est JAMAIS une preuve) :
+      0. RÉPONSE DEVICE (autoritative) : historique Navixy `history/tracker/list`,
+         entrée POSTÉRIEURE à l'envoi portant "Privatemode ON/OFF". Indépendant du GPS.
+      C. TÉLÉMÉTRIE (fallback) : gel/position dominante (FROZEN_POSITION / LAST_KNOWN_POSITION).
+
+    Une simple absence de position ne confirme jamais PRIVATE (règle anti-faux-positif).
+    Retour (confirmed_state|None, source)."""
     if not _model_supports_telemetry_confirm(capability):
         return None, SRC_UNCONFIRMED
+
+    # ----- Niveau 0 : RÉPONSE DEVICE (preuve autoritative, prioritaire) -----
+    dev_state, dev_src = await _device_response_confirm(
+        tenant_id, int(tracker_id), requested_state, command_sent_at_iso,
+        fetch_command_responses=fetch_command_responses)
+    if dev_state == requested_state:
+        return dev_state, dev_src
+
+    # ----- Niveau C : télémétrie (fallback, comportement existant inchangé) -----
     st = await _fetch_gps_state(tenant_id, tracker_id)
     if not st:
         return None, SRC_UNCONFIRMED
@@ -587,7 +676,9 @@ async def request_mode(
 
     requested_state = PRIVATE_REQUESTED if target_mode == PRIVATE else BUSINESS_REQUESTED
     base = {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
-            "driver_id": driver_id, "previous_state": cur_state}
+            "driver_id": driver_id, "previous_state": cur_state,
+            # ANTI-STALE : purge des champs d'un cycle de transition PRÉCÉDENT (jamais réutilisés).
+            "pending_timeout_at": None, "transition_result": None, "confirmed_at": None}
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
@@ -693,12 +784,13 @@ PENDING_TIMEOUT_S = int(os.environ.get("PRIVATE_MODE_PENDING_TIMEOUT_S", "300"))
 
 
 async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[str] = None,
-                                       *, read_odo_km=_default_read_odo_km) -> dict:
-    """Résout (best-effort, READ-ONLY) un état PENDING_CONFIRMATION via la télémétrie.
+                                       *, read_odo_km=_default_read_odo_km,
+                                       fetch_samples=None, fetch_command_responses=None) -> dict:
+    """Résout (best-effort, READ-ONLY) un état PENDING_CONFIRMATION.
 
-    - Confirme -> CONFIRMED PRIVATE/BUSINESS (source TELEMETRY_CONFIRMED) + calcule la distance
-      privée au retour Business.
-    - Si pas de preuve ET timeout dépassé -> UNKNOWN (honnête, jamais faux succès/échec).
+    Preuves (fail-closed) : RÉPONSE DEVICE (autoritative) puis télémétrie (fallback).
+    - Confirme -> CONFIRMED PRIVATE/BUSINESS + distance privée au retour Business.
+    - Pas de preuve ET timeout dépassé -> dernier état CONFIRMÉ restauré + transition_result=TIMEOUT.
     - Sinon reste PENDING_CONFIRMATION.
     Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
     """
@@ -715,9 +807,16 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
     vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
     vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
 
+    # Kwargs d'injection optionnels : passés UNIQUEMENT s'ils sont fournis (rétro-compat
+    # avec un telemetry_confirm mocké dont la signature ne les déclare pas).
+    _extra: dict = {}
+    if fetch_samples is not None:
+        _extra["fetch_samples"] = fetch_samples
+    if fetch_command_responses is not None:
+        _extra["fetch_command_responses"] = fetch_command_responses
     confirmed, source = await telemetry_confirm(
         tid, int(tracker_id), requested, st.get("command_sent_at"), vc,
-        state_doc=st, read_odo_km=read_odo_km)
+        state_doc=st, read_odo_km=read_odo_km, **_extra)
 
     if confirmed == requested:
         new_doc = {**st, "state": requested, "confirmation_source": source,
