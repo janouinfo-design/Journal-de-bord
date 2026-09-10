@@ -935,3 +935,7 @@ affectation manuelle, droits par rôle.
 - P0 (validation utilisateur) : test Expo Go téléphone (picker mobile P0+P1) · contrôle terrain Orhan Console web prod · sortie vérification SMTP VPS.
 - P1 : dev build EAS (BLE + push réels) · déploiement VPS des rapports hebdo + mensuel (sur GO explicite, via Save to GitHub + runbook).
 - P2 : justificatif amende réel prod (Object Storage e2e) · relecture READ-ONLY FMC130 781479 avant prochain essai PRO/PRIVÉ.
+
+## Audit Git pré-push — 10/09/2026 (lecture seule, AUCUN push)
+- Dépôt local : branche `main`, aucun remote configuré (push = « Save to GitHub » plateforme, état complet de la branche). Checkpoints du chantier rapports : `83e7c7b` (hebdo), `9a91209` (mensuel), `1f8cf70` (régression, docs). Précédent `7ec07c9` = mobile P0+P1.
+- Diff 7ec07c9→HEAD : 19 fichiers — 15 attendus (backend rapports/routes/scheduler/emailer/reports + 2 tests + 2 cartes + SettingsPage + memory), 3 artefacts à exclure (2 PNG test `backend/storage/fuel/transactions/…_test.png`, `test_reports/pytest/iteration23_evidence.json`), 1 hors chantier (`logitrak-driver-app/eas.json` URLs Expo, modif mobile embarquée dans 83e7c7b). Aucun .env suivi, aucun secret. Dette : 43 autres PNG test déjà suivis avant le chantier. Untracked pré-existants : `.env.example` ×2, `yarn.lock` ×3. EN ATTENTE GO utilisateur (nettoyage artefacts puis Save to GitHub).
