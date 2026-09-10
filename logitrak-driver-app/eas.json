@@ -32,7 +32,17 @@
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://documents-web.logitrak.ch"
+        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
+      }
+    },
+    "pilot-production": {
+      "distribution": "internal",
+      "channel": "production",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
       }
     }
   },

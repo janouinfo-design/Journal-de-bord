@@ -10,7 +10,9 @@
       "backgroundColor": "#0B0F14",
       "resizeMode": "contain"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "web": {
       "bundler": "metro"
     },
@@ -73,7 +75,9 @@
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": true,
-          "modes": ["central"],
+          "modes": [
+            "central"
+          ],
           "bluetoothAlwaysPermission": "Logitrak utilise le Bluetooth pour identifier automatiquement le véhicule conduit."
         }
       ]
@@ -83,10 +87,10 @@
         "origin": false
       },
       "eas": {
-        "projectId": "SET_VIA_eas_init"
+        "projectId": "84443c92-d226-4775-8f87-e63c0ea42aeb"
       }
     },
-    "owner": "logitrak",
+    "owner": "logititrak",
     "runtimeVersion": {
       "policy": "appVersion"
     }
