@@ -924,7 +924,13 @@ affectation manuelle, droits par rôle.
 - Régression complète : 862 PASS / 0 FAIL / 3 skip ; post-run sécurité vert (0 commande réelle, URL Navixy restaurée, assignments intacts). Backend REGELÉ après ce chantier.
 - Reste : sortie de la vérification SMTP VPS (CONFIGURED/NOT_CONFIGURED) ; activation + destinataires réels en prod après déploiement (sur GO).
 
-## Backlog priorisé (post-rapport hebdo)
+## Rapport mensuel fiscal chauffeurs — 10 septembre 2026 : LIVRÉ EN PREVIEW, NON DÉPLOYÉ
+- Le 1er du mois 06:00 Europe/Zurich (mois civil précédent) : par chauffeur km PRO/PRIVÉ/non classifiés/TOTAL, % privé (sur km classifiés, null si aucun — jamais 0), trajets, véhicules, cumul annuel PRO/PRIVÉ (01/01 → fin du mois), statut fiscal Complet / À compléter (N) — PDF + XLSX (même dataset), SMTP + idempotence `monthly_report_log` (tenant+mois), config `monthly_report_enabled/recipients` indépendante de l'hebdo. Aucun montant CHF inventé.
+- Fichiers : `backend/app/monthly_driver_report.py` (réutilise `weekly_driver_report.aggregate_range` extrait — hebdo inchangé fonctionnellement), `backend/app/routes/monthly_report.py` (`/api/livre/reports/monthly-driver/config|download?month=YYYY-MM`), renderers `monthly_driver_report_to_pdf/xlsx` dans `reports.py`, job `monthly_driver_report` dans `scheduler.py`, `frontend/src/components/livre/MonthlyDriverReportCard.jsx` (Paramètres, testids `monthly-report-*`).
+- Tests : `tests/test_monthly_driver_report.py` 17 PASS (SMTP mocké, DST mars 2025, cumul annuel, % privé null, RBAC, isolation tenant, job sent/idempotent/no-smtp/no-recipients/disabled/error) + hebdo 17 PASS re-vérifiés = 34/34. UI : carte visible + téléchargement XLSX réel via navigateur (smoke). État DB restauré (config désactivée, 0 artefact TEST-MKR, logs vides). Régression complète NON relancée (chantier additif, hebdo re-testé).
+- Reste : GO déploiement ; SMTP prod toujours NON VÉRIFIÉ.
+
+## Backlog priorisé (post-rapport mensuel)
 - P0 (validation utilisateur) : test Expo Go téléphone (picker mobile P0+P1) · contrôle terrain Orhan Console web prod · sortie vérification SMTP VPS.
-- P1 : dev build EAS (BLE + push réels) · déploiement VPS du rapport hebdo (sur GO explicite, via Save to GitHub + runbook).
+- P1 : dev build EAS (BLE + push réels) · déploiement VPS des rapports hebdo + mensuel (sur GO explicite, via Save to GitHub + runbook).
 - P2 : justificatif amende réel prod (Object Storage e2e) · relecture READ-ONLY FMC130 781479 avant prochain essai PRO/PRIVÉ.

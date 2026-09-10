@@ -21,6 +21,7 @@ from app.routes import (
     fuel_statements as _fuel_statements,
     identification as _identification,
     misc as _misc,
+    monthly_report as _monthly_report,
     notifications as _notifications,
     odometer_calibration as _odometer_calibration,
     realtime as _realtime,
@@ -50,5 +51,6 @@ livre_router.include_router(_fuel.router)
 livre_router.include_router(_energy.router)
 livre_router.include_router(_odometer_calibration.router)
 livre_router.include_router(_weekly_report.router)
+livre_router.include_router(_monthly_report.router)
 
 __all__ = ["auth_router", "livre_router"]

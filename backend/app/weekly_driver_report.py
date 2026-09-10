@@ -54,10 +54,10 @@ async def get_report_config(db) -> dict:
 
 
 # ---------- Agrégation ----------
-async def aggregate_week(db, week_monday: date) -> dict:
-    """1 ligne par chauffeur — km PRO / PRIVÉ / non classifiés / total (= tous
-    les km parcourus), nb trajets, véhicules utilisés, trajets non classifiés."""
-    start_iso, end_iso = week_bounds(week_monday)
+async def aggregate_range(db, start_iso: str, end_iso: str) -> tuple[list[dict], dict]:
+    """1 ligne par chauffeur sur [start_iso, end_iso) — km PRO / PRIVÉ / non
+    classifiés / total (= tous les km parcourus), nb trajets, véhicules utilisés,
+    trajets non classifiés. Partagée par les rapports hebdomadaire et mensuel."""
     projection = {"_id": 0, "driver_id": 1, "driver_name": 1, "vehicle_id": 1,
                   "vehicle_plate": 1, "distance_km": 1, "classification": 1}
     trips = await db.trips.find(
@@ -123,6 +123,12 @@ async def aggregate_week(db, week_monday: date) -> dict:
         "trip_count": sum(r["trip_count"] for r in rows),
         "unclassified_trip_count": sum(r["unclassified_trip_count"] for r in rows),
     }
+    return rows, totals
+
+
+async def aggregate_week(db, week_monday: date) -> dict:
+    start_iso, end_iso = week_bounds(week_monday)
+    rows, totals = await aggregate_range(db, start_iso, end_iso)
     return {
         "period": {
             "week_monday": week_monday.isoformat(),

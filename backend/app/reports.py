@@ -694,3 +694,201 @@ def weekly_driver_report_to_pdf(dataset: dict, tenant_name: str) -> bytes:
 
     doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Rapport mensuel fiscal chauffeurs — PDF + XLSX depuis le MÊME dataset
+# (monthly_driver_report.aggregate_month). Mise en forme uniquement.
+# ---------------------------------------------------------------------------
+MONTHLY_HEADERS = [
+    "Chauffeur", "Km PRO", "Km PRIVÉ", "Km non classifiés", "Km total", "% privé",
+    "Trajets", "Trajets non classifiés", "Véhicules utilisés",
+    "Cumul annuel PRO", "Cumul annuel PRIVÉ", "Statut fiscal",
+]
+MONTHLY_NOTES = [
+    WEEKLY_TOTAL_NOTE,
+    "% privé = part des km privés sur les km classifiés (PRO + PRIVÉ) ; "
+    "non calculable sans km classifiés.",
+    "Cumul annuel = du 1er janvier à la fin du mois (Europe/Zurich).",
+    "Statut fiscal : Complet si aucun trajet non classifié sur le mois, "
+    "sinon À compléter avant déclaration.",
+]
+FISCAL_LABELS = {"complete": "Complet", "incomplete": "À compléter"}
+
+
+def _fiscal_label(row: dict) -> str:
+    label = FISCAL_LABELS.get(row["fiscal_status"], row["fiscal_status"])
+    if row["fiscal_status"] == "incomplete":
+        label += f" ({row['unclassified_trip_count']})"
+    return label
+
+
+def _pct_cell(v):
+    return None if v is None else round(v, 1)
+
+
+def monthly_driver_report_to_xlsx(dataset: dict, tenant_name: str) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Rapport mensuel fiscal"
+
+    period = dataset["period"]
+    ws.append([f"Rapport mensuel fiscal chauffeurs — {tenant_name}"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(MONTHLY_HEADERS))
+    ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="1F2937")
+    ws.append([f"Période : {period['label']} (mois civil, Europe/Zurich)"])
+    ws.append([f"Cumul annuel : {period['ytd_label']}"])
+    ws.append([f"Généré le : {_fmt_dt(dataset['generated_at'])}"])
+    for note in MONTHLY_NOTES:
+        ws.append([note])
+    ws.append([])
+
+    ws.append(MONTHLY_HEADERS)
+    header_row = ws.max_row
+    for col_idx in range(1, len(MONTHLY_HEADERS) + 1):
+        c = ws.cell(row=header_row, column=col_idx)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1F2937")
+        c.alignment = Alignment(horizontal="left", vertical="center")
+
+    rows = dataset["rows"]
+    if not rows:
+        ws.append(["Aucun trajet sur la période"] + [""] * (len(MONTHLY_HEADERS) - 1))
+    for r in rows:
+        ws.append([
+            r["driver_name"],
+            round(r["km_pro"], 2), round(r["km_private"], 2),
+            round(r["km_unclassified"], 2), round(r["km_total"], 2),
+            _pct_cell(r["pct_private"]),
+            r["trip_count"], r["unclassified_trip_count"],
+            ", ".join(r["vehicles_used"]),
+            round(r["ytd_km_pro"], 2), round(r["ytd_km_private"], 2),
+            _fiscal_label(r),
+        ])
+        if r["fiscal_status"] == "incomplete":
+            for c in ws[ws.max_row]:
+                c.fill = PatternFill("solid", fgColor="FEF3C7")
+
+    t = dataset["totals"]
+    ws.append([])
+    ws.append(["TOTAL", round(t["km_pro"], 2), round(t["km_private"], 2),
+               round(t["km_unclassified"], 2), round(t["km_total"], 2),
+               _pct_cell(t["pct_private"]), t["trip_count"], t["unclassified_trip_count"], "",
+               round(t["ytd_km_pro"], 2), round(t["ytd_km_private"], 2),
+               f"{t['incomplete_drivers']} chauffeur(s) à compléter"])
+    for c in ws[ws.max_row]:
+        c.font = Font(bold=True)
+
+    from openpyxl.utils import get_column_letter
+    widths = [28, 12, 12, 16, 12, 10, 10, 20, 50, 16, 18, 22]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def monthly_driver_report_to_pdf(dataset: dict, tenant_name: str) -> bytes:
+    buf = io.BytesIO()
+    page_size = landscape(A4)
+    doc = SimpleDocTemplate(
+        buf, pagesize=page_size,
+        leftMargin=1.0 * cm, rightMargin=1.0 * cm,
+        topMargin=1.0 * cm, bottomMargin=1.5 * cm,
+        title="Rapport mensuel fiscal chauffeurs")
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("mt", parent=styles["Title"], fontSize=15, alignment=0,
+                                 textColor=colors.HexColor("#0F172A"), spaceAfter=2)
+    sub = ParagraphStyle("msb", parent=styles["Normal"], fontSize=8.5,
+                         textColor=colors.HexColor("#64748B"), leading=11)
+    cell = ParagraphStyle("mc", parent=styles["Normal"], fontSize=7.6,
+                          textColor=colors.HexColor("#0F172A"), leading=9.5)
+    head = ParagraphStyle("mh", parent=styles["Normal"], fontSize=7.6,
+                          textColor=colors.white, fontName="Helvetica-Bold", leading=9.2)
+    bold = ParagraphStyle("mb", parent=cell, fontName="Helvetica-Bold")
+
+    def P(text, style=cell):
+        return Paragraph("" if text is None else str(text).replace("&", "&amp;"), style)
+
+    def pct(v):
+        return "n/c" if v is None else f"{v:.1f} %"
+
+    period = dataset["period"]
+    flow = [Paragraph(f"Rapport mensuel fiscal chauffeurs — {tenant_name}", title_style)]
+    flow.append(Paragraph(
+        f"Période : <b>{period['label']}</b> (mois civil, Europe/Zurich) · "
+        f"Cumul annuel : {period['ytd_label']} · "
+        f"Généré le : {_fmt_dt(dataset['generated_at'])}", sub))
+    for note in MONTHLY_NOTES:
+        flow.append(Paragraph(note, sub))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    rows = dataset["rows"]
+    if not rows:
+        flow.append(Paragraph("Aucun trajet sur la période.", sub))
+    else:
+        data = [[P(h, head) for h in MONTHLY_HEADERS]]
+        incomplete_rows = []
+        for i, r in enumerate(rows, start=1):
+            if r["fiscal_status"] == "incomplete":
+                incomplete_rows.append(i)
+            data.append([
+                P(f"<b>{r['driver_name']}</b>"),
+                P(f"{r['km_pro']:.2f}"), P(f"{r['km_private']:.2f}"),
+                P(f"{r['km_unclassified']:.2f}"), P(f"{r['km_total']:.2f}"),
+                P(pct(r["pct_private"])),
+                P(r["trip_count"]), P(r["unclassified_trip_count"]),
+                P(", ".join(r["vehicles_used"])),
+                P(f"{r['ytd_km_pro']:.2f}"), P(f"{r['ytd_km_private']:.2f}"),
+                P(_fiscal_label(r)),
+            ])
+        t = dataset["totals"]
+        data.append([
+            P("TOTAL", bold),
+            P(f"{t['km_pro']:.2f}", bold), P(f"{t['km_private']:.2f}", bold),
+            P(f"{t['km_unclassified']:.2f}", bold), P(f"{t['km_total']:.2f}", bold),
+            P(pct(t["pct_private"]), bold),
+            P(t["trip_count"], bold), P(t["unclassified_trip_count"], bold),
+            P("", bold),
+            P(f"{t['ytd_km_pro']:.2f}", bold), P(f"{t['ytd_km_private']:.2f}", bold),
+            P(f"{t['incomplete_drivers']} à compléter", bold),
+        ])
+        col_widths = [4.0, 2.0, 2.0, 2.0, 2.0, 1.6, 1.5, 1.8, 4.6, 2.0, 2.0, 2.2]
+        table = Table(data, colWidths=[w * cm for w in col_widths], repeatRows=1)
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2937")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F8FAFC")]),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E2E8F0")),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E3F2FD")),
+            ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.HexColor("#1976D2")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("ALIGN", (1, 1), (7, -1), "RIGHT"),
+            ("ALIGN", (9, 1), (10, -1), "RIGHT"),
+        ]
+        for i in incomplete_rows:
+            style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FEF3C7")))
+        table.setStyle(TableStyle(style))
+        flow.append(table)
+        if incomplete_rows:
+            flow.append(Spacer(1, 0.2 * cm))
+            flow.append(Paragraph(
+                "Lignes surlignées : chauffeurs avec des trajets non classifiés — "
+                "à compléter avant déclaration.", sub))
+
+    def _footer(canvas, d):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#94A3B8"))
+        canvas.drawString(1.0 * cm, 0.65 * cm,
+                          "Logitrak — Livre de bord · Rapport mensuel fiscal chauffeurs · "
+                          "Données GPS officielles LOGITRAK")
+        canvas.drawRightString(page_size[0] - 1.0 * cm, 0.65 * cm, f"Page {d.page}")
+        canvas.restoreState()
+
+    doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+    return buf.getvalue()
