@@ -242,6 +242,8 @@ LKP_MIN_SAMPLES = int(os.environ.get("PRIVATE_LKP_MIN_SAMPLES", "5"))       # ja
 LKP_DOMINANT_MIN_RATIO = float(os.environ.get("PRIVATE_LKP_DOMINANT_RATIO", "0.7"))  # terrain 0.889
 LKP_DOMINANT_RADIUS_M = float(os.environ.get("PRIVATE_LKP_DOMINANT_RADIUS_M", "25"))  # jitter GPS toléré
 LKP_RESUME_MIN_M = float(os.environ.get("PRIVATE_LKP_RESUME_MIN_M", "30"))  # petit déplacement réel = reprise
+# Marge de skew d'horloge pour l'anti-stale de la réponse device (secondes).
+ANTI_STALE_SKEW_S = int(os.environ.get("PRIVATE_DEVICE_RESP_SKEW_S", "5"))
 
 
 def _dominant_position(samples) -> tuple[Optional[float], int, int]:
@@ -393,18 +395,30 @@ async def _fetch_command_responses(tenant_id: str, tracker_id: int,
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     start = _parse(since_iso) or (now - timedelta(minutes=30))
-    fmt = "%Y-%m-%d %H:%M:%S"
+    # marge de sécurité amont (jitter d'horodatage device/plateforme)
+    start = start - timedelta(seconds=30)
+    # ISO 8601 UTC explicite (…Z) + iso_datetime=true : fenêtre NON AMBIGUË.
+    # Sans cela, Navixy interprète 'YYYY-MM-DD HH:MM:SS' dans le FUSEAU DU COMPTE,
+    # ce qui décalait la fenêtre (ex. UTC 16:11 lu comme 16:11 Europe/Zurich) et
+    # excluait la réponse device réelle (~18:11 Zurich).
+    def _iso_z(d: datetime) -> str:
+        return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = {"hash": cred["credential"], "trackers": [int(tracker_id)],
-            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
-            "ascending": False, "limit": 100}
+            "from": _iso_z(start), "to": _iso_z(now + timedelta(minutes=1)),
+            "iso_datetime": True, "ascending": False, "limit": 100}
     import httpx
     try:
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.post(f"{base}/history/tracker/list", json=body)
             data = r.json() or {}
-    except Exception:
+    except Exception as e:
+        # Diagnostic NON sensible (aucun credential, aucun secret).
+        logger.warning("history/tracker/list appel échoué tracker=%s: %s",
+                       tracker_id, type(e).__name__)
         return []
     if data.get("success") is False:
+        logger.warning("history/tracker/list réponse non-success tracker=%s code=%s",
+                       tracker_id, (data.get("status") or {}).get("code"))
         return []
     return [e for e in (data.get("list") or []) if isinstance(e, dict)]
 
@@ -416,17 +430,21 @@ async def _device_response_confirm(tenant_id: str, tracker_id: int, requested_st
     """Confirmation par RÉPONSE DEVICE (preuve autoritative). Fail-closed.
 
     Cherche dans l'historique tracker une réponse device confirmant le mode demandé,
-    STRICTEMENT postérieure à l'envoi de la commande (anti-stale). Aucune preuve -> (None, UNCONFIRMED).
+    POSTÉRIEURE à l'envoi de la commande (anti-stale, timezone-aware). Une petite marge
+    de skew d'horloge (ANTI_STALE_SKEW_S) évite un faux rejet sans ré-accepter une vieille
+    réponse (les cycles sont espacés de minutes). Aucune preuve -> (None, UNCONFIRMED).
     """
+    from datetime import timedelta
     fetch = fetch_command_responses or _fetch_command_responses
     entries = await fetch(tenant_id, int(tracker_id), command_sent_at_iso)
     if not entries:
         return None, SRC_UNCONFIRMED
     sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
+    threshold = (sent - timedelta(seconds=ANTI_STALE_SKEW_S)) if sent is not None else None
     for e in entries:
-        et = _parse(e.get("time"))
-        # Anti-stale : la réponse doit être POSTÉRIEURE à la commande envoyée.
-        if sent is not None and (et is None or et < sent):
+        et = _parse(e.get("time"))   # timezone-aware (offset explicite avec iso_datetime=true)
+        # Anti-stale : la réponse doit être POSTÉRIEURE à la commande (à la marge de skew près).
+        if threshold is not None and (et is None or et < threshold):
             continue
         if _command_response_matches(e, requested_state):
             return requested_state, SRC_DEVICE_RESPONSE

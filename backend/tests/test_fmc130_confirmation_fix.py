@@ -316,3 +316,89 @@ def test_command_response_matches_helper():
     assert pm._command_response_matches(on, pm.PRIVATE) is True
     assert pm._command_response_matches(on, pm.BUSINESS) is False
     assert pm._command_response_matches(off, pm.BUSINESS) is True
+
+
+# ===========================================================================
+# TIMEZONE — la réponse device est comparée en instants UTC (offset explicite),
+# quel que soit le fuseau d'affichage du compte Navixy. Root cause corrigée.
+# ===========================================================================
+def _confirm_with(entries, requested, sent_iso):
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return entries
+    return _run(pm._device_response_confirm("default", 781479, requested, sent_iso,
+                                            fetch_command_responses=_resp))
+
+
+def test_tz_zurich_summer_utc_plus_2_confirms_private():
+    """Été (UTC+2) : command_sent_at 16:11:08Z, réponse '18:11:20+02:00' = 16:11:20Z > sent -> PRIVATE."""
+    sent = "2026-07-10T16:11:08+00:00"
+    entry = _hist_entry("2026-07-10T18:11:20+02:00", "Privatemode ON")  # = 16:11:20Z
+    state, src = _confirm_with([entry], pm.PRIVATE, sent)
+    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+
+
+def test_tz_zurich_winter_utc_plus_1_confirms_business():
+    """Hiver (UTC+1) : command 16:11:08Z, réponse '17:11:20+01:00' = 16:11:20Z > sent -> BUSINESS."""
+    sent = "2026-01-10T16:11:08+00:00"
+    entry = _hist_entry("2026-01-10T17:11:20+01:00", "Privatemode OFF")  # = 16:11:20Z
+    state, src = _confirm_with([entry], pm.BUSINESS, sent)
+    assert state == pm.BUSINESS and src == pm.SRC_DEVICE_RESPONSE
+
+
+def test_tz_utc_z_confirms_private():
+    """UTC pur ('...Z') postérieur -> PRIVATE."""
+    sent = "2026-09-10T16:11:08+00:00"
+    entry = _hist_entry("2026-09-10T16:11:30Z", "Privatemode ON")
+    state, src = _confirm_with([entry], pm.PRIVATE, sent)
+    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+
+
+def test_tz_response_before_command_in_other_tz_is_stale():
+    """Réponse Zurich '18:10:00+02:00' = 16:10:00Z < command 16:11:08Z -> stale (rejetée)."""
+    sent = "2026-07-10T16:11:08+00:00"
+    entry = _hist_entry("2026-07-10T18:10:00+02:00", "Privatemode ON")  # = 16:10:00Z (avant)
+    state, _ = _confirm_with([entry], pm.PRIVATE, sent)
+    assert state is None  # anti-stale correct malgré l'heure locale "18:10" > "16:11"
+
+
+def test_tz_no_matching_response_no_false_positive():
+    """Aucune réponse pertinente -> jamais de faux positif."""
+    sent = "2026-07-10T16:11:08+00:00"
+    entry = _hist_entry("2026-07-10T18:12:00+02:00", "Ignition ON")  # évènement non lié
+    state, _ = _confirm_with([entry], pm.PRIVATE, sent)
+    assert state is None
+
+
+def test_fetch_window_uses_iso_utc_and_iso_datetime_flag(monkeypatch):
+    """La requête history/tracker/list envoie une fenêtre ISO UTC ('...Z') + iso_datetime=true
+    (correctif root cause : plus de datetime naïf interprété dans le fuseau du compte)."""
+    captured = {}
+
+    class _FakeResp:
+        status_code = 200
+        def json(self):
+            return {"success": True, "list": []}
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            captured["url"] = url
+            captured["body"] = json
+            return _FakeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    _run(pm._fetch_command_responses("default", 781479, "2026-07-10T16:11:08+00:00"))
+    body = captured.get("body") or {}
+    assert body.get("iso_datetime") is True
+    assert str(body.get("from", "")).endswith("Z")
+    assert str(body.get("to", "")).endswith("Z")
+    assert "history/tracker/list" in captured.get("url", "")
+    # le credential ne doit pas fuiter dans l'URL
+    assert "STUB" not in captured.get("url", "")
+

@@ -162,7 +162,7 @@ async def list_commands(tracker_id: int) -> list[dict]:
 
 async def list_tracker_history(tracker_id: int, date_from: str, date_to: str,
                                events: Optional[list[str]] = None,
-                               limit: int = 100) -> list[dict]:
+                               limit: int = 100, iso_datetime: bool = False) -> list[dict]:
     """READ-ONLY. Event history of a tracker over a period (`history/tracker/list`).
 
     Officially documented endpoint (User API). Each entry may carry, in `extra.command`,
@@ -170,7 +170,10 @@ async def list_tracker_history(tracker_id: int, date_from: str, date_to: str,
       extra.command = {name, param, response: {status, body, error, success}}
     where `response.body` is the raw device answer (e.g. "Privatemode ON").
 
-    `date_from` / `date_to` format: 'YYYY-MM-DD HH:MM:SS' (server timezone).
+    Date format:
+      - `iso_datetime=False` (default): 'YYYY-MM-DD HH:MM:SS' interpreted in the ACCOUNT timezone.
+      - `iso_datetime=True`: ISO 8601 with explicit offset (e.g. '...Z') — UNAMBIGUOUS instant.
+        Also makes Navixy RETURN event times in ISO-with-offset form (timezone-aware).
     Returns the raw list of history entries. Never logs/returns the credential.
     """
     body: dict = {
@@ -180,6 +183,8 @@ async def list_tracker_history(tracker_id: int, date_from: str, date_to: str,
         "ascending": False,
         "limit": int(limit),
     }
+    if iso_datetime:
+        body["iso_datetime"] = True
     if events:
         body["events"] = events
     async with httpx.AsyncClient() as c:
