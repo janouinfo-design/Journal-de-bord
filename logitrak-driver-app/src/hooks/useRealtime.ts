@@ -59,10 +59,18 @@ export function useRealtime(onEvent: (e: RealtimeEvent) => void, role: 'driver' 
         ws.onerror = (e) => {
           logger.warn('realtime', 'WS error', e);
         };
-        ws.onclose = () => {
+        ws.onclose = (ev?: WebSocketCloseEvent) => {
           setConnected(false);
           wsRef.current = null;
           if (stoppedRef.current) return;
+          // Codes de fermeture liés à l'authentification : NE PAS boucler.
+          // Le refresh de token est géré par la couche HTTP (axios). Une reconnexion
+          // immédiate avec le même token invalide provoquerait une boucle 401/4401.
+          const code = ev?.code;
+          if (code === 4401 || code === 4403 || code === 1008) {
+            logger.info('realtime', `WS closed (auth ${code}); reconnexion suspendue`);
+            return;
+          }
           const delay = backoffRef.current;
           backoffRef.current = Math.min(delay * 2, 30_000);
           logger.info('realtime', `WS closed; reconnecting in ${delay}ms`);

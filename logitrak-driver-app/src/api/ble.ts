@@ -111,19 +111,44 @@ export type Vehicle = {
   id: string;
   plate: string | null;
   model: string | null;
+  label?: string | null;
   mode?: string;
 };
 
-// Liste des véhicules de la flotte (source des vehicle_id réels pour « Je conduis »).
-export async function getVehicles(): Promise<Vehicle[]> {
-  const { data } = await apiClient.get('/api/livre/vehicles');
-  return (Array.isArray(data) ? data : []) as Vehicle[];
+export type AuthorizedVehicles = {
+  access_mode: 'ALL' | 'SELECTED' | 'SINGLE';
+  default_vehicle_id: string | null;
+  vehicles: Vehicle[];
+};
+
+/**
+ * Véhicules que le chauffeur connecté a le DROIT d'utiliser — SOURCE D'AUTORITÉ.
+ * Backend GET /api/livre/driver/vehicles : périmètre ALL/SELECTED/SINGLE, tenant issu
+ * de l'identité authentifiée (jamais d'un paramètre client). Ne renvoie JAMAIS un
+ * véhicule hors périmètre ni d'un autre tenant. default_vehicle_id est déjà invalidé
+ * côté serveur s'il sort du périmètre (jamais de fallback arbitraire).
+ */
+export async function getAuthorizedVehicles(): Promise<AuthorizedVehicles> {
+  const { data } = await apiClient.get('/api/livre/driver/vehicles');
+  const vehicles = Array.isArray(data?.vehicles) ? (data.vehicles as Vehicle[]) : [];
+  return {
+    access_mode: (data?.access_mode as AuthorizedVehicles['access_mode']) ?? 'ALL',
+    default_vehicle_id: (data?.default_vehicle_id as string | null) ?? null,
+    vehicles,
+  };
 }
 
-// Véhicules AFFECTÉS au chauffeur (sélection manuelle, mode sans BLE).
+// Rétro-compat : renvoie uniquement les véhicules AUTORISÉS (périmètre chauffeur).
+// Migré de /livre/vehicles (flotte entière) vers /driver/vehicles (périmètre strict).
+export async function getVehicles(): Promise<Vehicle[]> {
+  const { vehicles } = await getAuthorizedVehicles();
+  return vehicles;
+}
+
+// Véhicules AUTORISÉS pour le chauffeur (picker mode manuel). Périmètre strict backend.
 export async function getMyVehicles(): Promise<Vehicle[]> {
-  const { data } = await apiClient.get('/api/livre/driver/my-vehicles');
-  return (data?.vehicles ?? []) as Vehicle[];
+  const { vehicles } = await getAuthorizedVehicles();
+  return vehicles;
 }
 
 export type KmSummary = {

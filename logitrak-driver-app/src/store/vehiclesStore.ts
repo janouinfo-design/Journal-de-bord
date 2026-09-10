@@ -3,7 +3,9 @@ import { Vehicle, getVehicles } from '@/api/ble';
 import { logger } from '@/utils/logger';
 
 /**
- * Store de la flotte de véhicules (source : GET /api/livre/vehicles, tenant-scopé côté serveur).
+ * Store des véhicules AUTORISÉS pour le chauffeur (source : GET /api/livre/driver/vehicles,
+ * périmètre ALL/SELECTED/SINGLE, tenant-scopé côté serveur). Ne contient jamais de véhicule
+ * hors périmètre. Utilisé par le picker plein écran et les véhicules récents (mode BLE).
  * - Chargé une seule fois (liste mutualisée, pas d'appel par véhicule).
  * - Recherche LOCALE : insensible à la casse, tolérante aux espaces (plaque/marque/modèle).
  * - Prêt pour 6 / 50 / 100 / 200 véhicules (la virtualisation est gérée par FlatList côté écran).

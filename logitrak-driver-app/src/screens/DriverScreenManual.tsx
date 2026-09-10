@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   RefreshControl, ActivityIndicator, Modal, FlatList,
@@ -9,8 +9,10 @@ import { usePrivateMode } from '@/hooks/usePrivateMode';
 import { useKmSummary } from '@/hooks/useKmSummary';
 import SosButton from '@/components/SosButton';
 import {
-  getMyVehicles, claimVehicle, getMyVehicle, Vehicle, SessionVehicle,
+  getAuthorizedVehicles, claimVehicle, getMyVehicle, Vehicle, SessionVehicle,
 } from '@/api/ble';
+
+type PickerStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 /**
  * Écran chauffeur — MODE MANUEL (sans Bluetooth).
@@ -24,11 +26,32 @@ export default function DriverScreenManual() {
   const [loadingVehicle, setLoadingVehicle] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [myVehicles, setMyVehicles] = useState<Vehicle[]>([]);
+  const [pickerStatus, setPickerStatus] = useState<PickerStatus>('idle');
+  const [defaultVehicleId, setDefaultVehicleId] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Empêche de rouvrir automatiquement le picker en boucle (une seule proposition).
+  const autoOpenedRef = useRef(false);
 
   const privateMode = usePrivateMode();
   const km = useKmSummary(vehicle?.id, 'today');
+
+  // Charge les véhicules AUTORISÉS (périmètre strict backend). Distingue ERROR / EMPTY.
+  const loadAuthorized = useCallback(async (): Promise<Vehicle[]> => {
+    setPickerStatus('loading');
+    try {
+      const r = await getAuthorizedVehicles();
+      setMyVehicles(r.vehicles);
+      setDefaultVehicleId(r.default_vehicle_id);
+      setPickerStatus('ready');
+      return r.vehicles;
+    } catch {
+      // Erreur réseau/serveur : NE JAMAIS présenter comme "aucun véhicule".
+      setMyVehicles([]);
+      setPickerStatus('error');
+      return [];
+    }
+  }, []);
 
   const loadVehicle = useCallback(async () => {
     setLoadingVehicle(true);
@@ -49,16 +72,32 @@ export default function DriverScreenManual() {
     }
   }, []);
 
-  useEffect(() => { loadVehicle(); }, [loadVehicle]);
+  // Au montage : lit la session courante (restauration) PUIS le périmètre autorisé.
+  // Si aucun véhicule actif : proposition = default_vehicle_id (uniquement s'il est
+  // AUTORISÉ), jamais le premier véhicule arbitrairement. Ouvre le picker une fois.
+  useEffect(() => {
+    (async () => {
+      await loadVehicle();
+      await loadAuthorized();
+    })();
+  }, [loadVehicle, loadAuthorized]);
+
+  // Auto-ouverture du picker si, après chargement, aucun véhicule n'est actif et que
+  // le périmètre autorisé est disponible et non vide (une seule fois).
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (loadingVehicle || pickerStatus !== 'ready') return;
+    if (!vehicle?.id && myVehicles.length > 0) {
+      autoOpenedRef.current = true;
+      setPickerOpen(true);
+    }
+  }, [loadingVehicle, pickerStatus, vehicle?.id, myVehicles.length]);
 
   const openPicker = useCallback(async () => {
     setPickerOpen(true);
-    try {
-      setMyVehicles(await getMyVehicles());
-    } catch {
-      setMyVehicles([]);
-    }
-  }, []);
+    // Recharge le périmètre à l'ouverture (un véhicule peut être devenu non autorisé).
+    await loadAuthorized();
+  }, [loadAuthorized]);
 
   const selectVehicle = useCallback(async (v: Vehicle) => {
     if (switching) return;
@@ -66,11 +105,11 @@ export default function DriverScreenManual() {
     try {
       await claimVehicle(v.id);          // « Je conduis » — session active côté backend
       setPickerOpen(false);
-      await loadVehicle();               // recharge le véhicule actif
+      await loadVehicle();               // recharge le véhicule actif (source: serveur)
       await privateMode.refresh();       // recharge l'état PRO/PRIVÉ pour CE véhicule
       // km.refresh se déclenche via le changement de vehicle.id (useKmSummary)
     } catch {
-      // pas de changement optimiste si le claim échoue
+      // pas de changement optimiste si le claim échoue (403 hors périmètre, réseau…)
     } finally {
       setSwitching(false);
     }
@@ -78,9 +117,15 @@ export default function DriverScreenManual() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadVehicle(), privateMode.refresh(), km.refresh()]);
+    await Promise.all([loadVehicle(), loadAuthorized(), privateMode.refresh(), km.refresh()]);
     setRefreshing(false);
-  }, [loadVehicle, privateMode, km]);
+  }, [loadVehicle, loadAuthorized, privateMode, km]);
+
+  // Véhicule à mettre en avant dans le picker : l'actif, sinon le défaut AUTORISÉ.
+  const highlightId = vehicle?.id
+    ?? (defaultVehicleId && myVehicles.some((v) => v.id === defaultVehicleId)
+        ? defaultVehicleId
+        : null);
 
   const st = privateMode.status.state;
   const isPrivate = st === 'PRIVATE';
@@ -163,6 +208,13 @@ export default function DriverScreenManual() {
           <Text style={styles.errorText} testID="manual-mode-error">{privateMode.error}</Text>
         ) : null}
 
+        {/* Timeout de confirmation : message honnête, jamais de faux PRO/PRIVÉ confirmé. */}
+        {privateMode.timedOut && !isPending ? (
+          <Text style={styles.errorText} testID="manual-mode-timeout">
+            Commande envoyée mais état non confirmé. Vérifiez l’état du véhicule.
+          </Text>
+        ) : null}
+
         {/* --- Km Pro / Km Privé (aujourd'hui) --- */}
         <Text style={styles.sectionLabel}>Kilomètres — Aujourd’hui</Text>
         <View style={styles.kmRow}>
@@ -192,26 +244,39 @@ export default function DriverScreenManual() {
                 <Text style={styles.modalClose}>Fermer</Text>
               </TouchableOpacity>
             </View>
-            {myVehicles.length === 0 ? (
-              <Text style={styles.emptyText} testID="manual-picker-empty">Aucun véhicule disponible</Text>
+            {pickerStatus === 'loading' ? (
+              <ActivityIndicator style={{ marginVertical: spacing.lg }} color={colors.primary} testID="manual-picker-loading" />
+            ) : pickerStatus === 'error' ? (
+              <View testID="manual-picker-error">
+                <Text style={styles.errorText}>Impossible de charger la liste des véhicules.</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={() => loadAuthorized()} testID="manual-picker-retry">
+                  <Text style={styles.retryBtnText}>Réessayer</Text>
+                </TouchableOpacity>
+              </View>
+            ) : myVehicles.length === 0 ? (
+              <Text style={styles.emptyText} testID="manual-picker-empty">
+                Aucun véhicule autorisé. Contactez votre gestionnaire.
+              </Text>
             ) : (
               <FlatList
                 data={myVehicles}
                 keyExtractor={(v) => v.id}
                 renderItem={({ item }) => {
-                  const selected = item.id === vehicle?.id;
+                  const isActive = item.id === vehicle?.id;
+                  const isDefault = !isActive && item.id === highlightId;
                   return (
                     <TouchableOpacity
-                      style={[styles.vehicleRow, selected && styles.vehicleRowSelected]}
+                      style={[styles.vehicleRow, (isActive || isDefault) && styles.vehicleRowSelected]}
                       onPress={() => selectVehicle(item)}
                       disabled={switching}
                       testID={`manual-picker-item-${item.id}`}
                     >
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.rowPlate}>{item.plate || 'Véhicule'}</Text>
+                        <Text style={styles.rowPlate}>{item.plate || item.label || 'Véhicule'}</Text>
                         {item.model ? <Text style={styles.rowModel}>{item.model}</Text> : null}
                       </View>
-                      {selected ? <Text style={styles.rowCurrent}>Actuel</Text> : null}
+                      {isActive ? <Text style={styles.rowCurrent}>Actuel</Text> : null}
+                      {isDefault ? <Text style={styles.rowCurrent}>Par défaut</Text> : null}
                     </TouchableOpacity>
                   );
                 }}
@@ -301,6 +366,11 @@ const styles = StyleSheet.create({
     padding: spacing.md, marginBottom: spacing.sm,
   },
   vehicleRowSelected: { borderColor: colors.primary },
+  retryBtn: {
+    marginTop: spacing.md, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.primary,
+    borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+  },
+  retryBtnText: { color: colors.primary, fontWeight: '600', fontSize: font.size.md },
   rowPlate: { color: colors.text, fontSize: font.size.md, fontWeight: '600' },
   rowModel: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
   rowCurrent: { color: colors.primary, fontSize: font.size.xs, fontWeight: '600' },
