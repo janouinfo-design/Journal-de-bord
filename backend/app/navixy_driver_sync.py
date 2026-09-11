@@ -43,6 +43,14 @@ def write_enabled() -> bool:
     )
 
 
+def unassign_write_enabled() -> bool:
+    return os.getenv(
+        "NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE", "0"
+    ).strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+
+
 def _employee_id(current: Optional[dict]) -> Optional[int]:
     if not current:
         return None
@@ -167,8 +175,10 @@ async def unassign_employee_from_tracker(
     Clear employee.tracker_id only after caller verified that this employee
     is still the current driver of this tracker.
     """
-    if not write_enabled():
-        raise NavixyDriverSyncError("NAVIXY_DRIVER_SYNC_WRITE_DISABLED")
+    if not unassign_write_enabled():
+        raise NavixyDriverSyncError(
+            "NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE_DISABLED"
+        )
 
     employee = await read_employee(tenant_id, employee_id)
     if not employee:
@@ -448,7 +458,7 @@ async def sync_stop(
                 "current_employee_id": current_id,
             }
 
-        if not write_enabled():
+        if not unassign_write_enabled():
             await _audit(
                 db,
                 "driver_unassignment_dry_run",

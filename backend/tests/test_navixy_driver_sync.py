@@ -94,11 +94,13 @@ def vehicle(**extra):
 def setup_function():
     os.environ["NAVIXY_DRIVER_SYNC_ENABLED"] = "1"
     os.environ["NAVIXY_DRIVER_SYNC_WRITE"] = "0"
+    os.environ["NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE"] = "0"
 
 
 def teardown_function():
     os.environ.pop("NAVIXY_DRIVER_SYNC_ENABLED", None)
     os.environ.pop("NAVIXY_DRIVER_SYNC_WRITE", None)
+    os.environ.pop("NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE", None)
 
 
 def test_sync_disabled_does_nothing(monkeypatch):
@@ -161,6 +163,7 @@ def test_claim_noop_when_orhan_already_assigned(monkeypatch):
 
 def test_claim_write_assigns_and_verifies(monkeypatch):
     os.environ["NAVIXY_DRIVER_SYNC_WRITE"] = "1"
+    os.environ["NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE"] = "1"
 
     db = DB(driver=driver(), vehicle=vehicle())
     calls = []
@@ -190,6 +193,7 @@ def test_claim_write_assigns_and_verifies(monkeypatch):
 
 def test_stop_never_removes_another_current_driver(monkeypatch):
     os.environ["NAVIXY_DRIVER_SYNC_WRITE"] = "1"
+    os.environ["NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE"] = "1"
 
     db = DB(driver=driver(), vehicle=vehicle())
 
@@ -214,6 +218,7 @@ def test_stop_never_removes_another_current_driver(monkeypatch):
 
 def test_stop_write_unassigns_expected_driver_and_verifies(monkeypatch):
     os.environ["NAVIXY_DRIVER_SYNC_WRITE"] = "1"
+    os.environ["NAVIXY_DRIVER_SYNC_UNASSIGN_WRITE"] = "1"
 
     db = DB(driver=driver(), vehicle=vehicle())
     calls = []
