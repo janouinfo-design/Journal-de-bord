@@ -7,6 +7,8 @@ import { Text, View, ActivityIndicator } from 'react-native';
 import { LoginScreen } from '@/screens/LoginScreen';
 import { DriverScreen } from '@/screens/DriverScreen';
 import { TripsScreen } from '@/screens/TripsScreen';
+import { DocumentsScreen } from '@/screens/DocumentsScreen';
+import { InspectionScreen } from '@/screens/InspectionScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 import { TripDetailScreen } from '@/screens/TripDetailScreen';
@@ -21,14 +23,16 @@ export type RootStackParamList = {
   Main: undefined;
   TripDetail: { tripId: string };
   ChangePassword: undefined;
+  Settings: undefined;
   VehiclePicker: { onPick?: (v: Vehicle) => void };
 };
 
 export type TabParamList = {
   Conduite: undefined;
   Trajets: undefined;
+  Documents: undefined;
+  Inspection: undefined;
   Profil: undefined;
-  Reglages: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -68,19 +72,27 @@ function MainTabs() {
         }}
       />
       <Tab.Screen
+        name="Documents"
+        component={DocumentsScreen}
+        options={{
+          title: 'Documents',
+          tabBarIcon: ({ color }) => <TabIcon symbol="📄" color={color} />,
+        }}
+      />
+      <Tab.Screen
+        name="Inspection"
+        component={InspectionScreen}
+        options={{
+          title: 'Inspection',
+          tabBarIcon: ({ color }) => <TabIcon symbol="🔧" color={color} />,
+        }}
+      />
+      <Tab.Screen
         name="Profil"
         component={ProfileScreen}
         options={{
           title: 'Profil',
           tabBarIcon: ({ color }) => <TabIcon symbol="👤" color={color} />,
-        }}
-      />
-      <Tab.Screen
-        name="Reglages"
-        component={SettingsScreen}
-        options={{
-          title: 'Réglages',
-          tabBarIcon: ({ color }) => <TabIcon symbol="⚙️" color={color} />,
         }}
       />
     </Tab.Navigator>
@@ -140,6 +152,11 @@ export function RootNavigator() {
                 name="ChangePassword"
                 component={ChangePasswordScreen}
                 options={{ title: 'Mot de passe' }}
+              />
+              <Stack.Screen
+                name="Settings"
+                component={SettingsScreen}
+                options={{ title: 'Réglages' }}
               />
               <Stack.Screen
                 name="VehiclePicker"

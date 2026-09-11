@@ -120,6 +120,14 @@ export function ProfileScreen() {
         {/* Actions */}
         <TouchableOpacity
           style={styles.actionBtn}
+          onPress={() => nav.navigate('Settings')}
+          testID="profile-settings"
+        >
+          <Text style={styles.actionText}>Réglages</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.actionBtn}
           onPress={() => nav.navigate('ChangePassword')}
           testID="profile-change-password"
         >

@@ -15,7 +15,7 @@ const HOLD_MS = 2500; // maintien ~2.5 s pour éviter tout déclenchement accide
  * - Offline / erreur : message honnête, pas de faux succès.
  * - `isPrivate` : informe le chauffeur que la position pourra être partagée en cas d'urgence.
  */
-export default function SosButton({ isPrivate = false }: { isPrivate?: boolean }) {
+export default function SosButton({ isPrivate = false, compact = true }: { isPrivate?: boolean; compact?: boolean }) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const inFlight = useRef(false);
@@ -82,12 +82,15 @@ export default function SosButton({ isPrivate = false }: { isPrivate?: boolean }
   useEffect(() => () => { if (holdTimer.current) clearTimeout(holdTimer.current); }, []);
 
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, compact && styles.wrapCompact]}>
       <Pressable
         onPressIn={startHold}
         onPressOut={cancelHold}
         disabled={sending}
-        style={({ pressed }) => [styles.btn, pressed && styles.btnPressed, sending && styles.btnDisabled]}
+        style={({ pressed }) => [
+          styles.btn, compact && styles.btnCompact,
+          pressed && styles.btnPressed, sending && styles.btnDisabled,
+        ]}
         testID="sos-button"
       >
         {/* jauge de maintien */}
@@ -95,10 +98,10 @@ export default function SosButton({ isPrivate = false }: { isPrivate?: boolean }
         {sending ? (
           <ActivityIndicator color={colors.text} />
         ) : (
-          <Text style={styles.btnText}>SOS Urgence</Text>
+          <Text style={[styles.btnText, compact && styles.btnTextCompact]}>SOS</Text>
         )}
       </Pressable>
-      <Text style={styles.hint}>Maintenez le bouton pour déclencher</Text>
+      <Text style={styles.hint}>Maintenir pour l’urgence</Text>
       {result ? (
         <Text style={[styles.result, { color: result.ok ? colors.success : colors.danger }]} testID="sos-result">
           {result.msg}
@@ -110,10 +113,15 @@ export default function SosButton({ isPrivate = false }: { isPrivate?: boolean }
 
 const styles = StyleSheet.create({
   wrap: { marginTop: spacing.xl, alignItems: 'center' },
+  wrapCompact: { marginTop: spacing.md, alignItems: 'flex-end' },
   btn: {
     width: '100%', backgroundColor: colors.danger, borderRadius: radius.lg,
     paddingVertical: spacing.lg, alignItems: 'center', justifyContent: 'center',
     overflow: 'hidden',
+  },
+  // Version COMPACTE : petite pastille rouge, toujours clairement identifiable (SOS).
+  btnCompact: {
+    width: 96, paddingVertical: spacing.sm, borderRadius: radius.pill,
   },
   btnPressed: { opacity: 0.9 },
   btnDisabled: { opacity: 0.6 },
@@ -122,6 +130,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#00000033',
   },
   btnText: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
-  hint: { color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.sm },
+  btnTextCompact: { fontSize: font.size.md, letterSpacing: 2 },
+  hint: { color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.xs },
   result: { fontSize: font.size.sm, marginTop: spacing.sm, textAlign: 'center' },
 });
