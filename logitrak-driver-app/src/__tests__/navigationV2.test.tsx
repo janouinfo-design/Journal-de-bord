@@ -15,6 +15,16 @@ jest.mock('@/api/documents', () => ({
   DOCUMENT_TYPE_LABEL: { carte_grise: 'Carte grise', assurance: 'Assurance', leasing: 'Leasing', controle_technique: 'Contrôle technique', autre: 'Autre' },
   STATUS_LABEL: { a_traiter: 'À traiter', valide: 'Validé', expire: 'Expiré' },
 }));
+jest.mock('@/api/inspections', () => ({
+  listInspections: jest.fn(),
+  createInspection: jest.fn(),
+  getCurrentInspection: jest.fn(),
+  saveChecklist: jest.fn(),
+  addInspectionPhoto: jest.fn(),
+  deleteInspectionPhoto: jest.fn(),
+  validateInspection: jest.fn(),
+  CHECKLIST_LABEL: { pneus: 'Pneus', autre: 'Autre' },
+}));
 jest.mock('expo-image-picker', () => ({
   requestCameraPermissionsAsync: jest.fn(),
   requestMediaLibraryPermissionsAsync: jest.fn(),
@@ -28,6 +38,7 @@ jest.mock('react-native-safe-area-context', () => {
 
 import * as ble from '@/api/ble';
 import * as docsApi from '@/api/documents';
+import * as inspApi from '@/api/inspections';
 import { DocumentsScreen } from '@/screens/DocumentsScreen';
 import { InspectionScreen } from '@/screens/InspectionScreen';
 
@@ -84,17 +95,32 @@ describe('DocumentsScreen (réel Phase 2)', () => {
   });
 });
 
-describe('InspectionScreen (shell Phase 1)', () => {
+describe('InspectionScreen (réel Phase 3)', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('rattache au véhicule sélectionné + chauffeur, historique vide honnête (0 mock)', async () => {
+  it('affiche véhicule/plaque + chauffeur + historique réel (0 mock inventé)', async () => {
     (ble.getMyVehicle as jest.Mock).mockResolvedValue(VEHICLE);
     (ble.getMyProfile as jest.Mock).mockResolvedValue(PROFILE);
+    (inspApi.listInspections as jest.Mock).mockResolvedValue([
+      { id: 'i1', vehicle_id: 'v1', status: 'validated', validated_at: '2026-09-10T10:00:00',
+        checklist: [{ item: 'pneus', state: 'ANOMALIE', comment: 'usure', photos: [] }] },
+    ]);
     let tree: any;
     await act(async () => { tree = create(<InspectionScreen />); });
     await flush();
     expect(textOf(byId(tree, 'inspection-vehicle-plate'))).toBe('FR 275924');
     expect(textOf(byId(tree, 'inspection-driver'))).toBe('Orhan');
+    expect(byId(tree, 'inspection-hist-i1')).toBeTruthy();
+    tree.unmount();
+  });
+
+  it('aucune inspection -> empty state honnête', async () => {
+    (ble.getMyVehicle as jest.Mock).mockResolvedValue(VEHICLE);
+    (ble.getMyProfile as jest.Mock).mockResolvedValue(PROFILE);
+    (inspApi.listInspections as jest.Mock).mockResolvedValue([]);
+    let tree: any;
+    await act(async () => { tree = create(<InspectionScreen />); });
+    await flush();
     expect(byId(tree, 'inspection-history-empty')).toBeTruthy();
     tree.unmount();
   });
