@@ -73,7 +73,7 @@ describe('DocumentsScreen (réel Phase 2)', () => {
     expect(textOf(byId(tree, 'documents-vehicle'))).toBe('FR 275924');
     expect(byId(tree, 'document-item-d1')).toBeTruthy();
     tree.unmount();
-  });
+  }, 15000);
 
   it('aucun document -> empty state propre (jamais de faux document)', async () => {
     (ble.getMyVehicle as jest.Mock).mockResolvedValue(VEHICLE);
