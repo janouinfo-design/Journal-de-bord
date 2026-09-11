@@ -134,11 +134,33 @@ async def driver_claim(payload: ClaimIn, user=Depends(get_current_user)):
     if payload.vehicle_id not in authorized:
         raise HTTPException(403, "Véhicule non autorisé pour ce chauffeur")
     try:
-        return await ble_engine.claim_driving(
+        result = await ble_engine.claim_driving(
             db, driver_id, payload.vehicle_id, actor=user.get("email", "?"),
             client_timestamp=payload.client_timestamp)
     except LookupError as e:
         raise HTTPException(404, str(e))
+
+    # Projection de la session APP confirmée vers Navixy.
+    # La session Journal reste autoritaire : une panne Navixy ne doit jamais
+    # annuler ou invalider la confirmation locale.
+    if result.get("status") == "confirmed":
+        try:
+            from app import navixy_driver_sync as nds
+            session = result.get("session") or {}
+            result["navixy_sync"] = await nds.sync_claim(
+                db,
+                driver_id,
+                payload.vehicle_id,
+                session_id=session.get("id"),
+                actor=user.get("email", "?"),
+            )
+        except Exception:
+            result["navixy_sync"] = {
+                "status": "error",
+                "error": "HOOK_FAILURE",
+            }
+
+    return result
 
 
 @router.post("/driver/stop")
@@ -150,7 +172,33 @@ async def driver_stop(user=Depends(get_current_user)):
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
-    return await ble_engine.stop_driving(db, driver_id, actor=user.get("email", "?"))
+    result = await ble_engine.stop_driving(
+        db, driver_id, actor=user.get("email", "?")
+    )
+
+    # Désaffectation Navixy uniquement après une vraie clôture APP.
+    # sync_stop() vérifie également que Navixy contient encore CE chauffeur
+    # avant toute tentative de désaffectation.
+    if result.get("stopped"):
+        try:
+            from app import navixy_driver_sync as nds
+            session = result.get("session") or {}
+            vehicle_id = session.get("vehicle_id")
+            if vehicle_id:
+                result["navixy_sync"] = await nds.sync_stop(
+                    db,
+                    driver_id,
+                    vehicle_id,
+                    session_id=session.get("id"),
+                    actor=user.get("email", "?"),
+                )
+        except Exception:
+            result["navixy_sync"] = {
+                "status": "error",
+                "error": "HOOK_FAILURE",
+            }
+
+    return result
 
 
 # ---------- Phase 2 — Bascule Privé / Professionnel (backend autoritaire) ----------
