@@ -242,6 +242,16 @@ LKP_MIN_SAMPLES = int(os.environ.get("PRIVATE_LKP_MIN_SAMPLES", "5"))       # ja
 LKP_DOMINANT_MIN_RATIO = float(os.environ.get("PRIVATE_LKP_DOMINANT_RATIO", "0.7"))  # terrain 0.889
 LKP_DOMINANT_RADIUS_M = float(os.environ.get("PRIVATE_LKP_DOMINANT_RADIUS_M", "25"))  # jitter GPS toléré
 LKP_RESUME_MIN_M = float(os.environ.get("PRIVATE_LKP_RESUME_MIN_M", "30"))  # petit déplacement réel = reprise
+
+# Fallback FMC130 LAST_KNOWN_POSITION quand Navixy ne renvoie AUCUN point
+# post-commande alors qu'AVL16 prouve un roulage réel.
+# Bornes volontairement conservatrices, uniquement pour un profil FIELD_VALIDATED.
+LKP_NOSAMPLE_MIN_DELTA_KM = float(
+    os.environ.get("PRIVATE_LKP_NOSAMPLE_MIN_DELTA_KM", "0.2")
+)
+LKP_NOSAMPLE_MAX_RADIUS_M = float(
+    os.environ.get("PRIVATE_LKP_NOSAMPLE_MAX_RADIUS_M", "50")
+)
 # Marge de skew d'horloge pour l'anti-stale de la réponse device (secondes).
 ANTI_STALE_SKEW_S = int(os.environ.get("PRIVATE_DEVICE_RESP_SKEW_S", "5"))
 
@@ -494,24 +504,72 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
         samples = await fetch(tenant_id, int(tracker_id), command_sent_at_iso)
 
         if requested_state == PRIVATE:
-            # 1) AVL16 doit AUGMENTER depuis le snapshot de départ (roulage réel en privé).
+            # 1) AVL16 doit avoir AUGMENTÉ depuis le snapshot pris juste avant la
+            # commande ON. C'est la preuve qu'un roulage réel a eu lieu APRÈS
+            # la demande PRIVATE.
             odo_start = sd.get("private_start_odometer_km")
             odo_now = await read_odo_km(int(tracker_id)) if read_odo_km else None
-            odo_increases = (odo_start is not None and odo_now is not None
-                             and float(odo_now) > float(odo_start))
-            if not (active and odo_increases):
+
+            try:
+                odo_delta = (
+                    float(odo_now) - float(odo_start)
+                    if odo_start is not None and odo_now is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                odo_delta = None
+
+            if odo_delta is None or odo_delta <= 0:
                 return None, SRC_UNCONFIRMED
-            # 2) Position masquée : 0,0 immédiat OU position DOMINANTE stable multi-samples.
+
+            # 2) Position explicitement masquée à 0,0.
             if _is_zero(cur_lat, cur_lng):
                 return PRIVATE, SRC_TELEMETRY
-            # jamais sur un seul sample : exiger un minimum d'observations
-            if not samples or len(samples) < LKP_MIN_SAMPLES:
+
+            # 3) Chemin historique validé terrain : plusieurs samples restent
+            # dominants autour de la même position pendant qu'AVL16 progresse.
+            if samples and len(samples) >= LKP_MIN_SAMPLES:
+                ratio, dom_count, total = _dominant_position(samples)
+                if ratio is not None and ratio >= LKP_DOMINANT_MIN_RATIO:
+                    return PRIVATE, SRC_TELEMETRY
+                # Des positions post-commande suffisamment nombreuses montrent
+                # que le GPS continue réellement à suivre le véhicule.
                 return None, SRC_UNCONFIRMED
-            ratio, dom_count, total = _dominant_position(samples)
-            # position stable/répétée (ne suit plus le véhicule) alors que l'odo progresse -> masqué
-            if ratio is not None and ratio >= LKP_DOMINANT_MIN_RATIO:
+
+            # 4) 1..N samples insuffisants : jamais extrapoler une confirmation.
+            if samples:
+                return None, SRC_UNCONFIRMED
+
+            # 5) Fallback strict NO-SAMPLES, uniquement pour LAST_KNOWN_POSITION :
+            # terrain FMC130 781479 : AVL16 progresse mais Navixy ne produit
+            # aucun point de trajet en privé. La dernière position reste proche
+            # de l'ancre pré-PRIVATE.
+            #
+            # Important : on ne dépend PAS de movement_status/ignition ici,
+            # car la résolution peut être effectuée après l'arrêt du véhicule.
+            if odo_delta < LKP_NOSAMPLE_MIN_DELTA_KM:
+                return None, SRC_UNCONFIRMED
+
+            # La position courante doit avoir été actualisée après la commande.
+            if not (sent and gps_upd and gps_upd > sent):
+                return None, SRC_UNCONFIRMED
+
+            anchor_lat = sd.get("private_gps_anchor_lat")
+            anchor_lng = sd.get("private_gps_anchor_lng")
+
+            if anchor_lat is None or anchor_lng is None:
+                return None, SRC_UNCONFIRMED
+
+            dist_from_anchor = _haversine_m(
+                anchor_lat, anchor_lng, cur_lat, cur_lng
+            )
+
+            if (
+                dist_from_anchor is not None
+                and dist_from_anchor <= LKP_NOSAMPLE_MAX_RADIUS_M
+            ):
                 return PRIVATE, SRC_TELEMETRY
-            # positions qui se déplacent réellement (le GPS suit encore) -> pas encore masqué
+
             return None, SRC_UNCONFIRMED
 
         if requested_state == BUSINESS:
