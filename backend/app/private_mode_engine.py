@@ -808,7 +808,7 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
 
     Preuves (fail-closed) : RÉPONSE DEVICE (autoritative) puis télémétrie (fallback).
     - Confirme -> CONFIRMED PRIVATE/BUSINESS + distance privée au retour Business.
-    - Pas de preuve ET timeout dépassé -> dernier état CONFIRMÉ restauré + transition_result=TIMEOUT.
+    - Pas de preuve ET timeout dépassé -> UNKNOWN + transition_result=TIMEOUT.
     - Sinon reste PENDING_CONFIRMATION.
     Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
     """
@@ -825,16 +825,26 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
     vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
     vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
 
-    # Kwargs d'injection optionnels : passés UNIQUEMENT s'ils sont fournis (rétro-compat
-    # avec un telemetry_confirm mocké dont la signature ne les déclare pas).
+    # Lecteur odomètre EFFECTIF pour la confirmation LAST_KNOWN_POSITION :
+    #  - test/injection : le read_odo_km fourni est utilisé tel quel ;
+    #  - PROD (lecteur par défaut) : lecture AVL16 CANONIQUE via read_live_avl16_km
+    #    (tenant + vehicle scopés), value_km réel ou None — jamais 0 inventé.
+    async def _effective_read_odo(_tracker_id: int) -> Optional[float]:
+        value_km, _status = await _read_odometer_snapshot(
+            db, tid, vehicle_id, tracker_id, read_odo_km)
+        return value_km
+
+    # Préserve les injections READ-ONLY existantes utilisées par les tests
+    # et la confirmation response/history.
     _extra: dict = {}
     if fetch_samples is not None:
         _extra["fetch_samples"] = fetch_samples
     if fetch_command_responses is not None:
         _extra["fetch_command_responses"] = fetch_command_responses
+
     confirmed, source = await telemetry_confirm(
         tid, int(tracker_id), requested, st.get("command_sent_at"), vc,
-        state_doc=st, read_odo_km=read_odo_km, **_extra)
+        state_doc=st, read_odo_km=_effective_read_odo, **_extra)
 
     if confirmed == requested:
         new_doc = {**st, "state": requested, "confirmation_source": source,
@@ -865,21 +875,20 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         age = (datetime.now(timezone.utc) - sent).total_seconds()
         if age >= PENDING_TIMEOUT_S:
             # Fenêtre dépassée SANS preuve télémétrique. On ne prétend JAMAIS connaître
-            # l'état réel du device. On libère les boutons (pending=false) tout en
-            # PRÉSERVANT l'historique (requested_target/last_command/command_sent_at via **st).
-            prev = st.get("previous_state")
-            # Retour au dernier état CONFIRMÉ si connu (BUSINESS/PRIVATE) ; sinon UNKNOWN.
-            final_state = prev if prev in (BUSINESS, PRIVATE) else UNKNOWN
-            timed = {**st, "state": final_state,
+            # l'état réel du device : le device peut être réellement PRIVATE alors que
+            # previous_state était BUSINESS -> restaurer BUSINESS serait un FAUX état.
+            # => state = UNKNOWN (honnête), tout en CONSERVANT l'historique complet
+            #    (previous_state / requested_target / last_command / command_sent_at) via **st.
+            timed = {**st, "state": UNKNOWN,
                      "confirmation_source": SRC_UNCONFIRMED,
                      "transition_result": TRANSITION_TIMEOUT,
                      "pending_timeout_at": _now()}
             await _save_mode_state(db, timed)
             await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
-                              "requested_mode": requested, "resulting_state": final_state,
+                              "requested_mode": requested, "resulting_state": UNKNOWN,
                               "result": "pending_timeout",
                               "transition_result": TRANSITION_TIMEOUT,
-                              "previous_state": prev})
+                              "previous_state": st.get("previous_state")})
             return timed
     return st  # toujours PENDING
 

@@ -210,20 +210,22 @@ def _make_pending(db, previous_state, requested, sent_iso):
                    "tracker_id": 781479, "tenant_id": "default"}}, upsert=True))
 
 
-def test_t7_pending_timeout_previous_business_restores_business():
-    """T7 — timeout, previous=BUSINESS -> revient BUSINESS (dernier confirmé) + transition_result=TIMEOUT.
-    Ne devient JAMAIS faussement PRIVATE ni UNKNOWN. Historique conservé, pending=false."""
+def test_t7_pending_timeout_previous_business_becomes_unknown():
+    """T7 (règle mise à jour) — timeout SANS preuve, previous=BUSINESS -> UNKNOWN.
+    On ne restaure JAMAIS BUSINESS (le device peut être réellement PRIVATE) ; historique conservé."""
     db = _db_fmc130()
     old = "2000-01-01T00:00:00+00:00"  # très ancien -> timeout garanti
     _make_pending(db, pm.BUSINESS, pm.PRIVATE, old)
     st = _run(pm.resolve_pending_confirmation(db, "vA", "default",
               read_odo_km=_odo_none()))
-    assert st["state"] == pm.BUSINESS                       # dernier état CONFIRMÉ restauré
+    assert st["state"] == pm.UNKNOWN                        # jamais faux BUSINESS/PRIVATE
     assert st["transition_result"] == pm.TRANSITION_TIMEOUT
     assert st["confirmation_source"] == pm.SRC_UNCONFIRMED
-    assert st["requested_target"] == pm.PRIVATE             # historique conservé
+    assert st["previous_state"] == pm.BUSINESS              # historique conservé
+    assert st["requested_target"] == pm.PRIVATE
     assert st["last_command"] == "setparam privatemode:1"
     assert st["command_sent_at"] == old
+    assert st.get("pending_timeout_at")                     # horodatage timeout conservé
     assert st["state"] != pm.PENDING_CONFIRMATION           # pending libéré
 
 
