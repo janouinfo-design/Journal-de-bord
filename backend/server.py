@@ -86,6 +86,8 @@ async def on_startup():
     await raw.drivers.create_index([("tenant_id", 1), ("ble_id_norm", 1)])
     await raw.reconciliation_alert_candidates.create_index(
         [("tenant_id", 1), ("dedup_key", 1)], unique=True)
+    await raw.vehicle_documents.create_index([("tenant_id", 1), ("vehicle_id", 1), ("created_at", -1)])
+    await raw.vehicle_documents.create_index([("tenant_id", 1), ("id", 1)], unique=True)
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
     await apply_rules_to_all(db)

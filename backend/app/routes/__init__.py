@@ -15,6 +15,7 @@ from app.routes import (
     auth as _auth,
     ble as _ble,
     dashboard as _dashboard,
+    documents as _documents,
     energy as _energy,
     fines as _fines,
     fuel as _fuel,
@@ -48,5 +49,6 @@ livre_router.include_router(_fuel_statements.router)
 livre_router.include_router(_fuel.router)
 livre_router.include_router(_energy.router)
 livre_router.include_router(_odometer_calibration.router)
+livre_router.include_router(_documents.router)
 
 __all__ = ["auth_router", "livre_router"]

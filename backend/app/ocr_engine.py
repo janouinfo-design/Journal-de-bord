@@ -161,3 +161,49 @@ async def extract_fine_from_document(
     raw = "".join(chunks).strip()
     parsed = _extract_json(raw)
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# Documents VÉHICULE (carte grise / assurance / leasing / contrôle technique).
+# RÉUTILISE le MÊME moteur (Gemini Vision + prepare_image_payload) — aucun 2e OCR.
+# Extraction best-effort de la date du document et de la date d'expiration.
+# ---------------------------------------------------------------------------
+VEHICLE_DOC_SYSTEM_PROMPT = (
+    "Tu es un assistant expert en analyse de documents automobiles suisses "
+    "(carte grise / permis de circulation, police d'assurance, contrat de leasing, "
+    "rapport de contrôle technique / expertise). Ta seule mission est d'extraire des "
+    "informations structurées sous forme de JSON valide, sans aucune explication. "
+    "Si une information n'est pas lisible, mets `null`. Dates au format ISO 8601 "
+    "(YYYY-MM-DD)."
+)
+
+VEHICLE_DOC_USER_PROMPT = (
+    "Voici un document de véhicule. Extrais au format JSON strict (aucun commentaire) :\n"
+    "{\n"
+    '  "document_type": "carte_grise|assurance|leasing|controle_technique|autre",\n'
+    '  "vehicle_plate": "plaque (ex: FR 275924) ou null",\n'
+    '  "document_date": "date d\'émission YYYY-MM-DD ou null",\n'
+    '  "expiry_date": "date d\'expiration / prochaine échéance YYYY-MM-DD ou null"\n'
+    "}\n"
+    "Réponds uniquement avec ce JSON, rien d'autre."
+)
+
+
+async def extract_vehicle_document(data: bytes, mime_type: str, session_id: str) -> dict:
+    """OCR best-effort d'un document véhicule. Réutilise le moteur amendes (même modèle).
+    Retour dict structuré (jamais inventé : champs illisibles = null). {} si échec."""
+    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise RuntimeError("EMERGENT_LLM_KEY non configurée.")
+    b64 = prepare_image_payload(data, mime_type)
+    chat = LlmChat(
+        api_key=api_key, session_id=session_id, system_message=VEHICLE_DOC_SYSTEM_PROMPT,
+    ).with_model(OCR_PROVIDER, OCR_MODEL)
+    message = UserMessage(text=VEHICLE_DOC_USER_PROMPT, file_contents=[ImageContent(image_base64=b64)])
+    chunks = []
+    async for ev in chat.stream_message(message):
+        if isinstance(ev, TextDelta):
+            chunks.append(ev.content)
+        elif isinstance(ev, StreamDone):
+            break
+    return _extract_json("".join(chunks).strip())

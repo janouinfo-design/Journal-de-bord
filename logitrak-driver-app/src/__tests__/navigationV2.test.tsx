@@ -10,12 +10,24 @@ jest.mock('@/api/ble', () => ({
   getMyVehicle: jest.fn(),
   getMyProfile: jest.fn(),
 }));
+jest.mock('@/api/documents', () => ({
+  listVehicleDocuments: jest.fn(),
+  DOCUMENT_TYPE_LABEL: { carte_grise: 'Carte grise', assurance: 'Assurance', leasing: 'Leasing', controle_technique: 'Contrôle technique', autre: 'Autre' },
+  STATUS_LABEL: { a_traiter: 'À traiter', valide: 'Validé', expire: 'Expiré' },
+}));
+jest.mock('expo-image-picker', () => ({
+  requestCameraPermissionsAsync: jest.fn(),
+  requestMediaLibraryPermissionsAsync: jest.fn(),
+  launchCameraAsync: jest.fn(),
+  launchImageLibraryAsync: jest.fn(),
+}));
 jest.mock('react-native-safe-area-context', () => {
   const RN = require('react');
   return { SafeAreaView: ({ children }: any) => RN.createElement(RN.Fragment, null, children) };
 });
 
 import * as ble from '@/api/ble';
+import * as docsApi from '@/api/documents';
 import { DocumentsScreen } from '@/screens/DocumentsScreen';
 import { InspectionScreen } from '@/screens/InspectionScreen';
 
@@ -32,24 +44,38 @@ const PROFILE = {
   must_change_password: false, driver_active: true, ble_tag_associated: false, last_ble_detection: null,
 };
 
-describe('DocumentsScreen (shell Phase 1)', () => {
+describe('DocumentsScreen (réel Phase 2)', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('affiche le CONTEXTE RÉEL (chauffeur + véhicule) et un état vide honnête (0 mock)', async () => {
+  it('affiche le véhicule sélectionné + liste réelle des documents (0 mock inventé)', async () => {
     (ble.getMyVehicle as jest.Mock).mockResolvedValue(VEHICLE);
-    (ble.getMyProfile as jest.Mock).mockResolvedValue(PROFILE);
+    (docsApi.listVehicleDocuments as jest.Mock).mockResolvedValue({
+      vehicle_id: 'v1',
+      documents: [
+        { id: 'd1', vehicle_id: 'v1', type: 'assurance', filename: 'assurance.pdf',
+          status: 'valide', expiry_date: '2027-01-01' },
+      ],
+    });
     let tree: any;
     await act(async () => { tree = create(<DocumentsScreen />); });
     await flush();
-    expect(textOf(byId(tree, 'documents-driver'))).toBe('Orhan');
     expect(textOf(byId(tree, 'documents-vehicle'))).toBe('FR 275924');
-    expect(byId(tree, 'documents-empty')).toBeTruthy(); // état vide honnête, aucune donnée fictive
+    expect(byId(tree, 'document-item-d1')).toBeTruthy();
     tree.unmount();
   });
 
-  it('erreur contexte -> message honnête, jamais de faux document', async () => {
+  it('aucun document -> empty state propre (jamais de faux document)', async () => {
+    (ble.getMyVehicle as jest.Mock).mockResolvedValue(VEHICLE);
+    (docsApi.listVehicleDocuments as jest.Mock).mockResolvedValue({ vehicle_id: 'v1', documents: [] });
+    let tree: any;
+    await act(async () => { tree = create(<DocumentsScreen />); });
+    await flush();
+    expect(byId(tree, 'documents-empty')).toBeTruthy();
+    tree.unmount();
+  });
+
+  it('erreur -> message honnête + retry, jamais de faux document', async () => {
     (ble.getMyVehicle as jest.Mock).mockRejectedValue(new Error('net'));
-    (ble.getMyProfile as jest.Mock).mockRejectedValue(new Error('net'));
     let tree: any;
     await act(async () => { tree = create(<DocumentsScreen />); });
     await flush();
