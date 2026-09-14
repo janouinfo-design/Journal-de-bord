@@ -343,6 +343,8 @@ async def _upsert_trip(db, doc: dict) -> str:
             "tenant_id": doc["tenant_id"],
             "vehicle_id": doc["vehicle_id"],
             "navixy_track_id": doc["navixy_track_id"],
+            "start_time": doc["start_time"],
+            "end_time": doc["end_time"],
             "navixy_tracker_id": {"$exists": False},
         }
         existing = await db.trips.find_one(legacy_identity)

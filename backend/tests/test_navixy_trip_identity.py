@@ -154,6 +154,8 @@ def test_legacy_trip_is_migrated_not_duplicated():
             "vehicle_id": "audi",
             "vehicle_plate": "audi",
             "navixy_track_id": 8208,
+            "start_time": "2026-09-14T08:00:00+00:00",
+            "end_time": None,
             "distance_km": 1.0,
             "auto_classified": True,
         })
@@ -205,3 +207,51 @@ def test_build_trip_doc_uses_real_tenant_and_tracker(monkeypatch):
     assert doc["vehicle_id"] == "audi"
     assert doc["navixy_tracker_id"] == 781479
     assert doc["navixy_track_id"] == 8208
+
+
+
+def test_legacy_same_track_different_time_is_not_hijacked():
+    async def run():
+        db = FakeDB()
+
+        db.trips.docs.append({
+            "_id": "legacy-old-tracker",
+            "id": "legacy-old-trip",
+            "tenant_id": "default",
+            "vehicle_id": "audi",
+            "vehicle_plate": "audi",
+            "navixy_track_id": 8208,
+            "start_time": "2026-09-06T12:34:08+00:00",
+            "end_time": "2026-09-06T12:48:45+00:00",
+            "distance_km": 1.8,
+            "auto_classified": True,
+        })
+
+        incoming = trip_doc(
+            "audi",
+            781479,
+            track_id=8208,
+            distance=3.5,
+        )
+
+        result = await ns._upsert_trip(db, incoming)
+
+        assert result == "new"
+        assert len(db.trips.docs) == 2
+
+        old = next(
+            d for d in db.trips.docs
+            if d["id"] == "legacy-old-trip"
+        )
+
+        assert "navixy_tracker_id" not in old
+
+        new = next(
+            d for d in db.trips.docs
+            if d.get("navixy_tracker_id") == 781479
+        )
+
+        assert new["navixy_track_id"] == 8208
+        assert new["distance_km"] == 3.5
+
+    asyncio.run(run())
