@@ -6,7 +6,7 @@ Strategy:
 - zone/list     → geofences (type inferred from label keywords)
 - track/list    → trips (per tracker, chunked by 7 days). Pulled for last N days.
 
-Trips are upserted by `navixy_track_id`. Manual classifications
+Trips are upserted by `(tenant_id, navixy_tracker_id, navixy_track_id)`. Manual classifications
 (auto_classified=False) are preserved across syncs.
 
 Refactored in iteration 26 (22/06/2026): the previously monolithic 200-line
@@ -261,7 +261,7 @@ async def _sync_zones(db) -> tuple[int, list[dict]]:
 # Phase 4 — Tracks / Trips
 # ---------------------------------------------------------------------------
 async def _build_trip_doc(
-    db, vehicle: dict, tr: dict, zones_local: list[dict],
+    db, vehicle: dict, tracker_id: int, tr: dict, zones_local: list[dict],
 ) -> dict:
     """Translate a Navixy track payload into a local `trips` document."""
     start_iso = _normalize_navixy_date(tr["start_date"])
@@ -284,12 +284,19 @@ async def _build_trip_doc(
         if dd:
             resolved_driver_name = dd["name"]
 
+    tenant_id = vehicle.get("tenant_id")
+    if not tenant_id:
+        raise ValueError(
+            f"Missing tenant_id for vehicle {vehicle.get('id')}"
+        )
+
     doc = {
-        "tenant_id": "default",
+        "tenant_id": tenant_id,
         "driver_id": resolved_driver_id,
         "driver_name": resolved_driver_name or vehicle.get("plate"),
         "vehicle_id": vehicle["id"],
         "vehicle_plate": vehicle["plate"],
+        "navixy_tracker_id": int(tracker_id),
         "navixy_track_id": tr["id"],
         "start_time": start_iso,
         "end_time": end_iso,
@@ -312,18 +319,46 @@ async def _build_trip_doc(
 
 
 async def _upsert_trip(db, doc: dict) -> str:
-    """Insert or update a trip by navixy_track_id. Returns 'new' or 'updated'.
+    """Insert or update a trip by tenant + vehicle + Navixy track id.
+
+    Navixy track ids are not globally unique across trackers. The local
+    identity must therefore be scoped to the canonical vehicle and tenant.
 
     Manual classifications (auto_classified=False) are preserved: we do NOT
     overwrite the driver_id chosen by the user on a manually-edited trip.
     """
-    navixy_track_id = doc["navixy_track_id"]
-    existing = await db.trips.find_one({"navixy_track_id": navixy_track_id})
+    identity = {
+        "tenant_id": doc["tenant_id"],
+        "navixy_tracker_id": doc["navixy_tracker_id"],
+        "navixy_track_id": doc["navixy_track_id"],
+    }
+
+    existing = await db.trips.find_one(identity)
+
+    # Lazy migration of legacy documents created before navixy_tracker_id
+    # was stored on trips. Scope by tenant + canonical vehicle + track id,
+    # never by track id alone.
+    if not existing:
+        legacy_identity = {
+            "tenant_id": doc["tenant_id"],
+            "vehicle_id": doc["vehicle_id"],
+            "navixy_track_id": doc["navixy_track_id"],
+            "navixy_tracker_id": {"$exists": False},
+        }
+        existing = await db.trips.find_one(legacy_identity)
+        if existing:
+            await db.trips.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"navixy_tracker_id": doc["navixy_tracker_id"]}},
+            )
     if existing:
         update = {**doc}
         if not existing.get("auto_classified", True):
             update.pop("driver_id", None)
-        await db.trips.update_one({"navixy_track_id": navixy_track_id}, {"$set": update})
+        await db.trips.update_one(
+            {"_id": existing["_id"]},
+            {"$set": update},
+        )
         if doc.get("end_time"):
             from app.ble_engine import mark_sessions_trip_end
             await mark_sessions_trip_end(db, {**doc, "id": existing.get("id")})
@@ -365,7 +400,9 @@ async def _sync_tracks_for_vehicle(
             cursor = chunk_end
             continue
         for tr in resp.get("list", []):
-            doc = await _build_trip_doc(db, vehicle, tr, zones_local)
+            doc = await _build_trip_doc(
+                db, vehicle, tracker_id, tr, zones_local
+            )
             status = await _upsert_trip(db, doc)
             if status == "new":
                 new_count += 1

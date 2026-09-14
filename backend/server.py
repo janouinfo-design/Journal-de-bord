@@ -61,6 +61,19 @@ async def on_startup():
     await db.trips.create_index([("classification", 1), ("start_time", -1)])
     await db.trips.create_index("driver_id")
     await db.trips.create_index("vehicle_id")
+    await db.trips.create_index(
+        [
+            ("tenant_id", 1),
+            ("navixy_tracker_id", 1),
+            ("navixy_track_id", 1),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "navixy_tracker_id": {"$gt": 0},
+            "navixy_track_id": {"$gt": 0},
+        },
+        name="uniq_trip_navixy_tenant_tracker_track",
+    )
     await seed_admin()
     from app.tenancy import ensure_tenancy
     await ensure_tenancy(db)

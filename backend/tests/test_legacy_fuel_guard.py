@@ -94,11 +94,25 @@ def _build_doc(vehicle, monkeypatch, km=100.0):
     tr = {"id": f"gf-{uuid.uuid4()}", "start_date": "2026-08-26 08:00:00",
           "end_date": "2026-08-26 09:00:00", "length": km,
           "bounds": {}, "avg_speed": 40, "max_speed": 80}
-    return asyncio.run(ns._build_trip_doc(None, vehicle, tr, []))
+    return asyncio.run(
+        ns._build_trip_doc(
+            None,
+            vehicle,
+            int(vehicle["navixy_tracker_id"]),
+            tr,
+            [],
+        )
+    )
 
 
 class TestBuildTripDoc:
-    VEH = {"id": "veh-gf", "plate": "GF 000", "fuel_type": None}
+    VEH = {
+        "id": "veh-gf",
+        "plate": "GF 000",
+        "tenant_id": "default",
+        "navixy_tracker_id": 999001,
+        "fuel_type": None,
+    }
 
     def test_t4_bev_no_fuel_l(self, monkeypatch):
         doc = _build_doc({**self.VEH, "fuel_type": "electric"}, monkeypatch)
