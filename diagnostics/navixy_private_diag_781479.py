@@ -12,6 +12,20 @@ T0       : 2026-09-14 15:04:59 UTC   (POST PRIVATE accepte / privatemode ON)
 Timeout  : 2026-09-14 15:10:07 UTC   (pending_timeout -> UNKNOWN)
 Fenetre  : 2026-09-14 14:59:59 UTC  ->  2026-09-14 15:14:59 UTC (T-5 / T+10)
 
+CORRECTIF TIMEZONE (v2)
+-----------------------
+Le 1er diagnostic etait inconclusif car `track/read` recevait une fenetre au
+format 'YYYY-MM-DD HH:MM:SS' SANS offset. Navixy interprete ce format dans la
+TIMEZONE DU COMPTE (Europe/Zurich = UTC+2 en DST septembre). La fenetre UTC
+14:59:59->15:14:59 etait donc lue comme heure LOCALE -> reellement ~12:59->13:14
+UTC, a cote de l'evenement (0 point pertinent).
+
+Correction : `track/read` ET `history/tracker/list` envoient desormais des
+instants ISO 8601 UTC avec offset explicite (...Z) + `iso_datetime: true`,
+ce qui rend la fenetre NON AMBIGUE (meme correctif que le backend prod).
+Un repli en heure locale (ACCOUNT_TZ_OFFSET_HOURS) est prevu et documente
+au cas ou un endpoint ignorerait `iso_datetime`.
+
 STRICTEMENT READ-ONLY :
   - Endpoints appeles : tracker/get_state, history/tracker/list,
                         track/read, tracker/readings/list
@@ -63,6 +77,11 @@ HTTP_TIMEOUT = 30.0
 TRACK_POINT_LIMIT = 1000
 HISTORY_LIMIT = 500
 
+# Timezone du compte Navixy (repli uniquement). Europe/Zurich = UTC+2 en DST
+# (14 sept 2026 est en heure d'ete). Sert a construire une fenetre en HEURE LOCALE
+# si jamais un endpoint ignore `iso_datetime`. Par defaut on privilegie ISO+Z.
+ACCOUNT_TZ_OFFSET_HOURS = 2
+
 
 # ============================ HELPERS ====================================
 def _resolve_credential():
@@ -87,7 +106,10 @@ def _fmt_iso(dt: datetime) -> str:
 
 
 def _fmt_plain(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    """'YYYY-MM-DD HH:MM:SS' en HEURE LOCALE DU COMPTE (repli si iso_datetime ignore).
+    ATTENTION : sans offset, Navixy lit ce format dans la timezone du compte."""
+    local = dt.astimezone(timezone.utc) + timedelta(hours=ACCOUNT_TZ_OFFSET_HOURS)
+    return local.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_ts(v):
@@ -112,10 +134,12 @@ def _parse_ts(v):
         return dt.astimezone(timezone.utc)
     except ValueError:
         pass
-    # 'YYYY-MM-DD HH:MM:SS' (interprete UTC — voir NOTE TZ ci-dessous)
+    # 'YYYY-MM-DD HH:MM:SS' SANS offset -> HEURE LOCALE DU COMPTE (Navixy).
+    # On la convertit en UTC via ACCOUNT_TZ_OFFSET_HOURS (jamais suppose UTC).
     try:
         dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-        return dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=timezone.utc) - timedelta(hours=ACCOUNT_TZ_OFFSET_HOURS)
+        return dt
     except ValueError:
         return None
 
@@ -177,8 +201,9 @@ def main():
     print(f"T0 PRIVATE     : {_fmt_iso(T0)}")
     print(f"T timeout      : {_fmt_iso(T_TIMEOUT)}")
     print(f"Fenetre        : {_fmt_iso(WIN_FROM)}  ->  {_fmt_iso(WIN_TO)}")
-    print("NOTE TZ        : les timestamps 'YYYY-MM-DD HH:MM:SS' sans offset sont "
-          "supposes UTC.\n                 Verifier la coherence via les entrees iso_datetime=True.")
+    print("NOTE TZ        : requetes en ISO 8601 UTC (...Z) + iso_datetime=true -> fenetre NON "
+          "ambigue.\n                 Timestamps sans offset renvoyes par Navixy = heure LOCALE "
+          f"compte (UTC+{ACCOUNT_TZ_OFFSET_HOURS}), reconvertis en UTC.")
 
     if not cred:
         _hr("STOP — CREDENTIAL NAVIXY ABSENT DU RUNTIME")
@@ -279,11 +304,12 @@ def main():
     # ---------------------------------------------------------------
     # 2. POINTS GPS BRUTS (track/read) — voir si GPS gele/masque/0,0/frais
     # ---------------------------------------------------------------
-    _hr("[3/4] track/read  (points GPS bruts dans la fenetre, simplify=False)")
+    _hr("[3/4] track/read  (points GPS bruts dans la fenetre, ISO+Z, iso_datetime=True)")
     ok, data = _post(client, base, "track/read", {
         "tracker_id": TRACKER_ID,
-        "from": _fmt_plain(WIN_FROM),
-        "to": _fmt_plain(WIN_TO),
+        "from": _fmt_iso(WIN_FROM),
+        "to": _fmt_iso(WIN_TO),
+        "iso_datetime": True,
         "simplify": False,
         "point_limit": TRACK_POINT_LIMIT,
     }, cred)
