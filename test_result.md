@@ -9,6 +9,17 @@ user_problem_statement: |
   Données réelles uniquement, N/A si champ absent.
 
 backend:
+  - task: "FMC130 BUSINESS confirmation bug fix - software-only unit tests"
+    implemented: true
+    working: true
+    file: "backend/app/private_mode_engine.py, backend/tests/test_fmc130_business_recovery.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "FMC130 BUSINESS CONFIRMATION BUG FIX VERIFIED - All 163 tests PASSED (7 primary + 156 regression). REPORTED BUG (PROD): device path worked (Air Console showed 'privatemode ON/OFF'), but APP never confirmed. After 'privatemode OFF', telemetry showed Location valid=yes, Speed=0 (standstill), Satellites=14 → state stayed PENDING until timeout→UNKNOWN. ROOT CAUSE: BUSINESS confirmation required MOVEMENT (displacement OR distance-from-anchor), impossible at standstill. FIX APPLIED (private_mode_engine.py lines 616-624, BUSINESS branch): BUSINESS now confirmed when real, FRESH, NON-masked GPS position re-emitted AFTER OFF command - even at standstill. GUARDS (fail-closed): (1) frame after command_sent_at (gps_upd > sent) ✓, (2) coords not 0,0 ✓, (3) position FRESH (_gps_state_is_fresh: gps.updated within PRIVATE_BUSINESS_GPS_FRESH_MAX_S=180s) ✓, (4) position NOT frozen on anchor (_position_is_anchor_frozen: within LKP_DOMINANT_RADIUS_M of anchor → refused) ✓. PRIVATE confirmation UNCHANGED (no false success). PRIMARY TESTS (test_fmc130_business_recovery.py): 7/7 PASSED - (1) test_business_confirmed_valid_fresh_position_at_standstill: valid fresh non-masked position at speed=0 → BUSINESS/TELEMETRY ✓, (2) test_business_refused_if_position_frozen_on_anchor: still frozen on private anchor → None (no false BUSINESS) ✓, (3) test_business_refused_if_position_stale: stale/older-than-command position → None ✓, (4) test_business_refused_if_zero_position: 0,0 → None ✓, (5) test_business_still_confirmed_by_movement: movement path still works (non-regression) ✓, (6) test_business_refused_if_frame_not_after_command: frame before OFF → None ✓, (7) test_private_unchanged_no_false_success: PRIVATE with GPS moving + no odo increase → None (no false PRIVATE) ✓. REGRESSION TESTS: 156/156 PASSED (test_fmc130_confirmation_fix.py, test_fmc130_lkp_fixes.py, test_fmc130_lkp_no_samples.py, test_fmc130_resolve_pending.py, test_private_mode_phase2.py, test_private_mode_gate.py, test_private_mode_confirmation.py, test_odometer_capability.py, test_odometer_calibration.py, test_reports_private_redaction.py). CODE VERIFICATION: telemetry_confirm BUSINESS branch adds fresh-non-masked-position path AFTER movement/anchor checks (lines 616-624), with fail-closed guards ✓. PRIVATE branch unchanged (lines 532-599) ✓. ENVIRONMENT: PRIVATE_MODE_DEVICE_WRITE=0 ✓, ODOMETER_CALIBRATION_DEVICE_WRITE=0 ✓. TEST ISOLATION: NO network calls (all mocked via monkeypatch) ✓, NO device commands ✓, NO secrets ✓, fake DB only ✓. Working dir /app/backend, venv /root/.venv, pytest 9.0.3. TOTAL: 163/163 PASSED (100%). NO ISSUES FOUND."
   - task: "Driver manual UX - GET /api/livre/driver/my-vehicles"
     implemented: true
     working: true
@@ -280,6 +291,92 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      FMC130 BUSINESS CONFIRMATION BUG FIX VERIFICATION COMPLETE (2026-01-XX)
+      
+      CONTEXT: Verified software-only fix for FMC130 BUSINESS confirmation bug reported on PROD. Bug: device path worked (Air Console showed 'privatemode ON/OFF'), but APP never confirmed. After 'privatemode OFF', telemetry showed Location valid=yes, Speed=0 (standstill), Satellites=14 → state stayed PENDING until timeout→UNKNOWN. Root cause: BUSINESS confirmation required MOVEMENT (displacement OR distance-from-anchor), impossible at standstill.
+      
+      FIX APPLIED: BUSINESS confirmation now succeeds when a real, FRESH, NON-masked GPS position is re-emitted AFTER the OFF command - even at standstill (speed=0). Implementation in private_mode_engine.py lines 616-624 (BUSINESS branch, LAST_KNOWN_POSITION strategy).
+      
+      TEST RESULTS (pytest 9.0.3, working dir /app/backend, venv /root/.venv):
+      ✅ PRIMARY SUITE (test_fmc130_business_recovery.py): 7/7 PASSED (100%)
+      ✅ REGRESSION SUITE: 156/156 PASSED (100%)
+      ✅ TOTAL: 163/163 PASSED (100%)
+      
+      PRIMARY TEST DETAILS (test_fmc130_business_recovery.py):
+      1. ✅ test_business_confirmed_valid_fresh_position_at_standstill
+         - Valid fresh non-masked position at speed=0 → BUSINESS/TELEMETRY confirmed
+         - KEY TEST: Addresses the reported bug directly
+      2. ✅ test_business_refused_if_position_frozen_on_anchor
+         - Position still frozen on private anchor → None (no false BUSINESS)
+         - Fail-closed guard: refuses if within LKP_DOMINANT_RADIUS_M of anchor
+      3. ✅ test_business_refused_if_position_stale
+         - Stale/older-than-command position → None
+         - Fail-closed guard: refuses if gps.updated not within 180s window
+      4. ✅ test_business_refused_if_zero_position
+         - Position 0,0 (masked) → None
+         - Fail-closed guard: refuses zero coordinates
+      5. ✅ test_business_still_confirmed_by_movement
+         - Movement path still works (non-regression)
+         - Existing confirmation logic preserved
+      6. ✅ test_business_refused_if_frame_not_after_command
+         - Frame before OFF command → None
+         - Fail-closed guard: refuses if gps_upd not > command_sent_at
+      7. ✅ test_private_unchanged_no_false_success
+         - PRIVATE with GPS moving + no odo increase → None (no false PRIVATE)
+         - PRIVATE confirmation logic unchanged
+      
+      REGRESSION TEST SUITE (156 tests):
+      - test_fmc130_confirmation_fix.py ✓
+      - test_fmc130_lkp_fixes.py ✓
+      - test_fmc130_lkp_no_samples.py ✓
+      - test_fmc130_resolve_pending.py ✓
+      - test_private_mode_phase2.py ✓
+      - test_private_mode_gate.py ✓
+      - test_private_mode_confirmation.py ✓
+      - test_odometer_capability.py ✓
+      - test_odometer_calibration.py ✓
+      - test_reports_private_redaction.py ✓
+      
+      CODE VERIFICATION (private_mode_engine.py):
+      
+      ✅ BUSINESS BRANCH (lines 601-625, LAST_KNOWN_POSITION strategy):
+         - Lines 616-624: NEW fresh-position-at-standstill confirmation path
+         - Added AFTER existing movement/anchor-distance checks (lines 608-615)
+         - Comment explicitly references terrain 781479 bug: "Location valid=yes, Speed=0 après OFF -> doit confirmer BUSINESS"
+      
+      ✅ FAIL-CLOSED GUARDS (all verified):
+         1. Frame after command (line 603): `if not (sent and gps_upd and gps_upd > sent): return None`
+         2. Coords not 0,0 (line 605): `if _is_zero(cur_lat, cur_lng): return None`
+         3. Position FRESH (line 623): `_gps_state_is_fresh(st)` checks gps.updated within PRIVATE_BUSINESS_GPS_FRESH_MAX_S=180s (helper lines 368-375)
+         4. Position NOT frozen on anchor (line 623): `not _position_is_anchor_frozen(sd, cur_lat, cur_lng)` checks distance from anchor > LKP_DOMINANT_RADIUS_M (helper lines 378-387)
+      
+      ✅ PRIVATE BRANCH UNCHANGED (lines 532-599):
+         - No modifications to PRIVATE confirmation logic
+         - No false success risk introduced
+      
+      ENVIRONMENT VERIFICATION:
+      ✅ Device write gates = 0 (backend/.env):
+         - PRIVATE_MODE_DEVICE_WRITE=0 ✓
+         - ODOMETER_CALIBRATION_DEVICE_WRITE=0 ✓
+      
+      ✅ Test isolation (test_fmc130_business_recovery.py):
+         - All external calls mocked via monkeypatch (lines 62-71)
+         - NO network calls: _fetch_gps_state, _fetch_gps_samples, _fetch_command_responses all mocked
+         - NO device commands sent
+         - NO secrets used: integration credential stubbed (lines 43-49)
+         - Fake DB only: no real database operations
+      
+      PASS/FAIL TABLE:
+      | Test Suite                          | Expected | Actual | Status |
+      |-------------------------------------|----------|--------|--------|
+      | test_fmc130_business_recovery.py    | 7        | 7      | ✅ PASS |
+      | Regression suite (10 files)         | 156      | 156    | ✅ PASS |
+      | **TOTAL**                           | **163**  | **163**| ✅ PASS |
+      
+      CONCLUSION:
+      The FMC130 BUSINESS confirmation bug fix is correctly implemented and fully verified. The fix adds a new confirmation path for BUSINESS mode that succeeds when a real, fresh, non-masked GPS position is re-emitted after the OFF command, even at standstill (speed=0). All 4 fail-closed guards are present and working correctly (frame after command, coords not 0,0, position fresh, position not frozen on anchor). PRIVATE confirmation logic is unchanged. All 163 tests passed (7 primary + 156 regression). No network calls, no device commands, no secrets, device write gates = 0. The fix directly addresses the reported PROD bug where valid GPS at standstill (Location valid=yes, Speed=0, Satellites=14) was not confirming BUSINESS recovery. NO ISSUES FOUND.
   - agent: "testing"
     message: |
       DRIVER MANUAL UX ENDPOINTS VALIDATION COMPLETE (2026-09-08)

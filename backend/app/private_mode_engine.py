@@ -361,6 +361,32 @@ def _is_zero(lat, lng) -> bool:
         return False
 
 
+# Fraîcheur max d'une position GPS pour prouver une REPRISE business à l'arrêt (secondes).
+BUSINESS_GPS_FRESH_MAX_S = int(os.environ.get("PRIVATE_BUSINESS_GPS_FRESH_MAX_S", "180"))
+
+
+def _gps_state_is_fresh(st: dict) -> bool:
+    """La position transmise est-elle RÉCENTE (gps.updated dans la fenêtre) ?
+    Fail-closed : sans horodatage exploitable -> False (jamais de faux positif)."""
+    from datetime import datetime, timezone
+    dt = _parse(st.get("gps_updated"))
+    if not dt:
+        return False
+    return (datetime.now(timezone.utc) - dt).total_seconds() <= BUSINESS_GPS_FRESH_MAX_S
+
+
+def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
+    """La position courante est-elle encore GELÉE sur l'ancre privée (donc toujours masquée) ?
+    True si l'ancre existe et que la position n'a pas bougé au-delà du jitter GPS toléré.
+    Sert à REFUSER un faux BUSINESS quand le device semble encore afficher la position privée."""
+    anchor_lat = sd.get("private_gps_anchor_lat")
+    anchor_lng = sd.get("private_gps_anchor_lng")
+    if anchor_lat is None or anchor_lng is None:
+        return False  # pas d'ancre -> on ne peut pas affirmer "gelé"
+    d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
+    return d is not None and d <= LKP_DOMINANT_RADIUS_M
+
+
 # ---------------------------------------------------------------------------
 # PREUVE AUTORITATIVE — RÉPONSE DEVICE via l'historique Navixy (READ-ONLY).
 # Endpoint documenté `history/tracker/list` : chaque entrée peut porter
@@ -578,9 +604,7 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
                 return None, SRC_UNCONFIRMED
             if _is_zero(cur_lat, cur_lng):
                 return None, SRC_UNCONFIRMED
-            # Preuve de REPRISE : progression GPS réelle (petit déplacement suffit, pas de seuil 200 m).
-            # Soit les samples post-OFF montrent un mouvement, soit la position a quitté la zone
-            # dominante privée d'au moins LKP_RESUME_MIN_M.
+            # Preuve de REPRISE (mouvement) : petit déplacement réel suffit.
             if _samples_show_movement(samples):
                 return BUSINESS, SRC_TELEMETRY
             anchor_lat = sd.get("private_gps_anchor_lat")
@@ -589,6 +613,15 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
                 d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
                 if d is not None and d >= LKP_RESUME_MIN_M:
                     return BUSINESS, SRC_TELEMETRY
+            # Preuve de REPRISE (position réémise à l'arrêt) : le mode privé Teltonika
+            # MASQUE la position (0,0 ou gelée à l'ancre). Une position RÉELLE, FRAÎCHE et
+            # NON masquée RÉÉMISE APRÈS l'envoi OFF (gps_upd > sent, coords non 0,0 déjà
+            # vérifiées) prouve la sortie du privé — même véhicule à l'arrêt (speed=0).
+            # Terrain 781479 : Location valid=yes, Speed=0 après OFF -> doit confirmer BUSINESS.
+            # Fail-closed : exige une trame RÉCENTE (fraîcheur bornée) pour éviter une
+            # position gelée périmée qui ferait un faux BUSINESS.
+            if _gps_state_is_fresh(st) and not _position_is_anchor_frozen(sd, cur_lat, cur_lng):
+                return BUSINESS, SRC_TELEMETRY
             return None, SRC_UNCONFIRMED
         return None, SRC_UNCONFIRMED
 
