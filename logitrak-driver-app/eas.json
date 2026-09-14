@@ -37,7 +37,7 @@
     },
     "pilot-production": {
       "distribution": "internal",
-      "channel": "production",
+      "channel": "pilot-private-mode",
       "android": {
         "buildType": "apk"
       },
