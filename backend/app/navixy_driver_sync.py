@@ -526,3 +526,209 @@ async def sync_stop(
             "status": "error",
             "error": type(exc).__name__,
         }
+
+# ---------------------------------------------------------------------------
+# Closed-session reconciliation
+# ---------------------------------------------------------------------------
+
+_FINAL_UNASSIGN_STATUSES = {
+    "success",
+    "already_unassigned",
+    "driver_changed",
+    "superseded",
+    "invalid",
+}
+
+_ACTIVE_SESSION_STATUSES = [
+    "open",
+    "automatic",
+    "pending",
+    "manual",
+    "confirmed",
+    "ending",
+    "conflict",
+]
+
+
+async def reconcile_closed_sessions(db, *, limit: int = 100) -> dict:
+    """
+    Reconcile Journal sessions already CLOSED but previously projected to Navixy.
+
+    Important safety rules:
+    - only sessions with navixy_sync_status='synced' are candidates;
+    - a newer active session on the same vehicle supersedes the old one;
+    - sync_stop() remains the authority for anti-race / current-driver checks;
+    - dry-run is executed once while UNASSIGN_WRITE=0;
+    - a dry-run becomes retryable automatically when UNASSIGN_WRITE=1;
+    - final states are idempotent and never processed again.
+    """
+    stats = {
+        "processed": 0,
+        "dry_run": 0,
+        "success": 0,
+        "already_unassigned": 0,
+        "driver_changed": 0,
+        "superseded": 0,
+        "invalid": 0,
+        "errors": 0,
+        "deferred": 0,
+    }
+
+    if not sync_enabled():
+        stats["disabled"] = True
+        return stats
+
+    query = {
+        "status": "closed",
+        "navixy_sync_status": "synced",
+        "navixy_employee_id": {"$ne": None},
+        "navixy_tracker_id": {"$ne": None},
+        "navixy_unassign_status": {
+            "$nin": list(_FINAL_UNASSIGN_STATUSES)
+        },
+    }
+
+    cursor = (
+        db.driver_sessions
+        .find(query, {"_id": 0})
+        .sort("ended_at", 1)
+        .limit(int(limit))
+    )
+    sessions = await cursor.to_list(length=int(limit))
+
+    for session in sessions:
+        previous_status = session.get("navixy_unassign_status")
+
+        # Do not produce a dry-run audit every five minutes.
+        # As soon as the real UNASSIGN gate is enabled, this session becomes
+        # eligible again automatically.
+        if previous_status == "dry_run" and not unassign_write_enabled():
+            stats["deferred"] += 1
+            continue
+
+        session_id = session.get("id")
+        driver_id = session.get("driver_id")
+        vehicle_id = session.get("vehicle_id")
+
+        if not session_id or not driver_id or not vehicle_id:
+            if session_id:
+                await db.driver_sessions.update_one(
+                    {"id": session_id},
+                    {
+                        "$set": {
+                            "navixy_unassign_status": "invalid",
+                            "navixy_unassign_result": "missing_identity",
+                            "navixy_unassign_updated_at": _now(),
+                        }
+                    },
+                )
+            stats["invalid"] += 1
+            continue
+
+        # Critical race protection:
+        # never let an old CLOSED session remove the assignment belonging to
+        # a newer active session on the same vehicle.
+        newer_query = {
+            "id": {"$ne": session_id},
+            "vehicle_id": vehicle_id,
+            "status": {"$in": _ACTIVE_SESSION_STATUSES},
+            "$or": [
+                {"ended_at": None},
+                {"ended_at": {"$exists": False}},
+            ],
+        }
+
+        if session.get("started_at"):
+            newer_query["started_at"] = {
+                "$gt": session["started_at"]
+            }
+
+        newer = await db.driver_sessions.find_one(
+            newer_query,
+            {
+                "_id": 0,
+                "id": 1,
+                "driver_id": 1,
+                "started_at": 1,
+                "status": 1,
+            },
+        )
+
+        if newer:
+            await db.driver_sessions.update_one(
+                {"id": session_id},
+                {
+                    "$set": {
+                        "navixy_unassign_status": "superseded",
+                        "navixy_unassign_result": "newer_active_session",
+                        "navixy_unassign_superseded_by": newer.get("id"),
+                        "navixy_unassign_updated_at": _now(),
+                    }
+                },
+            )
+            stats["superseded"] += 1
+            continue
+
+        result = await sync_stop(
+            db,
+            driver_id,
+            vehicle_id,
+            session_id=session_id,
+            actor="session_reconciler",
+        )
+
+        status = result.get("status")
+        result_name = result.get("result")
+
+        if status == "disabled":
+            stats["deferred"] += 1
+            continue
+
+        if status == "dry_run":
+            final_status = "dry_run"
+
+        elif result_name == "unassigned":
+            final_status = "success"
+
+        elif result_name == "already_unassigned":
+            final_status = "already_unassigned"
+
+        elif result_name == "current_driver_changed":
+            final_status = "driver_changed"
+
+        else:
+            final_status = "error"
+
+        fields = {
+            "navixy_unassign_status": final_status,
+            "navixy_unassign_result": result_name or status,
+            "navixy_unassign_updated_at": _now(),
+        }
+
+        if final_status == "error":
+            fields["navixy_unassign_error"] = (
+                result.get("error") or "UNKNOWN"
+            )
+
+        await db.driver_sessions.update_one(
+            {"id": session_id},
+            {
+                "$set": fields,
+                "$inc": {"navixy_unassign_attempts": 1},
+            },
+        )
+
+        stats["processed"] += 1
+
+        if final_status == "dry_run":
+            stats["dry_run"] += 1
+        elif final_status == "success":
+            stats["success"] += 1
+        elif final_status == "already_unassigned":
+            stats["already_unassigned"] += 1
+        elif final_status == "driver_changed":
+            stats["driver_changed"] += 1
+        else:
+            stats["errors"] += 1
+
+    return stats
