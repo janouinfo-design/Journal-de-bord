@@ -116,21 +116,57 @@ def _point_in_zone(lat: float, lng: float, zone: dict) -> bool:
     return (lat_lo <= lat <= lat_hi) and (lng_lo <= lng <= lng_hi)
 
 
-def _normalize_navixy_date(s: str) -> str:
-    """Navixy returns 'YYYY-MM-DD HH:MM:SS' (server tz, treated as UTC)."""
-    if not s:
-        return ""
-    if "T" in s:
-        return s
-    return s.replace(" ", "T") + "+00:00"
+def _normalize_navixy_date(value: str) -> str:
+    """Navixy server-local datetime -> canonical UTC ISO datetime."""
+    raw = str(value or "").strip()
+
+    if not raw:
+        raise ValueError("Empty Navixy datetime")
+
+    # Handles ISO forms, fractional seconds and explicit offsets.
+    try:
+        dt = datetime.fromisoformat(
+            raw.replace("Z", "+00:00")
+        )
+    except ValueError:
+        dt = datetime.strptime(
+            raw,
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+    # Navixy track/list returns naive strings in server/account timezone.
+    if dt.tzinfo is None:
+        dt = dt.replace(
+            tzinfo=_navixy_server_timezone()
+        )
+
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _parse(iso: str) -> datetime:
     return datetime.fromisoformat(iso.replace("Z", "+00:00"))
 
 
+def _navixy_server_timezone():
+    """Timezone used by Navixy track/list naive date strings."""
+    import os
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(
+        os.getenv("NAVIXY_SERVER_TIMEZONE", "Europe/Zurich")
+    )
+
+
 def _fmt(d: datetime) -> str:
-    return d.strftime("%Y-%m-%d %H:%M:%S")
+    """UTC/internal datetime -> Navixy server-local naive datetime."""
+    if d.tzinfo is None:
+        # Backward compatibility: internal naive datetimes historically
+        # represented UTC in this sync module.
+        d = d.replace(tzinfo=timezone.utc)
+
+    return d.astimezone(
+        _navixy_server_timezone()
+    ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _zone_centroid(b: dict) -> tuple[float, float]:
