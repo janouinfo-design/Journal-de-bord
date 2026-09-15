@@ -1,0 +1,994 @@
+diff --git a/backend/app/routes/identification.py b/backend/app/routes/identification.py
+index 52c5d06..ec117ba 100644
+--- a/backend/app/routes/identification.py
++++ b/backend/app/routes/identification.py
+@@ -458,16 +458,27 @@ async def driver_my_vehicles(user=Depends(get_current_user)):
+ 
+ @router.get("/driver/km-summary")
+ async def driver_km_summary(
+-    period: str = Query("today", regex="^(today|month)$"),
++    period: str = Query("today", regex="^(today|week|month)$"),
+     user=Depends(get_current_user),
+ ):
+     """Km Pro / Km Privé du chauffeur pour SON véhicule actif, sur la période demandée.
+ 
+     - Source = trajets réels (`trips`), agrégés par classification. AUCUN calcul GPS mobile.
++    - Périodes (bornes en Europe/Zurich, timezone chauffeur — cf. mode Privé) :
++        today = 00:00 (jour courant) -> maintenant
++        week  = lundi 00:00 -> maintenant
++        month = 1er du mois 00:00 -> maintenant
++      Les bornes locales sont converties en UTC pour interroger `trips` (start_time ISO UTC).
+     - Scoping strict : véhicule de la session active du chauffeur + son tenant.
+     - Si pas de véhicule actif -> valeurs None (l'app affiche « — », jamais une fausse valeur).
+-    Retour : {period, vehicle_id, pro_km, private_km, available}.
++    Retour : {period, period_label, vehicle_id, pro_km, private_km, available}.
++
++    NOTE (km privés & AVL16) : `private_km` agrège ici les trajets classés « personal »
++    disposant d'une distance. En mode Privé, la position GPS est masquée ; les km privés
++    fiables proviennent de l'odomètre matériel (AVL16), pas des points GPS. Le branchement
++    AVL16 -> km privés est un chantier BACKEND séparé (hors de ce ticket UI).
+     """
++    from zoneinfo import ZoneInfo
+     db = get_db()
+     tenant_id = user.get("tenant_id") or "default"
+     driver_id = await resolve_driver_id_for_user(db, user)
+@@ -476,21 +487,34 @@ async def driver_km_summary(
+ 
+     sess = await ble_engine.get_current_session(db, driver_id)
+     vehicle_id = sess.get("vehicle_id") if sess else None
+-    now = datetime.now(timezone.utc)
++
++    # Instant courant en heure locale chauffeur (Europe/Zurich).
++    _TZ = ZoneInfo("Europe/Zurich")
++    now_local = datetime.now(timezone.utc).astimezone(_TZ)
+     _MONTHS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+                   "août", "septembre", "octobre", "novembre", "décembre"]
+-    period_label = (f"{_MONTHS_FR[now.month - 1].capitalize()} {now.year}"
+-                    if period == "month" else "Aujourd'hui")
++    if period == "month":
++        period_label = f"{_MONTHS_FR[now_local.month - 1].capitalize()} {now_local.year}"
++    elif period == "week":
++        monday = now_local - timedelta(days=now_local.weekday())
++        sunday = monday + timedelta(days=6)
++        period_label = (f"{monday.day} – {sunday.day} {_MONTHS_FR[sunday.month - 1]}")
++    else:
++        period_label = "Aujourd'hui"
++
+     if not vehicle_id:
+         return {"period": period, "period_label": period_label, "vehicle_id": None,
+                 "pro_km": None, "private_km": None, "available": False}
+ 
+-    # Bornes de période (UTC).
++    # Bornes de période en LOCAL (Europe/Zurich) puis converties en UTC pour la requête.
+     if period == "today":
+-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
++        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
++    elif period == "week":
++        base = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
++        start_local = base - timedelta(days=now_local.weekday())  # lundi 00:00 local
+     else:  # month
+-        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+-    start_iso = start.isoformat()
++        start_local = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
++    start_iso = start_local.astimezone(timezone.utc).isoformat()
+ 
+     # Trajets du VÉHICULE ACTIF, tenant scopé, sur la période.
+     q = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
+diff --git a/logitrak-driver-app/src/__tests__/tripDerivations.test.ts b/logitrak-driver-app/src/__tests__/tripDerivations.test.ts
+new file mode 100644
+index 0000000..db2aaa4
+--- /dev/null
++++ b/logitrak-driver-app/src/__tests__/tripDerivations.test.ts
+@@ -0,0 +1,56 @@
++/**
++ * Tests — dérivations de trajets pour l'écran Conduite (données réelles uniquement).
++ * countUnclassified + deriveLastTrip. Aucune donnée inventée, purement déterministe.
++ */
++import { countUnclassified, deriveLastTrip } from '@/utils/tripDerivations';
++import type { Trip } from '@/api/trips';
++
++const T = (over: Partial<Trip>): Trip => ({ id: over.id || 'x', ...over } as Trip);
++
++describe('countUnclassified', () => {
++  it('compte les trajets sans classification (null/undefined)', () => {
++    const trips = [
++      T({ id: '1', classification: 'professional' }),
++      T({ id: '2', classification: null }),
++      T({ id: '3' }), // undefined
++      T({ id: '4', classification: 'personal' }),
++    ];
++    expect(countUnclassified(trips)).toBe(2);
++  });
++
++  it('retourne 0 si tout est classé', () => {
++    expect(countUnclassified([
++      T({ id: '1', classification: 'professional' }),
++      T({ id: '2', classification: 'personal' }),
++    ])).toBe(0);
++  });
++
++  it('gère une liste vide ou invalide', () => {
++    expect(countUnclassified([])).toBe(0);
++    // @ts-expect-error test robustesse entrée non-tableau
++    expect(countUnclassified(null)).toBe(0);
++  });
++});
++
++describe('deriveLastTrip', () => {
++  it('retourne null si aucun trajet', () => {
++    expect(deriveLastTrip([])).toBeNull();
++  });
++
++  it('choisit le trajet avec la fin la plus récente', () => {
++    const trips = [
++      T({ id: 'old', end_time: '2026-09-14T08:00:00Z' }),
++      T({ id: 'new', end_time: '2026-09-15T09:00:00Z' }),
++      T({ id: 'mid', end_time: '2026-09-14T20:00:00Z' }),
++    ];
++    expect(deriveLastTrip(trips)?.id).toBe('new');
++  });
++
++  it('utilise start_time si end_time absent', () => {
++    const trips = [
++      T({ id: 'a', start_time: '2026-09-15T07:00:00Z' }),
++      T({ id: 'b', start_time: '2026-09-15T10:00:00Z' }),
++    ];
++    expect(deriveLastTrip(trips)?.id).toBe('b');
++  });
++});
+diff --git a/logitrak-driver-app/src/__tests__/useKmSummary.test.tsx b/logitrak-driver-app/src/__tests__/useKmSummary.test.tsx
+index 8317a79..278ac41 100644
+--- a/logitrak-driver-app/src/__tests__/useKmSummary.test.tsx
++++ b/logitrak-driver-app/src/__tests__/useKmSummary.test.tsx
+@@ -83,4 +83,31 @@ describe('useKmSummary', () => {
+     expect(api.getKmSummary).toHaveBeenCalledTimes(2);
+     tree.unmount();
+   });
++
++  it('changement de période (semaine) -> refetch avec la bonne période + label', async () => {
++    const refObj: { current: ReturnType<typeof useKmSummary> | null } = { current: null };
++    function Probe({ period }: { period: 'today' | 'week' | 'month' }) {
++      refObj.current = useKmSummary('vA', period);
++      return <Text>p</Text>;
++    }
++    (api.getKmSummary as jest.Mock).mockResolvedValue({
++      period: 'today', period_label: "Aujourd'hui", vehicle_id: 'vA',
++      pro_km: 12, private_km: 2, available: true,
++    });
++    let tree: any;
++    await act(async () => { tree = create(<Probe period="today" />); });
++    await flush();
++    expect(api.getKmSummary).toHaveBeenLastCalledWith('today');
++
++    (api.getKmSummary as jest.Mock).mockResolvedValue({
++      period: 'week', period_label: '14 – 20 septembre', vehicle_id: 'vA',
++      pro_km: 88, private_km: 9, available: true,
++    });
++    await act(async () => { tree.update(<Probe period="week" />); });
++    await flush();
++    expect(api.getKmSummary).toHaveBeenLastCalledWith('week');
++    expect(refObj.current?.proKm).toBe(88);
++    expect(refObj.current?.periodLabel).toBe('14 – 20 septembre');
++    tree.unmount();
++  });
+ });
+diff --git a/logitrak-driver-app/src/api/ble.ts b/logitrak-driver-app/src/api/ble.ts
+index 6b97806..70c666a 100644
+--- a/logitrak-driver-app/src/api/ble.ts
++++ b/logitrak-driver-app/src/api/ble.ts
+@@ -151,8 +151,11 @@ export async function getMyVehicles(): Promise<Vehicle[]> {
+   return vehicles;
+ }
+ 
++export type KmPeriod = 'today' | 'week' | 'month';
++
+ export type KmSummary = {
+-  period: 'today' | 'month';
++  period: KmPeriod;
++  period_label?: string | null;
+   vehicle_id: string | null;
+   pro_km: number | null;
+   private_km: number | null;
+@@ -160,11 +163,27 @@ export type KmSummary = {
+ };
+ 
+ // Km Pro / Km Privé du véhicule actif (source backend uniquement — jamais calcul GPS mobile).
+-export async function getKmSummary(period: 'today' | 'month' = 'today'): Promise<KmSummary> {
++export async function getKmSummary(period: KmPeriod = 'today'): Promise<KmSummary> {
+   const { data } = await apiClient.get('/api/livre/driver/km-summary', { params: { period } });
+   return data as KmSummary;
+ }
+ 
++// Odomètre matériel du véhicule actif — lecture READ-ONLY exposée par le backend
++// (jamais d'appel Navixy direct depuis l'app). Honnête : null + status si indisponible.
++export type OdometerReading = {
++  vehicle_id: string | null;
++  vehicle_plate?: string | null;
++  odometer_km: number | null;
++  source?: string | null;
++  status: 'OK' | 'UNAVAILABLE' | string;
++  reason?: string | null;
++};
++
++export async function getVehicleOdometer(): Promise<OdometerReading> {
++  const { data } = await apiClient.get('/api/livre/driver/vehicle/odometer');
++  return data as OdometerReading;
++}
++
+ export type SosResult = {
+   ok: boolean;
+   sos_id?: string;
+diff --git a/logitrak-driver-app/src/components/SegmentedControl.tsx b/logitrak-driver-app/src/components/SegmentedControl.tsx
+new file mode 100644
+index 0000000..89d7290
+--- /dev/null
++++ b/logitrak-driver-app/src/components/SegmentedControl.tsx
+@@ -0,0 +1,77 @@
++import React from 'react';
++import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
++import { colors, spacing, radius, font } from '@/theme/colors';
++
++export type SegmentOption<T extends string> = { value: T; label: string };
++
++/**
++ * Segmented control compact et premium (dark). Un seul segment actif à la fois.
++ * - Segment actif : fond bleu LOGITRAK, texte blanc.
++ * - Segments inactifs : fond sombre, texte atténué.
++ * Accessibilité : role tab + selected + label. Ne dépend pas QUE de la couleur
++ * (le segment actif est aussi plus contrasté et porte accessibilityState.selected).
++ */
++export function SegmentedControl<T extends string>({
++  options,
++  value,
++  onChange,
++  testID,
++}: {
++  options: SegmentOption<T>[];
++  value: T;
++  onChange: (v: T) => void;
++  testID?: string;
++}) {
++  return (
++    <View style={styles.track} testID={testID} accessibilityRole="tablist">
++      {options.map((opt) => {
++        const active = opt.value === value;
++        return (
++          <TouchableOpacity
++            key={opt.value}
++            style={[styles.segment, active && styles.segmentActive]}
++            onPress={() => onChange(opt.value)}
++            accessibilityRole="tab"
++            accessibilityState={{ selected: active }}
++            accessibilityLabel={opt.label}
++            testID={`${testID ?? 'segment'}-${opt.value}`}
++            activeOpacity={0.8}
++          >
++            <Text style={[styles.label, active && styles.labelActive]}>{opt.label}</Text>
++          </TouchableOpacity>
++        );
++      })}
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  track: {
++    flexDirection: 'row',
++    backgroundColor: colors.bg,
++    borderRadius: radius.md,
++    borderWidth: 1,
++    borderColor: colors.border,
++    padding: 4,
++    gap: 4,
++  },
++  segment: {
++    flex: 1,
++    paddingVertical: spacing.sm,
++    borderRadius: radius.sm,
++    alignItems: 'center',
++    justifyContent: 'center',
++  },
++  segmentActive: {
++    backgroundColor: colors.primary,
++  },
++  label: {
++    color: colors.textMuted,
++    fontSize: font.size.sm,
++    fontWeight: '600',
++  },
++  labelActive: {
++    color: colors.text,
++    fontWeight: '700',
++  },
++});
+diff --git a/logitrak-driver-app/src/hooks/useKmSummary.ts b/logitrak-driver-app/src/hooks/useKmSummary.ts
+index bad7b16..7e8ff2b 100644
+--- a/logitrak-driver-app/src/hooks/useKmSummary.ts
++++ b/logitrak-driver-app/src/hooks/useKmSummary.ts
+@@ -1,15 +1,16 @@
+ import { useCallback, useEffect, useRef, useState } from 'react';
+-import { getKmSummary, KmSummary } from '@/api/ble';
++import { getKmSummary, KmSummary, KmPeriod } from '@/api/ble';
+ 
+ /**
+  * Km Pro / Km Privé du véhicule ACTIF (source backend uniquement).
+  * - Aucun calcul GPS mobile : on n'affiche que ce que le backend renvoie.
+  * - Reset à chaque changement de véhicule (pas de contamination A -> B).
+  * - Valeurs null -> l'UI affiche « — » (jamais une fausse valeur).
++ * - `period` est réactif : changer Aujourd'hui/Semaine/Mois refetch les vraies valeurs.
+  *
+  * `activeVehicleId` permet d'invalider proprement au changement de véhicule.
+  */
+-export function useKmSummary(activeVehicleId?: string | null, period: 'today' | 'month' = 'today') {
++export function useKmSummary(activeVehicleId?: string | null, period: KmPeriod = 'today') {
+   const [summary, setSummary] = useState<KmSummary | null>(null);
+   const [loading, setLoading] = useState(false);
+   const lastVehicle = useRef<string | null | undefined>(undefined);
+@@ -27,10 +28,11 @@ export function useKmSummary(activeVehicleId?: string | null, period: 'today' |
+     }
+   }, [period]);
+ 
+-  // Reset immédiat + refetch quand le véhicule actif change.
++  // Reset immédiat quand le véhicule actif change (pas de contamination inter-véhicule),
++  // puis refetch. Le refetch se déclenche aussi quand `period` change (via refresh dep).
+   useEffect(() => {
+     if (lastVehicle.current !== undefined && lastVehicle.current !== activeVehicleId) {
+-      setSummary(null); // pas de contamination inter-véhicule
++      setSummary(null);
+     }
+     lastVehicle.current = activeVehicleId ?? null;
+     refresh();
+@@ -38,6 +40,7 @@ export function useKmSummary(activeVehicleId?: string | null, period: 'today' |
+ 
+   return {
+     period,
++    periodLabel: summary?.period_label ?? null,
+     proKm: summary?.available ? summary.pro_km : null,
+     privateKm: summary?.available ? summary.private_km : null,
+     available: !!summary?.available,
+diff --git a/logitrak-driver-app/src/hooks/useOdometer.ts b/logitrak-driver-app/src/hooks/useOdometer.ts
+new file mode 100644
+index 0000000..da51500
+--- /dev/null
++++ b/logitrak-driver-app/src/hooks/useOdometer.ts
+@@ -0,0 +1,42 @@
++import { useCallback, useEffect, useRef, useState } from 'react';
++import { getVehicleOdometer, OdometerReading } from '@/api/ble';
++
++/**
++ * Odomètre matériel du véhicule ACTIF — donnée RÉELLE exposée par le backend.
++ * - Aucun appel Navixy direct depuis l'app ; aucune estimation GPS.
++ * - Si indisponible : `odometerKm` = null -> l'UI affiche « — » (jamais 0 fictif).
++ * - Reset au changement de véhicule (pas de contamination A -> B).
++ */
++export function useOdometer(activeVehicleId?: string | null) {
++  const [reading, setReading] = useState<OdometerReading | null>(null);
++  const [loading, setLoading] = useState(false);
++  const lastVehicle = useRef<string | null | undefined>(undefined);
++
++  const refresh = useCallback(async () => {
++    setLoading(true);
++    try {
++      setReading(await getVehicleOdometer());
++    } catch {
++      setReading(null); // pas de valeur inventée
++    } finally {
++      setLoading(false);
++    }
++  }, []);
++
++  useEffect(() => {
++    if (lastVehicle.current !== undefined && lastVehicle.current !== activeVehicleId) {
++      setReading(null);
++    }
++    lastVehicle.current = activeVehicleId ?? null;
++    refresh();
++  }, [activeVehicleId, refresh]);
++
++  const available = reading?.status === 'OK' && typeof reading?.odometer_km === 'number';
++  return {
++    odometerKm: available ? (reading!.odometer_km as number) : null,
++    available,
++    status: reading?.status ?? null,
++    loading,
++    refresh,
++  };
++}
+diff --git a/logitrak-driver-app/src/screens/DriverScreenManual.tsx b/logitrak-driver-app/src/screens/DriverScreenManual.tsx
+index 708e07a..f978d47 100644
+--- a/logitrak-driver-app/src/screens/DriverScreenManual.tsx
++++ b/logitrak-driver-app/src/screens/DriverScreenManual.tsx
+@@ -1,26 +1,59 @@
+-import React, { useCallback, useEffect, useRef, useState } from 'react';
++import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import {
+   View, Text, StyleSheet, TouchableOpacity, ScrollView,
+   RefreshControl, ActivityIndicator, Modal, FlatList,
+ } from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
++import { useNavigation } from '@react-navigation/native';
++import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+ import { colors, spacing, radius, font } from '@/theme/colors';
+ import { usePrivateMode } from '@/hooks/usePrivateMode';
+ import { useKmSummary } from '@/hooks/useKmSummary';
++import { useOdometer } from '@/hooks/useOdometer';
++import { SegmentedControl } from '@/components/SegmentedControl';
+ import SosButton from '@/components/SosButton';
++import { useTripsStore } from '@/store/tripsStore';
++import { countUnclassified, deriveLastTrip } from '@/utils/tripDerivations';
++import type { KmPeriod } from '@/api/ble';
++import type { Trip } from '@/api/trips';
++import type { RootStackParamList } from '@/navigation/RootNavigator';
+ import {
+   getAuthorizedVehicles, claimVehicle, getMyVehicle, Vehicle, SessionVehicle,
+ } from '@/api/ble';
+ 
+ type PickerStatus = 'idle' | 'loading' | 'ready' | 'error';
++type Nav = NativeStackNavigationProp<RootStackParamList>;
++
++const PERIOD_OPTIONS: { value: KmPeriod; label: string }[] = [
++  { value: 'today', label: "Aujourd'hui" },
++  { value: 'week', label: 'Semaine' },
++  { value: 'month', label: 'Mois' },
++];
++
++const fmtKm = (v: number | null | undefined) =>
++  (typeof v === 'number' ? `${v.toFixed(1)} km` : '—');
++
++const fmtInt = (v: number | null | undefined) =>
++  (typeof v === 'number' ? `${Math.round(v).toLocaleString('fr-CH')} km` : '—');
++
++function fmtTime(iso?: string | null): string {
++  if (!iso) return '';
++  try {
++    return new Date(iso).toLocaleTimeString('fr-CH', { hour: '2-digit', minute: '2-digit' });
++  } catch {
++    return '';
++  }
++}
+ 
+ /**
+- * Écran chauffeur — MODE MANUEL (sans Bluetooth).
+- * Hiérarchie : Véhicule actuel -> Changer de véhicule -> PRO/PRIVÉ -> Km Pro/Privé.
+- * Backend = seule source de vérité (session, PRO/PRIVÉ, km). Aucun calcul GPS mobile.
++ * Écran chauffeur — MODE MANUEL (sans Bluetooth) — refonte premium (dark).
++ * Ordre : Véhicule actuel -> Mode PRO/PRIVÉ -> Kilomètres (segmented) -> Total ->
++ *         Trajets à classifier (conditionnel) -> Dernier trajet -> Odomètre/Confidentialité -> SOS.
++ * Backend = seule source de vérité (session, PRO/PRIVÉ, km, odomètre). Aucune donnée inventée.
+  * Aucun jargon technique (pas de BLE/AVL/Navixy/Teltonika/tracker).
+  */
+ export default function DriverScreenManual() {
++  const nav = useNavigation<Nav>();
+   const [vehicle, setVehicle] = useState<SessionVehicle | null>(null);
+   const [connected, setConnected] = useState<boolean>(false);
+   const [loadingVehicle, setLoadingVehicle] = useState(true);
+@@ -30,13 +63,19 @@ export default function DriverScreenManual() {
+   const [defaultVehicleId, setDefaultVehicleId] = useState<string | null>(null);
+   const [switching, setSwitching] = useState(false);
+   const [refreshing, setRefreshing] = useState(false);
+-  // Empêche de rouvrir automatiquement le picker en boucle (une seule proposition).
++  const [period, setPeriod] = useState<KmPeriod>('today');
+   const autoOpenedRef = useRef(false);
+ 
+   const privateMode = usePrivateMode();
+-  const km = useKmSummary(vehicle?.id, 'today');
++  const km = useKmSummary(vehicle?.id, period);
++  const odo = useOdometer(vehicle?.id);
++  const tripsStore = useTripsStore();
++
++  useEffect(() => {
++    tripsStore.load();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
+ 
+-  // Charge les véhicules AUTORISÉS (périmètre strict backend). Distingue ERROR / EMPTY.
+   const loadAuthorized = useCallback(async (): Promise<Vehicle[]> => {
+     setPickerStatus('loading');
+     try {
+@@ -46,7 +85,6 @@ export default function DriverScreenManual() {
+       setPickerStatus('ready');
+       return r.vehicles;
+     } catch {
+-      // Erreur réseau/serveur : NE JAMAIS présenter comme "aucun véhicule".
+       setMyVehicles([]);
+       setPickerStatus('error');
+       return [];
+@@ -72,9 +110,6 @@ export default function DriverScreenManual() {
+     }
+   }, []);
+ 
+-  // Au montage : lit la session courante (restauration) PUIS le périmètre autorisé.
+-  // Si aucun véhicule actif : proposition = default_vehicle_id (uniquement s'il est
+-  // AUTORISÉ), jamais le premier véhicule arbitrairement. Ouvre le picker une fois.
+   useEffect(() => {
+     (async () => {
+       await loadVehicle();
+@@ -82,8 +117,6 @@ export default function DriverScreenManual() {
+     })();
+   }, [loadVehicle, loadAuthorized]);
+ 
+-  // Auto-ouverture du picker si, après chargement, aucun véhicule n'est actif et que
+-  // le périmètre autorisé est disponible et non vide (une seule fois).
+   useEffect(() => {
+     if (autoOpenedRef.current) return;
+     if (loadingVehicle || pickerStatus !== 'ready') return;
+@@ -95,7 +128,6 @@ export default function DriverScreenManual() {
+ 
+   const openPicker = useCallback(async () => {
+     setPickerOpen(true);
+-    // Recharge le périmètre à l'ouverture (un véhicule peut être devenu non autorisé).
+     await loadAuthorized();
+   }, [loadAuthorized]);
+ 
+@@ -103,13 +135,12 @@ export default function DriverScreenManual() {
+     if (switching) return;
+     setSwitching(true);
+     try {
+-      await claimVehicle(v.id);          // « Je conduis » — session active côté backend
++      await claimVehicle(v.id);
+       setPickerOpen(false);
+-      await loadVehicle();               // recharge le véhicule actif (source: serveur)
+-      await privateMode.refresh();       // recharge l'état PRO/PRIVÉ pour CE véhicule
+-      // km.refresh se déclenche via le changement de vehicle.id (useKmSummary)
++      await loadVehicle();
++      await privateMode.refresh();
+     } catch {
+-      // pas de changement optimiste si le claim échoue (403 hors périmètre, réseau…)
++      // pas de changement optimiste si le claim échoue
+     } finally {
+       setSwitching(false);
+     }
+@@ -117,11 +148,13 @@ export default function DriverScreenManual() {
+ 
+   const onRefresh = useCallback(async () => {
+     setRefreshing(true);
+-    await Promise.all([loadVehicle(), loadAuthorized(), privateMode.refresh(), km.refresh()]);
++    await Promise.all([
++      loadVehicle(), loadAuthorized(), privateMode.refresh(),
++      km.refresh(), odo.refresh(), tripsStore.refresh(),
++    ]);
+     setRefreshing(false);
+-  }, [loadVehicle, loadAuthorized, privateMode, km]);
++  }, [loadVehicle, loadAuthorized, privateMode, km, odo, tripsStore]);
+ 
+-  // Véhicule à mettre en avant dans le picker : l'actif, sinon le défaut AUTORISÉ.
+   const highlightId = vehicle?.id
+     ?? (defaultVehicleId && myVehicles.some((v) => v.id === defaultVehicleId)
+         ? defaultVehicleId
+@@ -132,45 +165,78 @@ export default function DriverScreenManual() {
+   const isBusiness = st === 'BUSINESS';
+   const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
+   const hasVehicle = !!vehicle?.id;
+-  // Finition UX : plus de blocage pendant PENDING. Professionnel reste TOUJOURS
+-  // actionnable (récupération rapide, supersede géré côté backend). On ne verrouille
+-  // qu'un appel réseau en cours (busy) ; chaque carte se désactive si c'est le mode
+-  // CONFIRMÉ courant (évite un renvoi inutile de la même commande).
+   const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
+ 
+-  const fmtKm = (v: number | null | undefined) =>
+-    (typeof v === 'number' ? `${v.toFixed(1)} km` : '—');
++  // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
++  const proKm = km.proKm;
++  const privKm = km.privateKm;
++  const hasKm = typeof proKm === 'number' && typeof privKm === 'number';
++  const total = hasKm ? proKm! + privKm! : null;
++  const proPct = hasKm && total! > 0 ? Math.round((proKm! / total!) * 100) : 0;
++  const privPct = hasKm && total! > 0 ? 100 - proPct : 0;
++
++  // Trajets réels : dernier trajet + nombre à classifier (données réelles uniquement).
++  const trips = tripsStore.trips;
++  const unclassified = useMemo(() => countUnclassified(trips), [trips]);
++  const lastTrip = useMemo(() => deriveLastTrip(trips), [trips]);
++
++  const openTripDetail = useCallback((t: Trip) => {
++    nav.navigate('TripDetail', { tripId: t.id });
++  }, [nav]);
++
++  const openTripsTab = useCallback(() => {
++    // Onglet "Trajets" (bottom nav). Le filtre non-classifié y est géré si présent.
++    (nav as any).navigate('Main', { screen: 'Trajets' });
++  }, [nav]);
+ 
+   return (
+     <SafeAreaView style={styles.safe} edges={['top']}>
+       <ScrollView
+         contentContainerStyle={styles.content}
+         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
++        testID="conduite-scroll"
+       >
+-        {/* --- Véhicule actuel --- */}
++        <Text style={styles.screenTitle} accessibilityRole="header">Conduite</Text>
++
++        {/* ============ VÉHICULE ACTUEL ============ */}
+         <Text style={styles.sectionLabel}>Véhicule actuel</Text>
+         <View style={styles.vehicleCard} testID="manual-vehicle-card">
+           {loadingVehicle ? (
+             <ActivityIndicator color={colors.primary} />
+           ) : hasVehicle ? (
+-            <>
+-              <Text style={styles.vehiclePlate} testID="manual-vehicle-plate">{vehicle?.plate || 'Véhicule'}</Text>
+-              {vehicle?.model ? <Text style={styles.vehicleModel}>{vehicle.model}</Text> : null}
+-              <View style={styles.connRow}>
++            <View style={styles.vehicleRowTop}>
++              <View style={{ flex: 1 }}>
++                <Text style={styles.vehiclePlate} testID="manual-vehicle-plate">
++                  {vehicle?.plate || 'Véhicule'}
++                </Text>
++                {vehicle?.model ? <Text style={styles.vehicleModel}>{vehicle.model}</Text> : null}
++              </View>
++              <View
++                style={[styles.connPill, { backgroundColor: connected ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.15)' }]}
++                accessibilityLabel={connected ? 'Connecté' : 'Hors ligne'}
++              >
+                 <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.textMuted }]} />
+-                <Text style={styles.connText}>{connected ? 'Connecté' : 'Hors ligne'}</Text>
++                <Text style={[styles.connText, { color: connected ? colors.success : colors.textMuted }]}>
++                  {connected ? 'Connecté' : 'Hors ligne'}
++                </Text>
+               </View>
+-            </>
++            </View>
+           ) : (
+             <Text style={styles.emptyText} testID="manual-no-vehicle">Aucun véhicule sélectionné</Text>
+           )}
+ 
+-          <TouchableOpacity style={styles.changeBtn} onPress={openPicker} testID="manual-change-vehicle">
++          <TouchableOpacity
++            style={styles.changeBtn}
++            onPress={openPicker}
++            testID="manual-change-vehicle"
++            accessibilityRole="button"
++            accessibilityLabel="Changer de véhicule"
++          >
+             <Text style={styles.changeBtnText}>Changer de véhicule</Text>
+           </TouchableOpacity>
+         </View>
+ 
+-        {/* --- PRO / PRIVÉ --- */}
++        {/* ============ MODE ============ */}
+         <Text style={styles.sectionLabel}>Mode</Text>
+         <View style={styles.modesRow}>
+           <ModeCard
+@@ -193,19 +259,16 @@ export default function DriverScreenManual() {
+           />
+         </View>
+ 
+-        {/* aide contextuelle (sans jargon) */}
+         {hasVehicle && privateMode.status.allowed ? (
+           <Text style={styles.helpText} testID="manual-mode-help">
+             {isPrivate
+               ? (privateMode.privateOdometerSupported
+-                  ? 'Mode Privé actif. Votre position est masquée. Vos kilomètres privés continuent d’être comptabilisés.'
+-                  : 'Mode Privé actif. Votre position est masquée.')
++                  ? 'Mode Privé actif. La position du véhicule est masquée. Vos kilomètres privés restent comptabilisés.'
++                  : 'Mode Privé actif. La position du véhicule est masquée.')
+               : isBusiness
+               ? 'Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels.'
+               : isPending
+-              ? (privateMode.sentMessage
+-                  || privateMode.status.pending_message
+-                  || 'Commande envoyée.')
++              ? (privateMode.sentMessage || privateMode.status.pending_message || 'Commande envoyée.')
+               : 'Sélectionnez votre mode.'}
+           </Text>
+         ) : null}
+@@ -213,34 +276,130 @@ export default function DriverScreenManual() {
+         {privateMode.error ? (
+           <Text style={styles.errorText} testID="manual-mode-error">{privateMode.error}</Text>
+         ) : null}
+-
+-        {/* Timeout de confirmation : message honnête, jamais de faux PRO/PRIVÉ confirmé. */}
+         {privateMode.timedOut && !isPending ? (
+           <Text style={styles.errorText} testID="manual-mode-timeout">
+             Commande envoyée mais état non confirmé. Vérifiez l’état du véhicule.
+           </Text>
+         ) : null}
+ 
+-        {/* --- Km Pro / Km Privé (aujourd'hui) --- */}
+-        <Text style={styles.sectionLabel}>Kilomètres — Aujourd’hui</Text>
++        {/* ============ KILOMÈTRES ============ */}
++        <Text style={styles.sectionLabel}>Kilomètres</Text>
++        <SegmentedControl
++          options={PERIOD_OPTIONS}
++          value={period}
++          onChange={setPeriod}
++          testID="km-period"
++        />
++        {km.periodLabel ? (
++          <Text style={styles.periodCaption} testID="km-period-label">{km.periodLabel}</Text>
++        ) : null}
++
+         <View style={styles.kmRow}>
+           <View style={styles.kmCard} testID="manual-km-pro">
+             <Text style={styles.kmTitle}>Km Pro</Text>
+-            <Text style={styles.kmPeriod}>Aujourd’hui</Text>
+-            <Text style={[styles.kmValue, { color: colors.pro }]}>{km.loading ? '…' : fmtKm(km.proKm)}</Text>
++            <Text style={[styles.kmValue, { color: colors.pro }]} testID="manual-km-pro-value">
++              {km.loading ? '…' : fmtKm(proKm)}
++            </Text>
+           </View>
+           <View style={styles.kmCard} testID="manual-km-private">
+             <Text style={styles.kmTitle}>Km Privé</Text>
+-            <Text style={styles.kmPeriod}>Aujourd’hui</Text>
+-            <Text style={[styles.kmValue, { color: colors.text }]}>{km.loading ? '…' : fmtKm(km.privateKm)}</Text>
++            <Text style={[styles.kmValue, { color: colors.text }]} testID="manual-km-private-value">
++              {km.loading ? '…' : fmtKm(privKm)}
++            </Text>
++          </View>
++        </View>
++
++        {/* ============ TOTAL + RÉPARTITION ============ */}
++        <View style={styles.totalCard} testID="manual-km-total">
++          <View style={styles.totalHeader}>
++            <Text style={styles.totalLabel}>Total</Text>
++            <Text style={styles.totalValue} testID="manual-km-total-value">
++              {km.loading ? '…' : fmtKm(total)}
++            </Text>
++          </View>
++          <View style={styles.ratioRow}>
++            <Text style={styles.ratioText}>Pro {proPct} %</Text>
++            <Text style={styles.ratioText}>Privé {privPct} %</Text>
++          </View>
++          <View style={styles.bar} accessibilityLabel={`Répartition Pro ${proPct}%, Privé ${privPct}%`}>
++            <View style={[styles.barPro, { flex: proPct }]} />
++            <View style={[styles.barPriv, { flex: privPct }]} />
++            {proPct === 0 && privPct === 0 ? <View style={styles.barEmpty} /> : null}
+           </View>
+         </View>
+ 
+-        {/* --- SOS Urgence (bas de l'écran) --- */}
++        {/* ============ TRAJETS À CLASSIFIER (conditionnel) ============ */}
++        {unclassified > 0 ? (
++          <TouchableOpacity
++            style={styles.warnCard}
++            onPress={openTripsTab}
++            testID="manual-unclassified"
++            accessibilityRole="button"
++            accessibilityLabel={`${unclassified} trajets à classifier`}
++          >
++            <View style={{ flex: 1 }}>
++              <Text style={styles.warnTitle}>⚠ {unclassified} trajet{unclassified > 1 ? 's' : ''} à classifier</Text>
++              <Text style={styles.warnSub}>Merci de vérifier vos trajets non classifiés.</Text>
++            </View>
++            <Text style={styles.chevron}>›</Text>
++          </TouchableOpacity>
++        ) : null}
++
++        {/* ============ DERNIER TRAJET ============ */}
++        <Text style={styles.sectionLabel}>Dernier trajet</Text>
++        {lastTrip ? (
++          <TouchableOpacity
++            style={styles.tripCard}
++            onPress={() => openTripDetail(lastTrip)}
++            testID="manual-last-trip"
++            accessibilityRole="button"
++            accessibilityLabel="Voir le détail du dernier trajet"
++          >
++            <View style={{ flex: 1 }}>
++              <Text style={styles.tripRoute} numberOfLines={1}>
++                {(lastTrip.start_address || 'Départ')} → {(lastTrip.end_address || 'Arrivée')}
++              </Text>
++              <Text style={styles.tripMeta}>
++                {fmtKm(lastTrip.distance_km)}
++                {lastTrip.classification
++                  ? ` · ${lastTrip.classification === 'professional' ? 'Professionnel' : 'Privé'}`
++                  : ' · Non classé'}
++                {fmtTime(lastTrip.start_time) ? ` · ${fmtTime(lastTrip.start_time)}` : ''}
++                {fmtTime(lastTrip.end_time) ? ` – ${fmtTime(lastTrip.end_time)}` : ''}
++              </Text>
++            </View>
++            <Text style={styles.chevron}>›</Text>
++          </TouchableOpacity>
++        ) : (
++          <View style={styles.emptyCard} testID="manual-last-trip-empty">
++            <Text style={styles.emptyText}>Aucun trajet enregistré pour le moment.</Text>
++          </View>
++        )}
++
++        {/* ============ ODOMÈTRE + CONFIDENTIALITÉ ============ */}
++        <View style={styles.dualRow}>
++          <View style={styles.infoCard} testID="manual-odometer">
++            <Text style={styles.infoTitle}>Odomètre véhicule</Text>
++            <Text style={styles.infoValue} testID="manual-odometer-value">
++              {odo.loading ? '…' : fmtInt(odo.odometerKm)}
++            </Text>
++            {!odo.loading && !odo.available ? (
++              <Text style={styles.infoSub}>Donnée indisponible</Text>
++            ) : null}
++          </View>
++          <View style={styles.infoCard} testID="manual-privacy">
++            <Text style={styles.infoTitle}>{isPrivate ? 'Position masquée' : 'Position visible'}</Text>
++            <Text style={[styles.infoBadge, { color: isPrivate ? colors.perso : colors.primary }]}>
++              {isPrivate ? 'Mode privé' : 'Mode professionnel'}
++            </Text>
++          </View>
++        </View>
++
++        {/* ============ SOS ============ */}
+         <SosButton isPrivate={isPrivate} />
+       </ScrollView>
+ 
+-      {/* --- Modal : Choisir un véhicule (assignés uniquement) --- */}
++      {/* ============ Modal : Choisir un véhicule ============ */}
+       <Modal visible={pickerOpen} animationType="slide" transparent onRequestClose={() => setPickerOpen(false)}>
+         <View style={styles.modalBackdrop}>
+           <View style={styles.modalSheet}>
+@@ -272,7 +431,7 @@ export default function DriverScreenManual() {
+                   const isDefault = !isActive && item.id === highlightId;
+                   return (
+                     <TouchableOpacity
+-                      style={[styles.vehicleRow, (isActive || isDefault) && styles.vehicleRowSelected]}
++                      style={[styles.pickerRow, (isActive || isDefault) && styles.pickerRowSelected]}
+                       onPress={() => selectVehicle(item)}
+                       disabled={switching}
+                       testID={`manual-picker-item-${item.id}`}
+@@ -306,10 +465,13 @@ function ModeCard({ label, active, disabled, loading, color, onPress, testID }:
+       onPress={onPress}
+       disabled={disabled}
+       testID={testID}
++      accessibilityRole="button"
++      accessibilityState={{ selected: active, disabled }}
++      accessibilityLabel={`${label} — ${active ? 'actif' : 'activer'}`}
+     >
+       <Text style={[styles.modeLabel, active && { color }]}>{label}</Text>
+       {loading ? <ActivityIndicator size="small" color={color} /> : (
+-        <Text style={styles.modeState}>{active ? 'Actif' : 'Activer'}</Text>
++        <Text style={[styles.modeState, active && { color }]}>{active ? 'Actif' : 'Activer'}</Text>
+       )}
+     </TouchableOpacity>
+   );
+@@ -318,25 +480,34 @@ function ModeCard({ label, active, disabled, loading, color, onPress, testID }:
+ const styles = StyleSheet.create({
+   safe: { flex: 1, backgroundColor: colors.bg },
+   content: { padding: spacing.md, paddingBottom: spacing.xxl },
++  screenTitle: {
++    color: colors.text, fontSize: font.size.xxl, fontWeight: '700',
++    marginBottom: spacing.xs, marginTop: spacing.xs,
++  },
+   sectionLabel: {
+     color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase',
+-    letterSpacing: 1, marginBottom: spacing.sm, marginTop: spacing.md,
++    letterSpacing: 1, marginBottom: spacing.sm, marginTop: spacing.lg,
+   },
++
+   vehicleCard: {
+     backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 1,
+     borderColor: colors.border, padding: spacing.lg,
+   },
+-  vehiclePlate: { color: colors.text, fontSize: font.size.xl, fontWeight: '700' },
++  vehicleRowTop: { flexDirection: 'row', alignItems: 'flex-start' },
++  vehiclePlate: { color: colors.text, fontSize: font.size.xl, fontWeight: '700', letterSpacing: 1 },
+   vehicleModel: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 2 },
+-  connRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm },
++  connPill: {
++    flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm,
++    paddingVertical: 4, borderRadius: radius.pill,
++  },
+   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
+-  connText: { color: colors.textMuted, fontSize: font.size.sm },
++  connText: { fontSize: font.size.xs, fontWeight: '700' },
+   emptyText: { color: colors.textMuted, fontSize: font.size.md, paddingVertical: spacing.md },
+   changeBtn: {
+     marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md,
+     paddingVertical: spacing.md, alignItems: 'center',
+   },
+-  changeBtnText: { color: colors.text, fontSize: font.size.md, fontWeight: '600' },
++  changeBtnText: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+ 
+   modesRow: { flexDirection: 'row', gap: spacing.md },
+   modeCard: {
+@@ -345,19 +516,68 @@ const styles = StyleSheet.create({
+   },
+   modeCardDisabled: { opacity: 0.55 },
+   modeLabel: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', marginBottom: 6 },
+-  modeState: { color: colors.textMuted, fontSize: font.size.sm },
++  modeState: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
+   helpText: { color: colors.textMuted, fontSize: font.size.sm, marginTop: spacing.md, lineHeight: 20 },
+   errorText: { color: colors.danger, fontSize: font.size.sm, marginTop: spacing.sm },
+ 
+-  kmRow: { flexDirection: 'row', gap: spacing.md },
++  periodCaption: {
++    color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.sm, marginLeft: 2,
++  },
++  kmRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+   kmCard: {
+     flex: 1, backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 1,
+     borderColor: colors.border, padding: spacing.lg, alignItems: 'flex-start',
+   },
+-  kmTitle: { color: colors.text, fontSize: font.size.sm, fontWeight: '600' },
+-  kmPeriod: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2, marginBottom: spacing.sm },
++  kmTitle: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600', marginBottom: spacing.sm },
+   kmValue: { fontSize: font.size.xl, fontWeight: '700' },
+ 
++  totalCard: {
++    backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 1,
++    borderColor: colors.border, padding: spacing.lg, marginTop: spacing.md,
++  },
++  totalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
++  totalLabel: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
++  totalValue: { color: colors.text, fontSize: font.size.xl, fontWeight: '700' },
++  ratioRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.md, marginBottom: spacing.sm },
++  ratioText: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
++  bar: {
++    flexDirection: 'row', height: 10, borderRadius: radius.pill, overflow: 'hidden',
++    backgroundColor: colors.bg,
++  },
++  barPro: { backgroundColor: colors.pro },
++  barPriv: { backgroundColor: colors.perso },
++  barEmpty: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: colors.bg },
++
++  warnCard: {
++    flexDirection: 'row', alignItems: 'center', marginTop: spacing.md,
++    backgroundColor: 'rgba(250,204,21,0.10)', borderRadius: radius.lg, borderWidth: 1,
++    borderColor: 'rgba(250,204,21,0.5)', padding: spacing.md,
++  },
++  warnTitle: { color: colors.warning, fontSize: font.size.md, fontWeight: '700' },
++  warnSub: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 2 },
++
++  tripCard: {
++    flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard,
++    borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, padding: spacing.lg,
++  },
++  tripRoute: { color: colors.text, fontSize: font.size.md, fontWeight: '600' },
++  tripMeta: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 4 },
++  emptyCard: {
++    backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 1,
++    borderColor: colors.border, padding: spacing.lg,
++  },
++  chevron: { color: colors.textMuted, fontSize: font.size.xl, marginLeft: spacing.sm },
++
++  dualRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
++  infoCard: {
++    flex: 1, backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 1,
++    borderColor: colors.border, padding: spacing.lg,
++  },
++  infoTitle: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
++  infoValue: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', marginTop: spacing.sm },
++  infoSub: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
++  infoBadge: { fontSize: font.size.md, fontWeight: '700', marginTop: spacing.sm },
++
+   modalBackdrop: { flex: 1, backgroundColor: '#00000099', justifyContent: 'flex-end' },
+   modalSheet: {
+     backgroundColor: colors.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+@@ -366,12 +586,12 @@ const styles = StyleSheet.create({
+   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+   modalTitle: { color: colors.text, fontSize: font.size.lg, fontWeight: '700' },
+   modalClose: { color: colors.primary, fontSize: font.size.md },
+-  vehicleRow: {
++  pickerRow: {
+     flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard,
+     borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+     padding: spacing.md, marginBottom: spacing.sm,
+   },
+-  vehicleRowSelected: { borderColor: colors.primary },
++  pickerRowSelected: { borderColor: colors.primary },
+   retryBtn: {
+     marginTop: spacing.md, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.primary,
+     borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+diff --git a/logitrak-driver-app/src/utils/tripDerivations.ts b/logitrak-driver-app/src/utils/tripDerivations.ts
+new file mode 100644
+index 0000000..eec4c4d
+--- /dev/null
++++ b/logitrak-driver-app/src/utils/tripDerivations.ts
+@@ -0,0 +1,21 @@
++import { Trip } from '@/api/trips';
++
++/** Nombre de trajets NON classifiés (classification null/absente). Données réelles. */
++export function countUnclassified(trips: Trip[]): number {
++  if (!Array.isArray(trips)) return 0;
++  return trips.filter((t) => t && (t.classification === null || t.classification === undefined)).length;
++}
++
++/**
++ * Dernier trajet = celui avec l'horodatage de FIN (sinon début) le plus récent.
++ * Retourne null si aucun trajet. Aucune donnée inventée.
++ */
++export function deriveLastTrip(trips: Trip[]): Trip | null {
++  if (!Array.isArray(trips) || trips.length === 0) return null;
++  const ts = (t: Trip) => {
++    const v = t.end_time || t.start_time;
++    const n = v ? Date.parse(v) : NaN;
++    return Number.isNaN(n) ? -Infinity : n;
++  };
++  return trips.reduce((best, cur) => (ts(cur) > ts(best) ? cur : best), trips[0]);
++}
