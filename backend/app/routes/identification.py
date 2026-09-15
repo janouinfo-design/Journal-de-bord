@@ -514,19 +514,36 @@ async def driver_km_summary(
         start_local = base - timedelta(days=now_local.weekday())  # lundi 00:00 local
     else:  # month
         start_local = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    start_iso = start_local.astimezone(timezone.utc).isoformat()
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = datetime.now(timezone.utc)
+    start_iso = start_utc.isoformat()
 
-    # Trajets du VÉHICULE ACTIF, tenant scopé, sur la période.
-    q = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
-    trips = await db.trips.find(
-        q, {"_id": 0, "distance_km": 1, "classification": 1}).limit(20000).to_list(20000)
-
-    pro = round(sum((t.get("distance_km") or 0) for t in trips
+    # Km PRO = trajets professionnels réels (inchangé).
+    q_pro = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
+    trips_pro = await db.trips.find(
+        q_pro, {"_id": 0, "distance_km": 1, "classification": 1}).limit(20000).to_list(20000)
+    pro = round(sum((t.get("distance_km") or 0) for t in trips_pro
                     if t.get("classification") == "professional"), 1)
-    priv = round(sum((t.get("distance_km") or 0) for t in trips
-                     if t.get("classification") == "personal"), 1)
+
+    # Km PRIVÉ = source AVL16 (sessions) avec CUTOVER + fallback GPS legacy (intervalles
+    # disjoints, jamais de double comptage). Provenance explicite. Voir app.private_mileage.
+    from app import private_mileage as _pm
+
+    async def _gps_personal_km(s_utc, e_utc):
+        """Fallback legacy : somme des trajets 'personal' (distance GPS) sur [s_utc, e_utc]."""
+        qq = {"tenant_id": tenant_id, "vehicle_id": vehicle_id,
+              "classification": "personal",
+              "start_time": {"$gte": s_utc.isoformat(), "$lt": e_utc.isoformat()}}
+        docs = await db.trips.find(qq, {"_id": 0, "distance_km": 1}).limit(20000).to_list(20000)
+        return round(sum((d.get("distance_km") or 0) for d in docs), 1)
+
+    agg = await _pm.aggregate_private_km(
+        db, tenant_id=tenant_id, vehicle_id=vehicle_id,
+        start_utc=start_utc, end_utc=end_utc, gps_fallback_km=_gps_personal_km)
+
     return {"period": period, "period_label": period_label, "vehicle_id": vehicle_id,
-            "pro_km": pro, "private_km": priv, "available": True}
+            "pro_km": pro, "private_km": agg["private_km"],
+            "private_km_source": agg["private_km_source"], "available": True}
 
 
 
