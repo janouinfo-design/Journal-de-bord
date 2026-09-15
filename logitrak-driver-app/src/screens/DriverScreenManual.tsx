@@ -132,7 +132,11 @@ export default function DriverScreenManual() {
   const isBusiness = st === 'BUSINESS';
   const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
   const hasVehicle = !!vehicle?.id;
-  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy && !isPending;
+  // Finition UX : plus de blocage pendant PENDING. Professionnel reste TOUJOURS
+  // actionnable (récupération rapide, supersede géré côté backend). On ne verrouille
+  // qu'un appel réseau en cours (busy) ; chaque carte se désactive si c'est le mode
+  // CONFIRMÉ courant (évite un renvoi inutile de la même commande).
+  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
 
   const fmtKm = (v: number | null | undefined) =>
     (typeof v === 'number' ? `${v.toFixed(1)} km` : '—');
@@ -199,7 +203,9 @@ export default function DriverScreenManual() {
               : isBusiness
               ? 'Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels.'
               : isPending
-              ? 'Changement en cours de confirmation…'
+              ? (privateMode.sentMessage
+                  || privateMode.status.pending_message
+                  || 'Commande envoyée.')
               : 'Sélectionnez votre mode.'}
           </Text>
         ) : null}

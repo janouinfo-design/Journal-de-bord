@@ -278,7 +278,13 @@ def test_t7b_pending_timeout_confirmed_by_telemetry_wins():
 # SÉCURITÉ — 0 device command
 # ===========================================================================
 def test_t9_double_request_during_pending_no_second_command():
-    """T9 — 2e request pendant PENDING -> R_TRANSITION_IN_PROGRESS, ZÉRO device command."""
+    """T9 — 2e request MÊME cible pendant PENDING -> AUCUNE 2e commande device.
+
+    Finition UX : un double-tap sur la MÊME cible ne renvoie plus une erreur
+    (transition_in_progress) mais un pending idempotent honnête (« Commande …
+    envoyée »). Le point de SÉCURITÉ reste identique : ZÉRO commande device
+    n'est réémise (send_command interdit). Aucun faux « actif ».
+    """
     db = _db_fmc130()
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
@@ -286,8 +292,13 @@ def test_t9_double_request_during_pending_no_second_command():
     res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
                send_command=_forbid_command(), confirm=_confirm("ok"),
                read_odo_km=_odo([1.0])))
-    assert res["ok"] is False and res["can_switch"] is False
-    assert res["reason"] == _gate.R_TRANSITION_IN_PROGRESS
+    # Idempotent pending : ok=True MAIS état toujours PENDING (jamais un faux PRIVATE actif).
+    assert res["ok"] is True
+    assert res["state"] == pm.PENDING_CONFIRMATION
+    assert res.get("superseded") is False
+    # État persistant inchangé -> aucune commande device n'a été réémise (_forbid_command).
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["state"] == pm.PENDING_CONFIRMATION
 
 
 def test_t10_device_write_off_zero_command():

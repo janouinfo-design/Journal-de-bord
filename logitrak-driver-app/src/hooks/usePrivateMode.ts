@@ -24,6 +24,7 @@ export function usePrivateMode(pollMs = 15000) {
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sentMessage, setSentMessage] = useState<string | null>(null);
   const [lastDistanceKm, setLastDistanceKm] = useState<number | null>(null);
   const inFlight = useRef(false);
   const lastVehicleId = useRef<string | null | undefined>(undefined);
@@ -55,6 +56,7 @@ export function usePrivateMode(pollMs = 15000) {
       inFlight.current = true;
       setBusy(true);
       setError(null);
+      setSentMessage(null);
       // état transitoire local (SWITCHING_*) — informatif, PAS un succès
       setStatus((prev) => ({
         ...prev,
@@ -64,10 +66,12 @@ export function usePrivateMode(pollMs = 15000) {
         const res = await setPrivateMode(mode);
         if (res.ok && res.state === 'PENDING_CONFIRMATION') {
           // Commande envoyée, confirmation device en cours (télémétrie async).
-          // PAS un succès affiché : état "en cours de confirmation", on continue à relire.
+          // PAS un succès "actif" : on affiche « Commande X envoyée » et on continue à relire.
           setStatus((prev) => ({ ...prev, state: 'PENDING_CONFIRMATION' }));
+          setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
         } else if (res.ok) {
           setStatus((prev) => ({ ...prev, state: res.state }));
+          setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
           if (typeof res.private_distance_km === 'number') {
             setLastDistanceKm(res.private_distance_km);
           }
@@ -110,6 +114,7 @@ export function usePrivateMode(pollMs = 15000) {
     status,
     busy,
     error,
+    sentMessage,
     lastDistanceKm,
     pending: status.state === 'PENDING_CONFIRMATION',
     // Timeout de confirmation : commande envoyée mais état device NON prouvé.

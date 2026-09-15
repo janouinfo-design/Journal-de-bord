@@ -17,6 +17,9 @@ export interface PrivateModeStatus {
   allowed: boolean;
   reason?: string | null;
   pending?: boolean;
+  pending_message?: string | null;
+  can_switch?: boolean;
+  can_switch_reason?: string | null;
   confirmation_source?: string | null;
   vehicle_id?: string | null;
   tracker_id?: number | null;
@@ -37,6 +40,9 @@ export interface PrivateModeResult {
   allowed?: boolean;
   state: PrivateModeState;
   reason?: string | null;
+  message?: string | null;        // « Commande Privé/Professionnel envoyée »
+  command_label?: string | null;  // « Privé » | « Professionnel »
+  superseded?: boolean;
   idempotent?: boolean;
   private_distance_km?: number | null;
   distance_status?: string | null;

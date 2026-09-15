@@ -251,23 +251,31 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     # --- can_switch : capacité d'ACTION (distincte de l'éligibilité `allowed`) ---
     # allowed  = chauffeur/véhicule éligible au pilote (gate fail-closed).
     # can_switch = le changement de mode est réellement exécutable MAINTENANT.
-    # Il est False si : non éligible, écriture device coupée, ou transition en cours.
+    # NOTE UX (finition boutons) : on NE bloque PLUS le switch pendant une transition
+    # (PENDING/REQUESTED). Le blocage de 5 min était inutile et empêchait la
+    # récupération rapide vers Professionnel après une demande Privé. Le backend
+    # gère désormais le supersede (voir request_mode) : Professionnel reste TOUJOURS
+    # actionnable. can_switch dépend donc uniquement de l'éligibilité + écriture device.
     allowed = decision["allowed"]
     state_now = st.get("state", pm.UNKNOWN)
-    in_transition = state_now in (pm.PRIVATE_REQUESTED, pm.BUSINESS_REQUESTED, pm.PENDING_CONFIRMATION)
     device_write = pm.device_write_enabled()
-    can_switch = bool(allowed and device_write and not in_transition)
+    can_switch = bool(allowed and device_write)
     if not allowed:
         can_switch_reason = decision["reason"]
-    elif in_transition:
-        can_switch_reason = gate.R_TRANSITION_IN_PROGRESS
     elif not device_write:
         can_switch_reason = gate.R_DEVICE_WRITE_DISABLED
     else:
         can_switch_reason = None
+    # Message métier honnête si une commande est en attente de confirmation :
+    # « Commande Privé/Professionnel envoyée » (jamais « actif »).
+    pending_message = None
+    if state_now == pm.PENDING_CONFIRMATION:
+        rt = st.get("requested_target")
+        pending_message = pm._command_sent_message(rt) if rt in (pm.PRIVATE, pm.BUSINESS) else None
     return {
         "state": state_now,
         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
+        "pending_message": pending_message,
         "confirmation_source": st.get("confirmation_source"),
         "allowed": allowed,
         "reason": decision["reason"],

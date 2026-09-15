@@ -55,6 +55,31 @@ _TENANT = "default"
 # Commandes device (jamais Deep Sleep).
 _CMD = {PRIVATE: "privatemode ON", BUSINESS: "privatemode OFF"}
 
+# Libellés chauffeur (aucun jargon device). Utilisés dans la réponse métier de
+# request_mode APRÈS envoi RÉEL de la commande. On dit toujours "envoyée" : on ne
+# prétend JAMAIS "actif" tant que la confirmation automatique fiable n'est pas dispo.
+_MODE_LABEL = {PRIVATE: "Privé", BUSINESS: "Professionnel"}
+
+
+def _command_sent_message(target_mode: str) -> str:
+    """Message métier honnête après envoi RÉEL : « Commande Privé/Professionnel envoyée »."""
+    return f"Commande {_MODE_LABEL.get(target_mode, target_mode)} envoyée"
+
+
+def _transition_target(state_doc: dict) -> Optional[str]:
+    """Cible en cours pour un état transitoire (REQUESTED/PENDING). None si aucun.
+    Sert à distinguer un DOUBLE-TAP sur le même bouton (idempotent) d'une DEMANDE
+    d'un mode DIFFÉRENT (récupération rapide autorisée = supersede)."""
+    s = (state_doc or {}).get("state")
+    if s == PRIVATE_REQUESTED:
+        return PRIVATE
+    if s == BUSINESS_REQUESTED:
+        return BUSINESS
+    if s == PENDING_CONFIRMATION:
+        rt = state_doc.get("requested_target")
+        return rt if rt in (PRIVATE, BUSINESS) else None
+    return None
+
 
 def device_write_enabled() -> bool:
     """L'envoi RÉEL de commande device est-il autorisé ? (défaut NON -> simulation)."""
@@ -760,12 +785,30 @@ async def request_mode(
         return {"ok": True, "allowed": True, "can_switch": True, "state": cur_state,
                 "idempotent": True, "vehicle_id": vehicle_id, "tracker_id": tracker_id}
 
-    # --- Anti-concurrence : une transition est déjà en cours (requested ou pending) ---
+    # --- Anti-concurrence intelligente (récupération rapide autorisée) ---
+    # Une transition est en cours (REQUESTED ou PENDING). Deux cas :
+    #  * MÊME cible que la demande en cours -> double-tap : on ne renvoie PAS de
+    #    nouvelle commande device (anti-spam), on renvoie l'état pending courant.
+    #    (Jamais un faux "actif" : l'état reste PENDING/REQUESTED honnête.)
+    #  * Cible DIFFÉRENTE (ex. Professionnel demandé pendant un PRIVATE en attente)
+    #    -> SUPERSEDE : on laisse la nouvelle demande partir immédiatement. C'est la
+    #    récupération rapide vers Professionnel (aucun blocage UX de 5 min).
     if cur_state in (PRIVATE_REQUESTED, BUSINESS_REQUESTED, PENDING_CONFIRMATION):
-        return {"ok": False, "allowed": True, "can_switch": False,
-                "state": cur_state, "reason": gate.R_TRANSITION_IN_PROGRESS,
-                "http": gate.HTTP_BY_REASON[gate.R_TRANSITION_IN_PROGRESS],
-                "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+        in_progress_target = _transition_target(cur)
+        if in_progress_target == target_mode:
+            return {"ok": True, "allowed": True, "can_switch": True,
+                    "state": cur_state, "pending": cur_state == PENDING_CONFIRMATION,
+                    "reason": "pending_confirmation", "superseded": False,
+                    "message": _command_sent_message(target_mode),
+                    "command_label": _MODE_LABEL.get(target_mode),
+                    "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+        # Cible différente -> on autorise le supersede (on tombe dans le flux d'envoi ci-dessous).
+        # L'état confirmé précédent (cur) reste la base ; l'audit tracera le supersede.
+        await _audit(db, {"driver_id": driver_id, "vehicle_id": vehicle_id,
+                          "tracker_id": tracker_id, "requested_mode": target_mode,
+                          "result": "supersede", "tenant_id": tid,
+                          "previous_state": cur_state,
+                          "superseded_target": in_progress_target})
 
     # --- FAIL-FAST : écriture device désactivée (PRIVATE_MODE_DEVICE_WRITE=0) ---
     # Éligibilité OK (allowed=True) MAIS aucune commande ne peut être envoyée au device.
@@ -834,6 +877,8 @@ async def request_mode(
                               "navixy_command_id": cmd_res.get("navixy_command_id")})
             return {"ok": True, "allowed": True, "state": PENDING_CONFIRMATION,
                     "pending": True, "reason": "pending_confirmation",
+                    "message": _command_sent_message(target_mode),
+                    "command_label": _MODE_LABEL.get(target_mode),
                     "confirmation_source": SRC_UNCONFIRMED,
                     "vehicle_id": vehicle_id, "tracker_id": tracker_id}
         # Non-REAL (simulation off / navixy non configuré) : état transitoire honnête.
@@ -851,6 +896,8 @@ async def request_mode(
     # --- Confirmé : transition finale ---
     result = {"ok": True, "allowed": True, "state": target_mode,
               "confirmation_source": confirm_source,
+              "message": _command_sent_message(target_mode),
+              "command_label": _MODE_LABEL.get(target_mode),
               "vehicle_id": vehicle_id, "tracker_id": tracker_id}
     new_doc = {**cur, **base, "state": target_mode, "last_command": cmd,
                "confirmation_source": confirm_source}

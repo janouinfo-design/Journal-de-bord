@@ -377,10 +377,14 @@ function DriverScreenBle() {
                 ? 'Mode Privé activé'
                 : privateMode.status.state === 'BUSINESS'
                 ? 'Mode Professionnel activé'
+                : privateMode.status.state === 'PENDING_CONFIRMATION'
+                ? (privateMode.sentMessage
+                    || privateMode.status.pending_message
+                    || 'Commande envoyée')
                 : privateMode.status.state === 'PRIVATE_REQUESTED'
-                ? 'Activation du Mode Privé…'
+                ? 'Commande Privé envoyée'
                 : privateMode.status.state === 'BUSINESS_REQUESTED'
-                ? 'Retour en mode Professionnel…'
+                ? 'Commande Professionnel envoyée'
                 : 'État indéterminé'}
             </Text>
             {privateMode.status.state === 'PRIVATE' ? (
