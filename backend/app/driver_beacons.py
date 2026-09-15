@@ -141,9 +141,12 @@ async def poll_tenant_beacons(tenant: dict, window_min: int | None = None) -> di
         frm = now - timedelta(minutes=15)
 
     api = (tenant.get("navixy_api_url") or "https://api.navixy.com/v2").rstrip("/")
+    # Déchiffrement défensif (idempotent sur une valeur legacy en clair -> zéro régression).
+    from app.integrations import decrypt_secret
+    _cred = decrypt_secret(tenant["navixy_hash"])
     async with httpx.AsyncClient(timeout=30.0) as client:
         records, err = await _read_beacons(
-            client, api, tenant["navixy_hash"], list(by_tracker.keys()),
+            client, api, _cred, list(by_tracker.keys()),
             frm.strftime(NAVIXY_TS_FMT), now.strftime(NAVIXY_TS_FMT))
     if err:
         return {"error": err}

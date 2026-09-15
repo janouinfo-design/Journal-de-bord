@@ -44,7 +44,7 @@ export default function FuelWidget() {
   }, []);
 
   if (!d) return null;
-  const txLink = `/livre/carburant/transactions?date_from=${d.date_from}&date_to=${d.date_to}`;
+  const txLink = `/livre/energie/approvisionnements/transactions?date_from=${d.date_from}&date_to=${d.date_to}`;
   const st = d.statement.exists ? STATEMENT_STATUS[d.statement.status] : null;
 
   return (
@@ -59,7 +59,7 @@ export default function FuelWidget() {
             Carburant — {monthLabel(d.month)}
           </span>
         </div>
-        <Link to="/livre/carburant/apercu" data-testid="dashboard-fuel-widget-open"
+        <Link to="/livre/energie/approvisionnements/apercu" data-testid="dashboard-fuel-widget-open"
               className="text-sky-500 hover:translate-x-1 transition-transform">
           <ChevronRight className="w-4 h-4" />
         </Link>
@@ -77,20 +77,20 @@ export default function FuelWidget() {
                 sub={`${d.current.tx_count} transaction(s)`} icon={Droplets} testId="fuel-widget-liters" />
         <Metric to={txLink} label="Recharge" value={`${d.current.kwh} kWh`} icon={Zap}
                 testId="fuel-widget-kwh" />
-        <Metric to="/livre/carburant/transactions?match_status=unmatched" label="Non rapprochées"
+        <Metric to="/livre/energie/approvisionnements/transactions?match_status=unmatched" label="Non rapprochées"
                 value={d.unmatched_count} icon={GitMerge}
                 tone={d.unmatched_count ? "text-amber-600" : "text-emerald-600"}
                 testId="fuel-widget-unmatched" />
-        <Metric to="/livre/carburant/transactions?fx_status=pending" label="Conversions en attente"
+        <Metric to="/livre/energie/approvisionnements/transactions?fx_status=pending" label="Conversions en attente"
                 value={d.fx_pending_count} icon={Landmark}
                 tone={d.fx_pending_count ? "text-amber-600" : "text-emerald-600"}
                 testId="fuel-widget-fx" />
-        <Metric to="/livre/carburant/anomalies" label="Anomalies ouvertes"
+        <Metric to="/livre/energie/anomalies" label="Anomalies ouvertes"
                 value={d.anomalies.open} icon={AlertTriangle}
                 sub={d.anomalies.critical ? `dont ${d.anomalies.critical} critique(s)` : null}
                 tone={d.anomalies.critical ? "text-rose-600" : d.anomalies.open ? "text-amber-600" : "text-emerald-600"}
                 testId="fuel-widget-anomalies" />
-        <Metric to={d.statement.exists ? `/livre/carburant/decomptes/${d.statement.id}` : "/livre/carburant/decomptes"}
+        <Metric to={d.statement.exists ? `/livre/energie/approvisionnements/decomptes/${d.statement.id}` : "/livre/energie/approvisionnements/decomptes"}
                 label={`Décompte ${monthLabel(d.statement.period_month)}`}
                 value={st ? st.label : "À créer"} icon={FileCheck2}
                 sub={d.statement.exists ? d.statement.number : "Aucun décompte généré"}

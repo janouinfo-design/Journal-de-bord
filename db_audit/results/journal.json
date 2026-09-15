@@ -1,0 +1,467 @@
+{
+  "project": "journal",
+  "schema_notes": [
+    "vehicles.navixy_tracker_id = clé de rapprochement ; plaque = champ 'plate'."
+  ],
+  "check1_vehicle_overlap": {
+    "source_collection": "vehicles",
+    "tenant_field": "tenant_id",
+    "trackers_by_tenant": {
+      "default": [
+        781479,
+        1067937,
+        1067938,
+        1067939,
+        1075587,
+        3076994,
+        3079431,
+        3131157,
+        3218549,
+        3218550,
+        3218553,
+        3353695
+      ]
+    },
+    "distinct_trackers": 12
+  },
+  "check2_vin_plate_quality": {
+    "vin_field": "vin",
+    "plate_field": "plate",
+    "by_tenant": {
+      "default": {
+        "total": 18,
+        "vin_set": 0,
+        "vin_empty": 18,
+        "plate_set": 18,
+        "plate_empty": 0,
+        "tracker_set": 12,
+        "tracker_empty": 6,
+        "vin_duplicates": {
+          "distinct_nonempty": 0,
+          "duplicated_values": 0,
+          "docs_in_duplicates": 0
+        },
+        "plate_duplicates": {
+          "distinct_nonempty": 18,
+          "duplicated_values": 0,
+          "docs_in_duplicates": 0
+        }
+      }
+    }
+  },
+  "check3_roles": {
+    "by_role": {
+      "admin": 3,
+      "manager": 26,
+      "driver": 39,
+      "superadmin": 1,
+      "lecture_seule": 1
+    },
+    "by_tenant": {
+      "default": {
+        "admin": 2,
+        "manager": 1,
+        "driver": 39,
+        "lecture_seule": 1
+      },
+      "none": {
+        "superadmin": 1
+      },
+      "0ce32dd4-4aee-4046-96fa-b5533dbee8db": {
+        "admin": 1
+      },
+      "1dcf4976-77ac-4fec-8f41-ec802e6578af": {
+        "manager": 1
+      },
+      "422bb0a2-ae55-420b-adfc-418820cd6dce": {
+        "manager": 1
+      },
+      "df7dee2c-b118-4501-bcbb-3e0deaf62d06": {
+        "manager": 1
+      },
+      "699fa5bc-af89-4052-846e-492e6dd15036": {
+        "manager": 1
+      },
+      "49128afd-fcec-47a3-8b95-ed2aec32aec9": {
+        "manager": 1
+      },
+      "e6cf9a4d-975c-46a9-a200-c5be0beba6b4": {
+        "manager": 1
+      },
+      "edaf3a18-0ed3-47d1-b77a-7f9207417b65": {
+        "manager": 1
+      },
+      "67958257-f117-4701-9ae0-ac36c7159809": {
+        "manager": 1
+      },
+      "38742e2e-a28e-4ed7-9ea7-85aa19d3fd74": {
+        "manager": 1
+      },
+      "66c2742d-5ebd-4fd0-8ae7-fd22a872c1a0": {
+        "manager": 1
+      },
+      "40654ebd-c50d-4cdb-9eb3-3d67e27c94e4": {
+        "manager": 1
+      },
+      "6075f41f-36ae-40f6-aeae-5a901245923b": {
+        "manager": 1
+      },
+      "577634d2-9907-422d-b5c3-ad2702d7a849": {
+        "manager": 1
+      },
+      "1b54c1c2-6cb1-4075-81d8-59e6c1b3c544": {
+        "manager": 1
+      },
+      "6071f1cd-d6ea-4329-8aed-0a37f75a905e": {
+        "manager": 1
+      },
+      "211ac627-52c5-456f-b2c1-cfc7d4768c69": {
+        "manager": 1
+      },
+      "b7558753-fa89-420d-9094-a1659fca34b4": {
+        "manager": 1
+      },
+      "121ae3cb-e9d7-47d3-987b-8926e4b38f7a": {
+        "manager": 1
+      },
+      "253b0615-fc40-4559-8cf6-45fa51985ef1": {
+        "manager": 1
+      },
+      "c6ef4eac-57a4-47e3-8058-92a4bd9fc3ee": {
+        "manager": 1
+      },
+      "c63e5260-8503-4062-8fa7-6575a4181ed1": {
+        "manager": 1
+      },
+      "afa1966c-0946-4d76-a3ac-28a037241eb4": {
+        "manager": 1
+      },
+      "11c54d5a-68cb-4df9-b20c-272dc1e657e2": {
+        "manager": 1
+      },
+      "d4fc686c-c560-42ea-8887-df1cedadfb92": {
+        "manager": 1
+      },
+      "e182e42e-4872-466b-88cb-eab499fd07ae": {
+        "manager": 1
+      }
+    }
+  },
+  "check4_tenants": {
+    "count": 52,
+    "tenants": [
+      {
+        "tenant_id": "default",
+        "status": "active",
+        "navixy_master_user_id": 121349,
+        "name_hash": "40dea2936398"
+      },
+      {
+        "tenant_id": "0ce32dd4-4aee-4046-96fa-b5533dbee8db",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "3811f83bdd71"
+      },
+      {
+        "tenant_id": "1dcf4976-77ac-4fec-8f41-ec802e6578af",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "aed5e2f2a1a3"
+      },
+      {
+        "tenant_id": "422bb0a2-ae55-420b-adfc-418820cd6dce",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "5611cc71caa1"
+      },
+      {
+        "tenant_id": "df7dee2c-b118-4501-bcbb-3e0deaf62d06",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "974728f28487"
+      },
+      {
+        "tenant_id": "2e8bcb11-1437-41f2-8e3f-3bd8e4f13207",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "ffc27cc74f3a"
+      },
+      {
+        "tenant_id": "699fa5bc-af89-4052-846e-492e6dd15036",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "824cc62aaf1d"
+      },
+      {
+        "tenant_id": "d188b562-6960-46e7-a30d-133015a3e39d",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "796171021315"
+      },
+      {
+        "tenant_id": "49128afd-fcec-47a3-8b95-ed2aec32aec9",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "5f0341cff8b3"
+      },
+      {
+        "tenant_id": "3a7f4975-8b95-45ba-bc1b-65fcef6e8e1f",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "12c1d83598d6"
+      },
+      {
+        "tenant_id": "e6cf9a4d-975c-46a9-a200-c5be0beba6b4",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "331273fedf65"
+      },
+      {
+        "tenant_id": "b2072a67-3b96-407b-9738-3a31ef1e1bc5",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "7d1f1c56ff90"
+      },
+      {
+        "tenant_id": "c870bd7f-9edd-4062-9974-aed8fae1e7f1",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "ee553152ff46"
+      },
+      {
+        "tenant_id": "808187e1-3556-49f4-90e1-bf4734c775c4",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "12c364319115"
+      },
+      {
+        "tenant_id": "edaf3a18-0ed3-47d1-b77a-7f9207417b65",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "b3bdd5f1e829"
+      },
+      {
+        "tenant_id": "f7122be9-9743-4823-b823-6a96ab20f47f",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "c86d1189e02d"
+      },
+      {
+        "tenant_id": "67958257-f117-4701-9ae0-ac36c7159809",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "01fb220cf638"
+      },
+      {
+        "tenant_id": "43d026cc-c49f-47dc-9991-cdb4632d4413",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "387a16c8ef52"
+      },
+      {
+        "tenant_id": "38742e2e-a28e-4ed7-9ea7-85aa19d3fd74",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "8af76389fae6"
+      },
+      {
+        "tenant_id": "02d121fd-81b9-4571-8c93-bcd506203c5e",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "044076fe9e24"
+      },
+      {
+        "tenant_id": "66c2742d-5ebd-4fd0-8ae7-fd22a872c1a0",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "6c12c720b7bb"
+      },
+      {
+        "tenant_id": "867a8ce9-a132-4995-be00-b767a51f2701",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "19c70e4bf1a2"
+      },
+      {
+        "tenant_id": "40654ebd-c50d-4cdb-9eb3-3d67e27c94e4",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "9e3ea9d7ae84"
+      },
+      {
+        "tenant_id": "6075f41f-36ae-40f6-aeae-5a901245923b",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "fa09502400bf"
+      },
+      {
+        "tenant_id": "f2902301-c1f8-49f5-9dcd-8ec50ce7a52f",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "ad7a55cc1a3d"
+      },
+      {
+        "tenant_id": "947c6455-2b57-4dab-917e-6117b1cba736",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "cdb2bad1c9b7"
+      },
+      {
+        "tenant_id": "577634d2-9907-422d-b5c3-ad2702d7a849",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "984a43ea24d0"
+      },
+      {
+        "tenant_id": "569f93f1-61e9-47e8-961c-e68cb0c53cc1",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "2a313f59c83f"
+      },
+      {
+        "tenant_id": "1b54c1c2-6cb1-4075-81d8-59e6c1b3c544",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "47543a9c9b54"
+      },
+      {
+        "tenant_id": "8fa40c30-ea51-49c7-aa75-49e06a7bdfcc",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "81ee5b75c590"
+      },
+      {
+        "tenant_id": "6071f1cd-d6ea-4329-8aed-0a37f75a905e",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "edc5ae12a394"
+      },
+      {
+        "tenant_id": "582a3c47-9bb5-4aac-88f4-378ce5a380c9",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "f096018f28f2"
+      },
+      {
+        "tenant_id": "211ac627-52c5-456f-b2c1-cfc7d4768c69",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "e8ef71ae6eaa"
+      },
+      {
+        "tenant_id": "01e700e0-49d9-43c5-bfb2-aa3d4198f275",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "a702fa5056fd"
+      },
+      {
+        "tenant_id": "b7558753-fa89-420d-9094-a1659fca34b4",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "9659ce2565b1"
+      },
+      {
+        "tenant_id": "11e026fc-8f27-4ebb-9c0d-5c886c0eee0c",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "0d58fb8dafda"
+      },
+      {
+        "tenant_id": "121ae3cb-e9d7-47d3-987b-8926e4b38f7a",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "9615be17951e"
+      },
+      {
+        "tenant_id": "d9a6f991-68dc-48ec-9dfe-cb5e7abf1c7d",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "eff4da79b39a"
+      },
+      {
+        "tenant_id": "253b0615-fc40-4559-8cf6-45fa51985ef1",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "b1f793797a9d"
+      },
+      {
+        "tenant_id": "b324c3eb-42bc-4294-a019-8f66e3738e2a",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "0961d1f86776"
+      },
+      {
+        "tenant_id": "c6ef4eac-57a4-47e3-8058-92a4bd9fc3ee",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "1240f83bb89b"
+      },
+      {
+        "tenant_id": "c9e9c761-636e-4d73-ba9d-e6fabe2988ff",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "ed1e4823911e"
+      },
+      {
+        "tenant_id": "c63e5260-8503-4062-8fa7-6575a4181ed1",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "ce25fc76ee9a"
+      },
+      {
+        "tenant_id": "d7d72263-116b-4f9e-94d1-d40792b492eb",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "6798aa6cd36c"
+      },
+      {
+        "tenant_id": "afa1966c-0946-4d76-a3ac-28a037241eb4",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "6e8953a6c6b3"
+      },
+      {
+        "tenant_id": "e99078b9-7f1a-48b4-84bf-a6e0b67220c7",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "79a9162bf151"
+      },
+      {
+        "tenant_id": "11c54d5a-68cb-4df9-b20c-272dc1e657e2",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "2c60babc6f2c"
+      },
+      {
+        "tenant_id": "71e7c5c9-cc77-471a-9a9b-995609212fc5",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "9a525707b709"
+      },
+      {
+        "tenant_id": "d4fc686c-c560-42ea-8887-df1cedadfb92",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "6a0ad95fa775"
+      },
+      {
+        "tenant_id": "8d013ea9-1d3e-46ec-a163-b7a8df9b9e9f",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "05628e662e53"
+      },
+      {
+        "tenant_id": "e182e42e-4872-466b-88cb-eab499fd07ae",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "e6fc212142ff"
+      },
+      {
+        "tenant_id": "010e5d80-2608-416a-8e56-857afddecd1a",
+        "status": "active",
+        "navixy_master_user_id": null,
+        "name_hash": "042836b31f93"
+      }
+    ]
+  }
+}

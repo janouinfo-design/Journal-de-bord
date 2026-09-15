@@ -1,0 +1,836 @@
+diff --git a/backend/app/private_mode_engine.py b/backend/app/private_mode_engine.py
+index 19f3fd6..8480e2f 100644
+--- a/backend/app/private_mode_engine.py
++++ b/backend/app/private_mode_engine.py
+@@ -55,6 +55,31 @@ _TENANT = "default"
+ # Commandes device (jamais Deep Sleep).
+ _CMD = {PRIVATE: "privatemode ON", BUSINESS: "privatemode OFF"}
+ 
++# Libellés chauffeur (aucun jargon device). Utilisés dans la réponse métier de
++# request_mode APRÈS envoi RÉEL de la commande. On dit toujours "envoyée" : on ne
++# prétend JAMAIS "actif" tant que la confirmation automatique fiable n'est pas dispo.
++_MODE_LABEL = {PRIVATE: "Privé", BUSINESS: "Professionnel"}
++
++
++def _command_sent_message(target_mode: str) -> str:
++    """Message métier honnête après envoi RÉEL : « Commande Privé/Professionnel envoyée »."""
++    return f"Commande {_MODE_LABEL.get(target_mode, target_mode)} envoyée"
++
++
++def _transition_target(state_doc: dict) -> Optional[str]:
++    """Cible en cours pour un état transitoire (REQUESTED/PENDING). None si aucun.
++    Sert à distinguer un DOUBLE-TAP sur le même bouton (idempotent) d'une DEMANDE
++    d'un mode DIFFÉRENT (récupération rapide autorisée = supersede)."""
++    s = (state_doc or {}).get("state")
++    if s == PRIVATE_REQUESTED:
++        return PRIVATE
++    if s == BUSINESS_REQUESTED:
++        return BUSINESS
++    if s == PENDING_CONFIRMATION:
++        rt = state_doc.get("requested_target")
++        return rt if rt in (PRIVATE, BUSINESS) else None
++    return None
++
+ 
+ def device_write_enabled() -> bool:
+     """L'envoi RÉEL de commande device est-il autorisé ? (défaut NON -> simulation)."""
+@@ -361,6 +386,32 @@ def _is_zero(lat, lng) -> bool:
+         return False
+ 
+ 
++# Fraîcheur max d'une position GPS pour prouver une REPRISE business à l'arrêt (secondes).
++BUSINESS_GPS_FRESH_MAX_S = int(os.environ.get("PRIVATE_BUSINESS_GPS_FRESH_MAX_S", "180"))
++
++
++def _gps_state_is_fresh(st: dict) -> bool:
++    """La position transmise est-elle RÉCENTE (gps.updated dans la fenêtre) ?
++    Fail-closed : sans horodatage exploitable -> False (jamais de faux positif)."""
++    from datetime import datetime, timezone
++    dt = _parse(st.get("gps_updated"))
++    if not dt:
++        return False
++    return (datetime.now(timezone.utc) - dt).total_seconds() <= BUSINESS_GPS_FRESH_MAX_S
++
++
++def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
++    """La position courante est-elle encore GELÉE sur l'ancre privée (donc toujours masquée) ?
++    True si l'ancre existe et que la position n'a pas bougé au-delà du jitter GPS toléré.
++    Sert à REFUSER un faux BUSINESS quand le device semble encore afficher la position privée."""
++    anchor_lat = sd.get("private_gps_anchor_lat")
++    anchor_lng = sd.get("private_gps_anchor_lng")
++    if anchor_lat is None or anchor_lng is None:
++        return False  # pas d'ancre -> on ne peut pas affirmer "gelé"
++    d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
++    return d is not None and d <= LKP_DOMINANT_RADIUS_M
++
++
+ # ---------------------------------------------------------------------------
+ # PREUVE AUTORITATIVE — RÉPONSE DEVICE via l'historique Navixy (READ-ONLY).
+ # Endpoint documenté `history/tracker/list` : chaque entrée peut porter
+@@ -578,9 +629,7 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
+                 return None, SRC_UNCONFIRMED
+             if _is_zero(cur_lat, cur_lng):
+                 return None, SRC_UNCONFIRMED
+-            # Preuve de REPRISE : progression GPS réelle (petit déplacement suffit, pas de seuil 200 m).
+-            # Soit les samples post-OFF montrent un mouvement, soit la position a quitté la zone
+-            # dominante privée d'au moins LKP_RESUME_MIN_M.
++            # Preuve de REPRISE (mouvement) : petit déplacement réel suffit.
+             if _samples_show_movement(samples):
+                 return BUSINESS, SRC_TELEMETRY
+             anchor_lat = sd.get("private_gps_anchor_lat")
+@@ -589,6 +638,15 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
+                 d = _haversine_m(anchor_lat, anchor_lng, cur_lat, cur_lng)
+                 if d is not None and d >= LKP_RESUME_MIN_M:
+                     return BUSINESS, SRC_TELEMETRY
++            # Preuve de REPRISE (position réémise à l'arrêt) : le mode privé Teltonika
++            # MASQUE la position (0,0 ou gelée à l'ancre). Une position RÉELLE, FRAÎCHE et
++            # NON masquée RÉÉMISE APRÈS l'envoi OFF (gps_upd > sent, coords non 0,0 déjà
++            # vérifiées) prouve la sortie du privé — même véhicule à l'arrêt (speed=0).
++            # Terrain 781479 : Location valid=yes, Speed=0 après OFF -> doit confirmer BUSINESS.
++            # Fail-closed : exige une trame RÉCENTE (fraîcheur bornée) pour éviter une
++            # position gelée périmée qui ferait un faux BUSINESS.
++            if _gps_state_is_fresh(st) and not _position_is_anchor_frozen(sd, cur_lat, cur_lng):
++                return BUSINESS, SRC_TELEMETRY
+             return None, SRC_UNCONFIRMED
+         return None, SRC_UNCONFIRMED
+ 
+@@ -727,12 +785,30 @@ async def request_mode(
+         return {"ok": True, "allowed": True, "can_switch": True, "state": cur_state,
+                 "idempotent": True, "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+ 
+-    # --- Anti-concurrence : une transition est déjà en cours (requested ou pending) ---
++    # --- Anti-concurrence intelligente (récupération rapide autorisée) ---
++    # Une transition est en cours (REQUESTED ou PENDING). Deux cas :
++    #  * MÊME cible que la demande en cours -> double-tap : on ne renvoie PAS de
++    #    nouvelle commande device (anti-spam), on renvoie l'état pending courant.
++    #    (Jamais un faux "actif" : l'état reste PENDING/REQUESTED honnête.)
++    #  * Cible DIFFÉRENTE (ex. Professionnel demandé pendant un PRIVATE en attente)
++    #    -> SUPERSEDE : on laisse la nouvelle demande partir immédiatement. C'est la
++    #    récupération rapide vers Professionnel (aucun blocage UX de 5 min).
+     if cur_state in (PRIVATE_REQUESTED, BUSINESS_REQUESTED, PENDING_CONFIRMATION):
+-        return {"ok": False, "allowed": True, "can_switch": False,
+-                "state": cur_state, "reason": gate.R_TRANSITION_IN_PROGRESS,
+-                "http": gate.HTTP_BY_REASON[gate.R_TRANSITION_IN_PROGRESS],
+-                "vehicle_id": vehicle_id, "tracker_id": tracker_id}
++        in_progress_target = _transition_target(cur)
++        if in_progress_target == target_mode:
++            return {"ok": True, "allowed": True, "can_switch": True,
++                    "state": cur_state, "pending": cur_state == PENDING_CONFIRMATION,
++                    "reason": "pending_confirmation", "superseded": False,
++                    "message": _command_sent_message(target_mode),
++                    "command_label": _MODE_LABEL.get(target_mode),
++                    "vehicle_id": vehicle_id, "tracker_id": tracker_id}
++        # Cible différente -> on autorise le supersede (on tombe dans le flux d'envoi ci-dessous).
++        # L'état confirmé précédent (cur) reste la base ; l'audit tracera le supersede.
++        await _audit(db, {"driver_id": driver_id, "vehicle_id": vehicle_id,
++                          "tracker_id": tracker_id, "requested_mode": target_mode,
++                          "result": "supersede", "tenant_id": tid,
++                          "previous_state": cur_state,
++                          "superseded_target": in_progress_target})
+ 
+     # --- FAIL-FAST : écriture device désactivée (PRIVATE_MODE_DEVICE_WRITE=0) ---
+     # Éligibilité OK (allowed=True) MAIS aucune commande ne peut être envoyée au device.
+@@ -801,6 +877,8 @@ async def request_mode(
+                               "navixy_command_id": cmd_res.get("navixy_command_id")})
+             return {"ok": True, "allowed": True, "state": PENDING_CONFIRMATION,
+                     "pending": True, "reason": "pending_confirmation",
++                    "message": _command_sent_message(target_mode),
++                    "command_label": _MODE_LABEL.get(target_mode),
+                     "confirmation_source": SRC_UNCONFIRMED,
+                     "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+         # Non-REAL (simulation off / navixy non configuré) : état transitoire honnête.
+@@ -818,6 +896,8 @@ async def request_mode(
+     # --- Confirmé : transition finale ---
+     result = {"ok": True, "allowed": True, "state": target_mode,
+               "confirmation_source": confirm_source,
++              "message": _command_sent_message(target_mode),
++              "command_label": _MODE_LABEL.get(target_mode),
+               "vehicle_id": vehicle_id, "tracker_id": tracker_id}
+     new_doc = {**cur, **base, "state": target_mode, "last_command": cmd,
+                "confirmation_source": confirm_source}
+diff --git a/backend/app/routes/identification.py b/backend/app/routes/identification.py
+index a15e209..52c5d06 100644
+--- a/backend/app/routes/identification.py
++++ b/backend/app/routes/identification.py
+@@ -251,23 +251,31 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
+     # --- can_switch : capacité d'ACTION (distincte de l'éligibilité `allowed`) ---
+     # allowed  = chauffeur/véhicule éligible au pilote (gate fail-closed).
+     # can_switch = le changement de mode est réellement exécutable MAINTENANT.
+-    # Il est False si : non éligible, écriture device coupée, ou transition en cours.
++    # NOTE UX (finition boutons) : on NE bloque PLUS le switch pendant une transition
++    # (PENDING/REQUESTED). Le blocage de 5 min était inutile et empêchait la
++    # récupération rapide vers Professionnel après une demande Privé. Le backend
++    # gère désormais le supersede (voir request_mode) : Professionnel reste TOUJOURS
++    # actionnable. can_switch dépend donc uniquement de l'éligibilité + écriture device.
+     allowed = decision["allowed"]
+     state_now = st.get("state", pm.UNKNOWN)
+-    in_transition = state_now in (pm.PRIVATE_REQUESTED, pm.BUSINESS_REQUESTED, pm.PENDING_CONFIRMATION)
+     device_write = pm.device_write_enabled()
+-    can_switch = bool(allowed and device_write and not in_transition)
++    can_switch = bool(allowed and device_write)
+     if not allowed:
+         can_switch_reason = decision["reason"]
+-    elif in_transition:
+-        can_switch_reason = gate.R_TRANSITION_IN_PROGRESS
+     elif not device_write:
+         can_switch_reason = gate.R_DEVICE_WRITE_DISABLED
+     else:
+         can_switch_reason = None
++    # Message métier honnête si une commande est en attente de confirmation :
++    # « Commande Privé/Professionnel envoyée » (jamais « actif »).
++    pending_message = None
++    if state_now == pm.PENDING_CONFIRMATION:
++        rt = st.get("requested_target")
++        pending_message = pm._command_sent_message(rt) if rt in (pm.PRIVATE, pm.BUSINESS) else None
+     return {
+         "state": state_now,
+         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
++        "pending_message": pending_message,
+         "confirmation_source": st.get("confirmation_source"),
+         "allowed": allowed,
+         "reason": decision["reason"],
+diff --git a/backend/tests/test_administration.py b/backend/tests/test_administration.py
+index 1e73e29..e0b36c8 100644
+--- a/backend/tests/test_administration.py
++++ b/backend/tests/test_administration.py
+@@ -4,7 +4,7 @@ import uuid
+ import pytest
+ import requests
+ 
+-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://github-import-138.preview.emergentagent.com"
++BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://private-mode-diag.preview.emergentagent.com"
+ API = f"{BASE}/api"
+ 
+ ADMIN = ("admin@logitrak.ch", "admin123")
+diff --git a/backend/tests/test_fmc130_business_recovery.py b/backend/tests/test_fmc130_business_recovery.py
+new file mode 100644
+index 0000000..5ba9ebb
+--- /dev/null
++++ b/backend/tests/test_fmc130_business_recovery.py
+@@ -0,0 +1,151 @@
++"""Correctif confirmation BUSINESS FMC130 781479 — reprise position valide à l'arrêt.
++
++Terrain réel : après 'privatemode OFF', Location valid=yes, Speed=0 (véhicule à l'arrêt),
++Satellites=14 -> l'état restait PENDING jusqu'au timeout car la preuve exigeait un MOUVEMENT.
++Fix : une position GPS RÉELLE, FRAÎCHE et NON masquée réémise APRÈS l'envoi OFF confirme la
++reprise BUSINESS (fail-closed : gelée sur l'ancre / périmée / 0,0 -> jamais confirmé).
++
++Approche B : DB fake + hooks mockés. Aucun réseau, aucune commande device, aucun secret.
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++from datetime import datetime, timezone, timedelta
++
++from app import private_mode_engine as pm
++from app import private_mode_gate as _gate
++from app import integrations as _integrations
++from app.odometer_capability import (
++    VehicleOdometerCapability, SOURCE_TELTONIKA_TOTAL_ODOMETER, AVL_TOTAL_ODOMETER, SCALE_VERIFIED,
++)
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++def _cap():
++    return VehicleOdometerCapability(
++        vehicle_id="vA", tracker_id=781479, device_model="FMC130",
++        private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
++        navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
++        private_confirmation_strategy=pm.CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
++        runtime_verified=True, cumulative_verified=True,
++        private_increment_verified=True, field_validated=True)
++
++
++def setup_module(_m):
++    _os.environ["PRIVATE_MODE_ENABLED"] = "1"
++    _os.environ["PRIVATE_MODE_PILOT_TENANTS"] = "default"
++    _os.environ["PRIVATE_MODE_PILOT_TRACKERS"] = "781479"
++
++    def _stub(tenant_id=None, provider="NAVIXY"):
++        if tenant_id == "default" and provider == "NAVIXY":
++            return {"credential": "STUB", "source": "TENANT", "api_url": None}
++        return None
++    setup_module._orig = _integrations.get_integration_credential
++    _integrations.get_integration_credential = _stub
++    _gate.get_integration_credential = _stub
++
++
++def teardown_module(_m):
++    for k in ("PRIVATE_MODE_ENABLED", "PRIVATE_MODE_PILOT_TENANTS", "PRIVATE_MODE_PILOT_TRACKERS"):
++        _os.environ.pop(k, None)
++    _integrations.get_integration_credential = setup_module._orig
++
++
++def _iso(dt):
++    return dt.isoformat()
++
++
++def _mk(monkeypatch, *, gps, samples=None, cmd_responses=None):
++    async def _g(tenant_id, tracker_id):
++        return gps
++    async def _s(tenant_id, tracker_id, since):
++        return samples or []
++    async def _r(tenant_id, tracker_id, since):
++        return cmd_responses or []
++    monkeypatch.setattr(pm, "_fetch_gps_state", _g)
++    monkeypatch.setattr(pm, "_fetch_gps_samples", _s)
++    monkeypatch.setattr(pm, "_fetch_command_responses", _r)
++
++
++NOW = datetime.now(timezone.utc)
++SENT = NOW - timedelta(seconds=30)          # commande OFF envoyée il y a 30 s
++FRESH = _iso(NOW - timedelta(seconds=10))   # position réémise il y a 10 s (fraîche, > sent)
++STALE = _iso(NOW - timedelta(seconds=600))  # position périmée (> fenêtre 180 s)
++ANCHOR = {"private_gps_anchor_lat": 46.5000, "private_gps_anchor_lng": 6.6000}
++
++
++def test_business_confirmed_valid_fresh_position_at_standstill(monkeypatch):
++    """OFF + position valide fraîche NON masquée à l'arrêt (speed=0) -> BUSINESS confirmé."""
++    _mk(monkeypatch, gps={"lat": 46.6000, "lng": 6.7000, "movement_status": "parked",
++                          "ignition": False, "gps_updated": FRESH, "speed": 0})
++    st, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(SENT), _cap(),
++                   state_doc=ANCHOR))
++    assert st == pm.BUSINESS and src == pm.SRC_TELEMETRY
++
++
++def test_business_refused_if_position_frozen_on_anchor(monkeypatch):
++    """Position TOUJOURS gelée sur l'ancre privée (masquée) -> pas de BUSINESS (fail-closed)."""
++    _mk(monkeypatch, gps={"lat": 46.50000, "lng": 6.60000, "movement_status": "parked",
++                          "ignition": False, "gps_updated": FRESH, "speed": 0})
++    st, _ = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(SENT), _cap(),
++                 state_doc=ANCHOR))
++    assert st is None  # encore sur l'ancre -> considéré masqué -> pas de faux BUSINESS
++
++
++def test_business_refused_if_position_stale(monkeypatch):
++    """Position périmée (hors fenêtre de fraîcheur) -> pas de BUSINESS."""
++    _mk(monkeypatch, gps={"lat": 46.6000, "lng": 6.7000, "movement_status": "parked",
++                          "ignition": False, "gps_updated": STALE, "speed": 0})
++    # gps_updated est ANTÉRIEUR à sent -> la garde gps_upd>sent bloque déjà ; on force gps_upd>sent mais périmé :
++    # ici STALE < SENT donc gps_upd>sent est faux -> None (double sécurité). On teste aussi le cas fresh<sent séparément.
++    st, _ = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(SENT), _cap(),
++                 state_doc=ANCHOR))
++    assert st is None
++
++
++def test_business_refused_if_zero_position(monkeypatch):
++    """Position 0,0 (masquée) après OFF -> jamais BUSINESS."""
++    _mk(monkeypatch, gps={"lat": 0.0, "lng": 0.0, "movement_status": "parked",
++                          "ignition": False, "gps_updated": FRESH})
++    st, _ = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(SENT), _cap(),
++                 state_doc=ANCHOR))
++    assert st is None
++
++
++def test_business_still_confirmed_by_movement(monkeypatch):
++    """Non-régression : reprise par mouvement réel (samples) confirme toujours BUSINESS."""
++    _mk(monkeypatch, gps={"lat": 46.6, "lng": 6.7, "movement_status": "moving",
++                          "ignition": True, "gps_updated": FRESH},
++        samples=[{"lat": 46.5, "lng": 6.6}, {"lat": 46.7, "lng": 6.9}])  # déplacement
++    st, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(SENT), _cap(),
++                   state_doc=ANCHOR))
++    assert st == pm.BUSINESS and src == pm.SRC_TELEMETRY
++
++
++def test_business_refused_if_frame_not_after_command(monkeypatch):
++    """Trame GPS antérieure à l'envoi OFF -> jamais BUSINESS (anti-stale)."""
++    before = _iso(SENT - timedelta(seconds=60))
++    _mk(monkeypatch, gps={"lat": 46.6, "lng": 6.7, "movement_status": "parked",
++                          "ignition": False, "gps_updated": before})
++    st, _ = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, _iso(SENT), _cap(),
++                 state_doc=ANCHOR))
++    assert st is None
++
++
++def test_private_unchanged_no_false_success(monkeypatch):
++    """PRIVATE : sans preuve (pas de device response, GPS suit encore), reste non confirmé."""
++    async def _r(t, k, s): return []
++    monkeypatch.setattr(pm, "_fetch_command_responses", _r)
++    _mk(monkeypatch, gps={"lat": 46.6, "lng": 6.7, "movement_status": "moving",
++                          "ignition": True, "gps_updated": FRESH},
++        samples=[{"lat": 46.60, "lng": 6.70}, {"lat": 46.70, "lng": 6.90},
++                 {"lat": 46.80, "lng": 7.00}, {"lat": 46.90, "lng": 7.10},
++                 {"lat": 47.00, "lng": 7.20}])  # positions qui bougent -> pas masqué
++    async def _odo(_t): return 56000.0  # pas d'augmentation vs start
++    st, _ = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, _iso(SENT), _cap(),
++                 state_doc={"private_start_odometer_km": 56000.0, **ANCHOR}, read_odo_km=_odo))
++    assert st is None  # aucun faux PRIVATE
+diff --git a/backend/tests/test_fmc130_lkp_fixes.py b/backend/tests/test_fmc130_lkp_fixes.py
+index b29f62d..98c0449 100644
+--- a/backend/tests/test_fmc130_lkp_fixes.py
++++ b/backend/tests/test_fmc130_lkp_fixes.py
+@@ -278,7 +278,13 @@ def test_t7b_pending_timeout_confirmed_by_telemetry_wins():
+ # SÉCURITÉ — 0 device command
+ # ===========================================================================
+ def test_t9_double_request_during_pending_no_second_command():
+-    """T9 — 2e request pendant PENDING -> R_TRANSITION_IN_PROGRESS, ZÉRO device command."""
++    """T9 — 2e request MÊME cible pendant PENDING -> AUCUNE 2e commande device.
++
++    Finition UX : un double-tap sur la MÊME cible ne renvoie plus une erreur
++    (transition_in_progress) mais un pending idempotent honnête (« Commande …
++    envoyée »). Le point de SÉCURITÉ reste identique : ZÉRO commande device
++    n'est réémise (send_command interdit). Aucun faux « actif ».
++    """
+     db = _db_fmc130()
+     from datetime import datetime, timezone
+     now = datetime.now(timezone.utc).isoformat()
+@@ -286,8 +292,13 @@ def test_t9_double_request_during_pending_no_second_command():
+     res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+                send_command=_forbid_command(), confirm=_confirm("ok"),
+                read_odo_km=_odo([1.0])))
+-    assert res["ok"] is False and res["can_switch"] is False
+-    assert res["reason"] == _gate.R_TRANSITION_IN_PROGRESS
++    # Idempotent pending : ok=True MAIS état toujours PENDING (jamais un faux PRIVATE actif).
++    assert res["ok"] is True
++    assert res["state"] == pm.PENDING_CONFIRMATION
++    assert res.get("superseded") is False
++    # État persistant inchangé -> aucune commande device n'a été réémise (_forbid_command).
++    st = _run(pm.get_mode_state(db, "vA"))
++    assert st["state"] == pm.PENDING_CONFIRMATION
+ 
+ 
+ def test_t10_device_write_off_zero_command():
+diff --git a/backend/tests/test_fmc130_prive_pro_ux.py b/backend/tests/test_fmc130_prive_pro_ux.py
+new file mode 100644
+index 0000000..c29db04
+--- /dev/null
++++ b/backend/tests/test_fmc130_prive_pro_ux.py
+@@ -0,0 +1,267 @@
++"""Finition UX boutons Privé / Professionnel (FMC130) — sans nouveau test terrain.
++
++Le matériel et le chemin device sont validés (privatemode ON/OFF PASS). Ce module
++vérifie UNIQUEMENT la finition applicative demandée :
++
++  1. Après envoi RÉEL, la réponse porte un message honnête :
++       PRIVATE  -> « Commande Privé envoyée »
++       BUSINESS -> « Commande Professionnel envoyée »
++  2. Aucun faux « actif » : un envoi non confirmé reste PENDING_CONFIRMATION
++     (jamais PRIVATE/BUSINESS d'office).
++  3. Récupération rapide TOUJOURS possible : demander Professionnel pendant un
++     PRIVATE en attente est ACCEPTÉ (supersede), pas refusé (transition_in_progress).
++  4. Pas de verrou UX de 5 min : double-tap sur la MÊME cible ne renvoie pas de
++     commande (idempotent pending), mais ne bloque pas la cible opposée.
++  5. Fail-closed préservé : feature OFF / kill switch / DEVICE_WRITE=0 refusent.
++
++Hooks device/odomètre MOCKÉS. Aucun appel réseau, aucune commande device réelle,
++aucun secret. DB fake en mémoire.
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++
++from app import private_mode_engine as pm
++from app import private_mode_gate as _gate
++from app import integrations as _integrations
++from app.odometer_capability import (
++    VehicleOdometerCapability, SOURCE_TELTONIKA_TOTAL_ODOMETER,
++    AVL_TOTAL_ODOMETER, SCALE_VERIFIED,
++)
++
++
++# --------- Faux DB minimal en mémoire (async) ---------
++class _Coll:
++    def __init__(self):
++        self.docs = []
++
++    async def find_one(self, q, proj=None):
++        for d in self.docs:
++            if all(d.get(k) == v for k, v in q.items()):
++                return dict(d)
++        return None
++
++    async def update_one(self, q, upd, upsert=False):
++        for d in self.docs:
++            if all(d.get(k) == v for k, v in q.items()):
++                d.update(upd.get("$set", {}))
++                return
++        if upsert:
++            nd = dict(q)
++            nd.update(upd.get("$set", {}))
++            self.docs.append(nd)
++
++    async def insert_one(self, d):
++        self.docs.append(dict(d))
++
++
++class _DB:
++    def __init__(self):
++        self.vehicles = _Coll()
++        self.private_mode_state = _Coll()
++        self.vehicle_private_capabilities = _Coll()
++        self.audit_log = _Coll()
++        self.feature_flags = _Coll()
++        self.tenants = _Coll()
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++_ORIG_GET_CRED = _integrations.get_integration_credential
++
++
++def setup_module(_m):
++    _os.environ["PRIVATE_MODE_ENABLED"] = "1"
++    _os.environ["PRIVATE_MODE_PILOT_TENANTS"] = "default"
++    _os.environ["PRIVATE_MODE_PILOT_TRACKERS"] = "781479"
++    _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "1"  # machine à états testée (hooks mockés)
++
++    def _stub(tenant_id=None, provider="NAVIXY"):
++        if tenant_id == "default" and provider == "NAVIXY":
++            return {"credential": "STUB", "source": "TENANT", "api_url": None}
++        return None
++    _integrations.get_integration_credential = _stub
++    _gate.get_integration_credential = _stub
++
++
++def teardown_module(_m):
++    for k in ("PRIVATE_MODE_ENABLED", "PRIVATE_MODE_PILOT_TENANTS",
++              "PRIVATE_MODE_PILOT_TRACKERS", "PRIVATE_MODE_DEVICE_WRITE"):
++        _os.environ.pop(k, None)
++    _integrations.get_integration_credential = _ORIG_GET_CRED
++
++
++FIELD_VALIDATED_VC = VehicleOdometerCapability(
++    vehicle_id="vA", tracker_id=781479, device_model="FMC130",
++    private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
++    navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
++    private_confirmation_strategy=pm.CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
++    runtime_verified=True, cumulative_verified=True,
++    private_increment_verified=True, field_validated=True)
++
++
++def _db():
++    db = _DB()
++    _run(db.vehicles.update_one({"id": "vA"},
++         {"$set": {"id": "vA", "tenant_id": "default", "model": "telfmu130_fmc130",
++                   "navixy_tracker_id": 781479, "plate": "GE-AUDI",
++                   "private_mode_pilot": True}}, upsert=True))
++    _run(pm.upsert_vehicle_capability(db, FIELD_VALIDATED_VC))
++    return db
++
++
++async def _session_ok(db, driver_id):
++    return {"vehicle_id": "vA", "driver_id": driver_id}
++
++
++def _real_command():
++    """Commande RÉELLE (mode REAL) -> déclenche le flux PENDING quand non confirmée."""
++    async def _c(tid, cmd):
++        assert "privatemode" in cmd and "11000" not in cmd  # jamais Deep Sleep
++        return {"applied": True, "mode": "REAL", "command": cmd,
++                "navixy_command_id": 4242}
++    return _c
++
++
++def _confirm(state):
++    async def _cf(tid, expected):
++        return (expected if state == "ok" else None), pm.SRC_TELEMETRY
++    return _cf
++
++
++def _odo(v):
++    async def _r(tid):
++        return v
++    return _r
++
++
++# --------------------------------------------------------------------------
++# 1. Message métier honnête après envoi RÉEL
++# --------------------------------------------------------------------------
++def test_private_request_message_commande_prive_envoyee():
++    db = _db()
++    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++               send_command=_real_command(), confirm=_confirm("no"),
++               read_odo_km=_odo(56000.0), tenant_id="default"))
++    assert res["ok"] is True
++    assert res["state"] == pm.PENDING_CONFIRMATION      # jamais un faux "actif"
++    assert res["message"] == "Commande Privé envoyée"
++    assert res["command_label"] == "Privé"
++
++
++def test_business_request_message_commande_professionnel_envoyee():
++    db = _db()
++    # part de PRIVATE confirmé pour que BUSINESS ne soit pas idempotent
++    _run(db.private_mode_state.update_one({"vehicle_id": "vA"},
++         {"$set": {"vehicle_id": "vA", "tenant_id": "default", "state": pm.PRIVATE}},
++         upsert=True))
++    res = _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
++               send_command=_real_command(), confirm=_confirm("no"),
++               read_odo_km=_odo(56010.0), tenant_id="default"))
++    assert res["ok"] is True
++    assert res["state"] == pm.PENDING_CONFIRMATION
++    assert res["message"] == "Commande Professionnel envoyée"
++    assert res["command_label"] == "Professionnel"
++
++
++def test_confirmed_immediate_also_carries_message():
++    """Confirmation immédiate -> état cible + message « envoyée » (jamais un jargon)."""
++    db = _db()
++    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++               send_command=_real_command(), confirm=_confirm("ok"),
++               read_odo_km=_odo(56000.0), tenant_id="default"))
++    assert res["ok"] is True and res["state"] == pm.PRIVATE
++    assert res["message"] == "Commande Privé envoyée"
++
++
++# --------------------------------------------------------------------------
++# 2. Aucun faux « actif »
++# --------------------------------------------------------------------------
++def test_pending_never_reports_active_state():
++    db = _db()
++    res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++               send_command=_real_command(), confirm=_confirm("no"),
++               read_odo_km=_odo(56000.0), tenant_id="default"))
++    assert res["state"] not in (pm.PRIVATE, pm.BUSINESS)
++    st = _run(pm.get_mode_state(db, "vA"))
++    assert st["state"] == pm.PENDING_CONFIRMATION
++
++
++# --------------------------------------------------------------------------
++# 3. Récupération rapide (supersede) TOUJOURS possible
++# --------------------------------------------------------------------------
++def test_business_recovery_allowed_during_private_pending():
++    """Professionnel demandé pendant un PRIVATE en attente -> ACCEPTÉ (supersede)."""
++    db = _db()
++    # 1) PRIVATE -> PENDING
++    r1 = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++              send_command=_real_command(), confirm=_confirm("no"),
++              read_odo_km=_odo(56000.0), tenant_id="default"))
++    assert r1["state"] == pm.PENDING_CONFIRMATION
++    # 2) BUSINESS pendant le pending PRIVATE -> doit être accepté, PAS refusé
++    r2 = _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
++              send_command=_real_command(), confirm=_confirm("no"),
++              read_odo_km=_odo(56000.0), tenant_id="default"))
++    assert r2["ok"] is True
++    assert r2.get("reason") != _gate.R_TRANSITION_IN_PROGRESS
++    assert r2["message"] == "Commande Professionnel envoyée"
++
++
++def test_same_target_double_tap_is_idempotent_pending_no_respend():
++    """Double-tap Privé pendant le pending Privé -> pas de nouvelle commande device."""
++    db = _db()
++    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++         send_command=_real_command(), confirm=_confirm("no"),
++         read_odo_km=_odo(56000.0), tenant_id="default"))
++
++    def _forbid():
++        async def _c(tid, cmd):
++            raise AssertionError("aucune commande device ne doit repartir sur double-tap")
++        return _c
++
++    r2 = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++              send_command=_forbid(), confirm=_confirm("no"),
++              read_odo_km=_odo(56000.0), tenant_id="default"))
++    assert r2["ok"] is True
++    assert r2["state"] == pm.PENDING_CONFIRMATION
++    assert r2["message"] == "Commande Privé envoyée"
++
++
++# --------------------------------------------------------------------------
++# 5. Fail-closed préservé
++# --------------------------------------------------------------------------
++def test_fail_closed_device_write_disabled():
++    db = _db()
++    _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "0"
++    try:
++        def _forbid():
++            async def _c(tid, cmd):
++                raise AssertionError("aucune commande avec DEVICE_WRITE=0")
++            return _c
++        res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++                   send_command=_forbid(), confirm=_confirm("ok"),
++                   read_odo_km=_odo(56000.0), tenant_id="default"))
++        assert res["ok"] is False
++        assert res["reason"] == _gate.R_DEVICE_WRITE_DISABLED
++        assert res["can_switch"] is False
++        # aucun état transitoire créé
++        st = _run(pm.get_mode_state(db, "vA"))
++        assert st["state"] != pm.PENDING_CONFIRMATION
++    finally:
++        _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "1"
++
++
++def test_fail_closed_feature_disabled():
++    db = _db()
++    _os.environ["PRIVATE_MODE_ENABLED"] = "0"
++    try:
++        res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++                   send_command=_real_command(), confirm=_confirm("ok"),
++                   read_odo_km=_odo(56000.0), tenant_id="default"))
++        assert res["ok"] is False and res["allowed"] is False
++        assert res["reason"] == _gate.R_FEATURE_DISABLED
++    finally:
++        _os.environ["PRIVATE_MODE_ENABLED"] = "1"
+diff --git a/backend/tests/test_iter35_reconciliation.py b/backend/tests/test_iter35_reconciliation.py
+index 50b98ed..6549452 100644
+--- a/backend/tests/test_iter35_reconciliation.py
++++ b/backend/tests/test_iter35_reconciliation.py
+@@ -7,7 +7,7 @@ import time
+ import pytest
+ import requests
+ 
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+ ADMIN = {"email": "admin@logitrak.ch", "password": "admin123"}
+ DRIVER = {"email": "chauffeur@logitrak.ch", "password": "chauffeur123"}
+ DRIVER_ID = "1580345e-6b8e-45a2-88e7-513a008b6b12"
+diff --git a/backend/tests/test_iteration18_readonly_invite.py b/backend/tests/test_iteration18_readonly_invite.py
+index e19b3f2..6cf6ac8 100644
+--- a/backend/tests/test_iteration18_readonly_invite.py
++++ b/backend/tests/test_iteration18_readonly_invite.py
+@@ -6,7 +6,7 @@ import time
+ import pytest
+ import requests
+ 
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+ API = f"{BASE_URL}/api"
+ 
+ 
+diff --git a/backend/tests/test_iteration5.py b/backend/tests/test_iteration5.py
+index bfd3901..a60328a 100644
+--- a/backend/tests/test_iteration5.py
++++ b/backend/tests/test_iteration5.py
+@@ -4,7 +4,7 @@ import re
+ import pytest
+ import requests
+ 
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+ API = f"{BASE_URL}/api"
+ 
+ 
+diff --git a/backend/tests/test_livre_de_bord.py b/backend/tests/test_livre_de_bord.py
+index e949be4..4321f3d 100644
+--- a/backend/tests/test_livre_de_bord.py
++++ b/backend/tests/test_livre_de_bord.py
+@@ -9,7 +9,7 @@ import os
+ import pytest
+ import requests
+ 
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+ API = f"{BASE_URL}/api"
+ 
+ ADMIN = {"email": "admin@logitrak.ch", "password": "admin123"}
+diff --git a/logitrak-driver-app/src/api/privateMode.ts b/logitrak-driver-app/src/api/privateMode.ts
+index 8a139cf..972d49c 100644
+--- a/logitrak-driver-app/src/api/privateMode.ts
++++ b/logitrak-driver-app/src/api/privateMode.ts
+@@ -17,6 +17,9 @@ export interface PrivateModeStatus {
+   allowed: boolean;
+   reason?: string | null;
+   pending?: boolean;
++  pending_message?: string | null;
++  can_switch?: boolean;
++  can_switch_reason?: string | null;
+   confirmation_source?: string | null;
+   vehicle_id?: string | null;
+   tracker_id?: number | null;
+@@ -37,6 +40,9 @@ export interface PrivateModeResult {
+   allowed?: boolean;
+   state: PrivateModeState;
+   reason?: string | null;
++  message?: string | null;        // « Commande Privé/Professionnel envoyée »
++  command_label?: string | null;  // « Privé » | « Professionnel »
++  superseded?: boolean;
+   idempotent?: boolean;
+   private_distance_km?: number | null;
+   distance_status?: string | null;
+diff --git a/logitrak-driver-app/src/hooks/usePrivateMode.ts b/logitrak-driver-app/src/hooks/usePrivateMode.ts
+index 7bf736a..3a7406d 100644
+--- a/logitrak-driver-app/src/hooks/usePrivateMode.ts
++++ b/logitrak-driver-app/src/hooks/usePrivateMode.ts
+@@ -24,6 +24,7 @@ export function usePrivateMode(pollMs = 15000) {
+   });
+   const [busy, setBusy] = useState(false);
+   const [error, setError] = useState<string | null>(null);
++  const [sentMessage, setSentMessage] = useState<string | null>(null);
+   const [lastDistanceKm, setLastDistanceKm] = useState<number | null>(null);
+   const inFlight = useRef(false);
+   const lastVehicleId = useRef<string | null | undefined>(undefined);
+@@ -55,6 +56,7 @@ export function usePrivateMode(pollMs = 15000) {
+       inFlight.current = true;
+       setBusy(true);
+       setError(null);
++      setSentMessage(null);
+       // état transitoire local (SWITCHING_*) — informatif, PAS un succès
+       setStatus((prev) => ({
+         ...prev,
+@@ -64,10 +66,12 @@ export function usePrivateMode(pollMs = 15000) {
+         const res = await setPrivateMode(mode);
+         if (res.ok && res.state === 'PENDING_CONFIRMATION') {
+           // Commande envoyée, confirmation device en cours (télémétrie async).
+-          // PAS un succès affiché : état "en cours de confirmation", on continue à relire.
++          // PAS un succès "actif" : on affiche « Commande X envoyée » et on continue à relire.
+           setStatus((prev) => ({ ...prev, state: 'PENDING_CONFIRMATION' }));
++          setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
+         } else if (res.ok) {
+           setStatus((prev) => ({ ...prev, state: res.state }));
++          setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
+           if (typeof res.private_distance_km === 'number') {
+             setLastDistanceKm(res.private_distance_km);
+           }
+@@ -110,6 +114,7 @@ export function usePrivateMode(pollMs = 15000) {
+     status,
+     busy,
+     error,
++    sentMessage,
+     lastDistanceKm,
+     pending: status.state === 'PENDING_CONFIRMATION',
+     // Timeout de confirmation : commande envoyée mais état device NON prouvé.
+diff --git a/logitrak-driver-app/src/screens/DriverScreen.tsx b/logitrak-driver-app/src/screens/DriverScreen.tsx
+index 58ceb62..11be54b 100644
+--- a/logitrak-driver-app/src/screens/DriverScreen.tsx
++++ b/logitrak-driver-app/src/screens/DriverScreen.tsx
+@@ -377,10 +377,14 @@ function DriverScreenBle() {
+                 ? 'Mode Privé activé'
+                 : privateMode.status.state === 'BUSINESS'
+                 ? 'Mode Professionnel activé'
++                : privateMode.status.state === 'PENDING_CONFIRMATION'
++                ? (privateMode.sentMessage
++                    || privateMode.status.pending_message
++                    || 'Commande envoyée')
+                 : privateMode.status.state === 'PRIVATE_REQUESTED'
+-                ? 'Activation du Mode Privé…'
++                ? 'Commande Privé envoyée'
+                 : privateMode.status.state === 'BUSINESS_REQUESTED'
+-                ? 'Retour en mode Professionnel…'
++                ? 'Commande Professionnel envoyée'
+                 : 'État indéterminé'}
+             </Text>
+             {privateMode.status.state === 'PRIVATE' ? (
+diff --git a/logitrak-driver-app/src/screens/DriverScreenManual.tsx b/logitrak-driver-app/src/screens/DriverScreenManual.tsx
+index 4674dc1..708e07a 100644
+--- a/logitrak-driver-app/src/screens/DriverScreenManual.tsx
++++ b/logitrak-driver-app/src/screens/DriverScreenManual.tsx
+@@ -132,7 +132,11 @@ export default function DriverScreenManual() {
+   const isBusiness = st === 'BUSINESS';
+   const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
+   const hasVehicle = !!vehicle?.id;
+-  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy && !isPending;
++  // Finition UX : plus de blocage pendant PENDING. Professionnel reste TOUJOURS
++  // actionnable (récupération rapide, supersede géré côté backend). On ne verrouille
++  // qu'un appel réseau en cours (busy) ; chaque carte se désactive si c'est le mode
++  // CONFIRMÉ courant (évite un renvoi inutile de la même commande).
++  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
+ 
+   const fmtKm = (v: number | null | undefined) =>
+     (typeof v === 'number' ? `${v.toFixed(1)} km` : '—');
+@@ -199,7 +203,9 @@ export default function DriverScreenManual() {
+               : isBusiness
+               ? 'Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels.'
+               : isPending
+-              ? 'Changement en cours de confirmation…'
++              ? (privateMode.sentMessage
++                  || privateMode.status.pending_message
++                  || 'Commande envoyée.')
+               : 'Sélectionnez votre mode.'}
+           </Text>
+         ) : null}

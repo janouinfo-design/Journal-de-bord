@@ -11,6 +11,7 @@ import {
   Truck, History, ListChecks, Clock, XCircle,
 } from "lucide-react";
 import { SourceBadge } from "@/components/livre/SourceBadge";
+import { DriverVehicleAccessCard } from "@/components/livre/DriverVehicleAccessCard";
 
 const STATUS_LABEL = {
   open: "Ouverte", automatic: "Automatique", confirmed: "Confirmé",
@@ -223,27 +224,33 @@ export default function DriverSheet({ driverId, open, onOpenChange, onChanged })
                 </div>
               </section>
 
+              {/* B2. Accès aux véhicules */}
+              <section data-testid="driver-sheet-vehicle-access">
+                <p className="text-[10px] uppercase tracking-[0.15em] text-slate-400 font-semibold mb-1">Accès aux véhicules</p>
+                <DriverVehicleAccessCard driverId={driverId} />
+              </section>
+
               {/* C. Méthodes d'identification */}
               <section data-testid="driver-sheet-identification">
                 <p className="text-[10px] uppercase tracking-[0.15em] text-slate-400 font-semibold mb-1">Méthodes d'identification</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div className="rounded-md border border-slate-200 p-3 bg-white">
-                    <p className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 mb-1.5">
+                    <div className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 mb-1.5">
                       <Smartphone className="w-3.5 h-3.5 text-blue-500" /> Application mobile
                       {ident.app.enabled
                         ? <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">Active</Badge>
                         : <Badge variant="outline" className="bg-slate-100 text-slate-500 border-slate-200 text-[10px]">Non configurée</Badge>}
-                    </p>
+                    </div>
                     <p className="text-[11px] text-slate-500">Dernière connexion : <span className="text-slate-700">{fmt(ident.app.last_login_at)}</span></p>
                     <p className="text-[11px] text-slate-500">Dernière confirmation : <span className="text-slate-700">{fmt(ident.app.last_claim_at)}</span></p>
                   </div>
                   <div className="rounded-md border border-slate-200 p-3 bg-white">
-                    <p className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 mb-1.5">
+                    <div className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 mb-1.5">
                       <Bluetooth className="w-3.5 h-3.5 text-cyan-500" /> Bluetooth
                       {ident.ble.tag
                         ? <Badge variant="outline" className="bg-cyan-50 text-cyan-700 border-cyan-200 text-[10px]">Tag associé</Badge>
                         : <Badge variant="outline" className="bg-slate-100 text-slate-500 border-slate-200 text-[10px]">Aucun tag</Badge>}
-                    </p>
+                    </div>
                     <p className="text-[11px] text-slate-500">Tag : <span className="font-mono text-slate-700" data-testid="driver-sheet-ble-tag">{ident.ble.tag || "—"}</span></p>
                     <p className="text-[11px] text-slate-500">Dernière détection : <span className="text-slate-700">{fmt(ident.ble.last_detection_at)}</span></p>
                     {ident.ble.field_validation_note && (

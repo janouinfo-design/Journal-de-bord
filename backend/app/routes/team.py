@@ -632,6 +632,92 @@ class LinkUserIn(BaseModel):
     user_id: str
 
 
+# ---------------------------------------------------------------------------
+# Accès véhicules par chauffeur — ALL / SELECTED / SINGLE (+ véhicule par défaut)
+# ---------------------------------------------------------------------------
+class VehicleAccessIn(BaseModel):
+    mode: str
+    vehicle_ids: list[str] = []
+    default_vehicle_id: Optional[str] = None
+
+
+@router.get("/drivers/{driver_id}/vehicle-access")
+async def get_driver_vehicle_access(driver_id: str,
+                                    current=Depends(require_roles("admin", "manager"))):
+    _tenant_or_400()
+    db = get_db()
+    from app.vehicle_access import get_vehicle_access, active_vehicle_query
+    acc = await get_vehicle_access(db, driver_id)
+    if acc is None:
+        raise HTTPException(404, "Chauffeur introuvable")
+    fleet = await db.vehicles.find(
+        active_vehicle_query(),
+        {"_id": 0, "id": 1, "plate": 1, "label": 1, "model": 1}).sort("plate", 1).to_list(1000)
+    fleet_ids = {v["id"] for v in fleet}
+    default = acc["default_vehicle_id"]
+    if acc["mode"] == "SELECTED" and default not in acc["allowed_vehicle_ids"]:
+        default = None
+    if default and default not in fleet_ids:
+        default = None
+    return {"mode": acc["mode"], "vehicle_ids": acc["allowed_vehicle_ids"],
+            "default_vehicle_id": default, "fleet": fleet}
+
+
+@router.put("/drivers/{driver_id}/vehicle-access")
+async def set_driver_vehicle_access(driver_id: str, payload: VehicleAccessIn,
+                                    current=Depends(require_roles("admin"))):
+    """Source d'autorité des véhicules visibles par le chauffeur. Admin uniquement."""
+    _tenant_or_400()
+    db = get_db()
+    from app.vehicle_access import (VEHICLE_ACCESS_MODES, get_vehicle_access,
+                                    active_vehicle_query)
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "id": 1, "name": 1})
+    if not driver:
+        raise HTTPException(404, "Chauffeur introuvable")
+    mode = (payload.mode or "").upper()
+    if mode not in VEHICLE_ACCESS_MODES:
+        raise HTTPException(400, "mode doit être ALL, SELECTED ou SINGLE")
+    fleet_ids = {v["id"] for v in await db.vehicles.find(
+        active_vehicle_query(), {"_id": 0, "id": 1}).to_list(1000)}
+    ids = list(dict.fromkeys(payload.vehicle_ids or []))
+    default = payload.default_vehicle_id
+
+    if mode == "SELECTED":
+        if not ids:
+            raise HTTPException(400, "SELECTED exige au moins un véhicule")
+        unknown = [i for i in ids if i not in fleet_ids]
+        if unknown:
+            raise HTTPException(400, "Un ou plusieurs véhicules n'existent pas dans votre entreprise")
+        if default is not None and default not in ids:
+            raise HTTPException(400, "Le véhicule par défaut doit appartenir aux véhicules sélectionnés")
+    elif mode == "SINGLE":
+        if len(ids) != 1:
+            raise HTTPException(400, "SINGLE exige exactement un véhicule")
+        if ids[0] not in fleet_ids:
+            raise HTTPException(400, "Véhicule introuvable dans votre entreprise")
+        default = ids[0]
+    else:  # ALL
+        ids = []
+        if default is not None and default not in fleet_ids:
+            raise HTTPException(400, "Le véhicule par défaut doit appartenir à votre entreprise")
+
+    before = await get_vehicle_access(db, driver_id)
+    await db.drivers.update_one({"id": driver_id}, {"$set": {
+        "vehicle_access_mode": mode,
+        "allowed_vehicle_ids": ids,
+        "default_vehicle_id": default}})
+    await log_audit("driver.vehicle_access_updated", current, {
+        "driver_id": driver_id, "driver_name": driver.get("name"),
+        "previous_access_mode": before["mode"],
+        "new_access_mode": mode,
+        "previous_vehicle_ids": before["allowed_vehicle_ids"],
+        "new_vehicle_ids": ids,
+        "previous_default_vehicle": before["default_vehicle_id"],
+        "new_default_vehicle": default})
+    return {"updated": True, "mode": mode, "vehicle_ids": ids,
+            "default_vehicle_id": default}
+
+
 @router.post("/drivers/{driver_id}/link-user")
 async def link_driver_user(driver_id: str, payload: LinkUserIn,
                            current=Depends(require_roles("admin"))):

@@ -208,3 +208,29 @@ async def privacy_enforce_now(user=Depends(require_roles("admin"))):
 async def privacy_kill_switch(user=Depends(require_roles("admin"))):
     db = get_db()
     return await kill_switch(db)
+
+
+
+# ---------- Mode Privé (chauffeur) — kill switch + statut pilote (admin) ----------
+@router.get("/private-mode/status")
+async def private_mode_status(user=Depends(require_roles("admin"))):
+    """Statut non sensible du dispositif pilote Mode Privé (jamais de secret)."""
+    from app import private_mode_gate as gate
+    db = get_db()
+    return {
+        "feature_enabled": gate.feature_enabled(),
+        "kill_switch_active": await gate.kill_switch_active(db),
+    }
+
+
+class KillSwitchIn(BaseModel):
+    active: bool
+
+
+@router.post("/private-mode/kill-switch")
+async def private_mode_kill_switch(payload: KillSwitchIn, user=Depends(require_roles("admin"))):
+    """Active/désactive immédiatement le kill switch Mode Privé (backend autoritaire).
+    Empêche toute NOUVELLE activation ; n'altère pas un véhicule déjà en PRIVATE."""
+    from app import private_mode_gate as gate
+    db = get_db()
+    return await gate.set_kill_switch(db, payload.active, actor=user.get("email", "?"))

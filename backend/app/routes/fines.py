@@ -672,7 +672,7 @@ async def upload_document(
 ):
     """Attach a document (PDF or image) to a fine.
 
-    Stored on disk under `/app/backend/storage/fines/{fine_id}/`. The metadata
+    Stored in Emergent Object Storage under `logitrak-journal/fines/{fine_id}/`. The metadata
     is appended to the `fines.documents` array. The actual file path is never
     exposed — clients fetch via the `download` endpoint.
     """
@@ -696,10 +696,13 @@ async def upload_document(
 
     doc_id = str(uuid.uuid4())
     safe_name = _sanitize_filename(file.filename or "fichier")
-    fine_dir = STORAGE_ROOT / fine_id
-    fine_dir.mkdir(parents=True, exist_ok=True)
-    file_path = fine_dir / f"{doc_id}_{safe_name}"
-    file_path.write_bytes(data)
+    from app.object_storage import put_object, APP_PREFIX
+    try:
+        stored = await put_object(
+            f"{APP_PREFIX}/fines/{fine_id}/{doc_id}_{safe_name}", data,
+            file.content_type or "application/octet-stream")
+    except Exception as e:
+        raise HTTPException(502, "Stockage du fichier indisponible — réessayez.") from e
 
     doc_meta = {
         "id": doc_id,
@@ -707,6 +710,7 @@ async def upload_document(
         "filename": safe_name,
         "content_type": file.content_type,
         "size_bytes": len(data),
+        "storage_path": stored["path"],
         "uploaded_at": now_iso(),
         "uploaded_by": user.get("email"),
     }
@@ -738,6 +742,19 @@ async def download_document(
     if not doc:
         raise HTTPException(404, "Document introuvable")
 
+    # Object storage (canonique) — fallback disque legacy pour les anciens fichiers preview
+    if doc.get("storage_path"):
+        from app.object_storage import get_object
+        from fastapi.responses import Response
+        got = await get_object(doc["storage_path"])
+        if got is None:
+            raise HTTPException(410, "Le fichier n'est plus disponible.")
+        content, ct = got
+        return Response(
+            content=content,
+            media_type=doc.get("content_type") or ct,
+            headers={"Content-Disposition": f'attachment; filename="{doc["filename"]}"'},
+        )
     fine_dir = STORAGE_ROOT / fine_id
     file_path = fine_dir / f"{doc_id}_{doc['filename']}"
     if not file_path.exists():
@@ -766,13 +783,15 @@ async def delete_document(
     if not doc:
         raise HTTPException(404, "Document introuvable")
 
-    # Remove from disk first; if it fails the metadata stays so the user can retry
-    file_path = STORAGE_ROOT / fine_id / f"{doc_id}_{doc['filename']}"
-    try:
-        if file_path.exists():
-            file_path.unlink()
-    except OSError as e:
-        raise HTTPException(500, f"Suppression refusée : {e}") from e
+    # Object storage : pas d'API delete → soft-delete (retrait de la métadonnée,
+    # la meta Mongo est la source de vérité). Fichier legacy disque : unlink.
+    if not doc.get("storage_path"):
+        file_path = STORAGE_ROOT / fine_id / f"{doc_id}_{doc['filename']}"
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError as e:
+            raise HTTPException(500, f"Suppression refusée : {e}") from e
 
     await db.fines.update_one(
         {"id": fine_id},

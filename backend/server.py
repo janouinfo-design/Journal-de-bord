@@ -61,6 +61,19 @@ async def on_startup():
     await db.trips.create_index([("classification", 1), ("start_time", -1)])
     await db.trips.create_index("driver_id")
     await db.trips.create_index("vehicle_id")
+    await db.trips.create_index(
+        [
+            ("tenant_id", 1),
+            ("navixy_tracker_id", 1),
+            ("navixy_track_id", 1),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "navixy_tracker_id": {"$gt": 0},
+            "navixy_track_id": {"$gt": 0},
+        },
+        name="uniq_trip_navixy_tenant_tracker_track",
+    )
     await seed_admin()
     from app.tenancy import ensure_tenancy
     await ensure_tenancy(db)
@@ -84,6 +97,12 @@ async def on_startup():
     await raw.driver_sessions.create_index([("tenant_id", 1), ("driver_id", 1), ("started_at", -1)])
     await raw.ble_detections.create_index([("tenant_id", 1), ("driver_id", 1), ("ts", -1)])
     await raw.drivers.create_index([("tenant_id", 1), ("ble_id_norm", 1)])
+    await raw.reconciliation_alert_candidates.create_index(
+        [("tenant_id", 1), ("dedup_key", 1)], unique=True)
+    await raw.vehicle_documents.create_index([("tenant_id", 1), ("vehicle_id", 1), ("created_at", -1)])
+    await raw.vehicle_documents.create_index([("tenant_id", 1), ("id", 1)], unique=True)
+    await raw.vehicle_inspections.create_index([("tenant_id", 1), ("vehicle_id", 1), ("created_at", -1)])
+    await raw.vehicle_inspections.create_index([("tenant_id", 1), ("id", 1)], unique=True)
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
     await apply_rules_to_all(db)

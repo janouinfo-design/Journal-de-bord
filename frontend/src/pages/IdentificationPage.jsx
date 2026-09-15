@@ -52,7 +52,8 @@ function Confidence({ value }) {
   );
 }
 
-export default function IdentificationPage() {
+export default function IdentificationPage({ view = "full" }) {
+  const sessionsOnly = view === "sessions";
   const [rows, setRows] = useState([]);
   const [kpis, setKpis] = useState(null);
   const [drivers, setDrivers] = useState([]);
@@ -212,7 +213,7 @@ export default function IdentificationPage() {
       <div>
         <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Identification BLE</p>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 flex items-center gap-2.5 mt-1">
-          <Bluetooth className="w-5 h-5 text-[#2196F3]" /> Identification chauffeurs
+          <Bluetooth className="w-5 h-5 text-[#2196F3]" /> {sessionsOnly ? "Sessions conducteur" : "Identification chauffeurs"}
           <span className={`ml-2 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${connected ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-500 border border-slate-200"}`}
                 data-testid="ident-realtime-status">
             <Radio className={`w-3 h-3 ${connected ? "animate-pulse" : ""}`} />
@@ -277,6 +278,7 @@ export default function IdentificationPage() {
       />
 
       {/* KPI cards — identité chauffeur (APP/BLE/MANUEL), cliquables ; période = filtres dates */}
+      {!sessionsOnly && (
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3" data-testid="ident-kpis">
         {[
           { k: "total_sessions",     label: "Sessions",         cls: "text-slate-700",
@@ -313,8 +315,10 @@ export default function IdentificationPage() {
           );
         })}
       </div>
+      )}
 
       {/* Mode de trajet PRO/PRIVÉ — zone dédiée, DISTINCT de l'identité chauffeur */}
+      {!sessionsOnly && (
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 px-1"
            data-testid="ident-trip-mode-strip">
         <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
@@ -324,6 +328,7 @@ export default function IdentificationPage() {
         <span data-testid="ident-forced-perso">Forcés PRIVÉ (app) : <strong className="text-slate-700">{kpis?.trips?.forced_perso ?? 0}</strong></span>
         <span data-testid="ident-detections-count">Détections BLE : <strong className="text-slate-600">{kpis?.detections ?? 0}</strong></span>
       </div>
+      )}
 
       {/* Filters */}
       <Card className="bg-white border-slate-200 shadow-sm rounded-md p-4">

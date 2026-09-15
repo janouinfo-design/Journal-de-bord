@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://driver-fleet-ble.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://private-mode-diag.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,14 +25,24 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://driver-fleet-ble.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://private-mode-diag.preview.emergentagent.com"
       }
     },
     "production": {
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://documents-web.logitrak.ch"
+        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
+      }
+    },
+    "pilot-production": {
+      "distribution": "internal",
+      "channel": "pilot-private-mode",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
       }
     }
   },

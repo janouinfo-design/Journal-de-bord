@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,22 +9,69 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { showConfirm } from '@/utils/alert';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import { useSessionStore } from '@/store/sessionStore';
 import { useQueueStore } from '@/store/queueStore';
 import { useAuthStore } from '@/store/authStore';
+import { useVehiclesStore } from '@/store/vehiclesStore';
+import { useTripsStore } from '@/store/tripsStore';
 import { useCurrentSessionPoll } from '@/hooks/useCurrentSession';
 import { useQueueFlusher } from '@/hooks/useQueueFlusher';
 import { useRealtime } from '@/hooks/useRealtime';
+import { usePrivateMode } from '@/hooks/usePrivateMode';
 import { bleScanner, ScannerState } from '@/ble/scanner';
 import { showLocalNotification } from '@/utils/notifications';
-import { getVehicles, Vehicle } from '@/api/ble';
+import { Vehicle } from '@/api/ble';
+import { deriveRecentVehicles } from '@/utils/recentVehicles';
+import { isManualMode } from '@/config/appMode';
+import DriverScreenManual from '@/screens/DriverScreenManual';
+import type { RootStackParamList } from '@/navigation/RootNavigator';
 
-// Véhicule sélectionnable pour « Je conduis » (vehicle_id réel).
-type SelectableVehicle = { vehicle_id: string; plate: string; model: string | null };
+type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+// Libellé + badge de la source d'identification.
+function sourceBadge(source?: string | null): { label: string; auto: boolean } {
+  switch (source) {
+    case 'BLE':
+      return { label: 'BLE', auto: true };
+    case 'APP+BLE':
+      return { label: 'APP+BLE', auto: true };
+    case 'MANUEL':
+      return { label: 'MANUEL', auto: false };
+    case 'APP':
+    default:
+      return { label: 'APP', auto: false };
+  }
+}
+
+// Une session est considérée "auto-identifiée BLE" si la source réelle inclut BLE.
+function isAutoBle(source?: string | null): boolean {
+  return source === 'BLE' || source === 'APP+BLE';
+}
+
+function formatTime(iso?: string | null): string {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString('fr-CH', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '—';
+  }
+}
 
 export function DriverScreen() {
+  // Mode MANUEL (défaut, sans Bluetooth) : UI épurée dédiée. Le mode BLE historique reste
+  // disponible si EXPO_PUBLIC_VEHICLE_SELECTION_MODE='ble'.
+  if (isManualMode()) {
+    return <DriverScreenManual />;
+  }
+  return <DriverScreenBle />;
+}
+
+function DriverScreenBle() {
+  const nav = useNavigation<Nav>();
   const {
     session,
     refresh,
@@ -33,27 +80,27 @@ export function DriverScreen() {
     stop,
     submitting,
     conflict,
-    bleEnabled,
     blePermissionDenied,
-    setBlePermissionDenied,
   } = useSessionStore();
   const { size: queueSize, triggerFlush, flushing } = useQueueStore();
   const { user } = useAuthStore();
+  const vehiclesStore = useVehiclesStore();
+  const tripsStore = useTripsStore();
+
   const [scannerState, setScannerState] = useState<ScannerState>('idle');
-  const [lastDetection, setLastDetection] = useState<{ id: string; rssi: number } | null>(null);
   const [modeSubmitting, setModeSubmitting] = useState<null | 'professional' | 'personal'>(null);
-  const [vehicles, setVehicles] = useState<SelectableVehicle[]>([]);
-  const [selectedVehicle, setSelectedVehicle] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Vehicle | null>(null);
 
   useCurrentSessionPoll();
   useQueueFlusher();
 
+  // Phase 2 — Mode Privé/Professionnel (masquage GPS device + km privés). Backend autoritaire.
+  const privateMode = usePrivateMode();
+
+  // Rafraîchit automatiquement quand une session BLE apparaît/évolue côté serveur.
   useRealtime((event) => {
     if (event.type === 'ble.conflict') {
-      showLocalNotification(
-        'Conflit détecté',
-        'Un gestionnaire doit confirmer le conducteur.',
-      );
+      showLocalNotification('Conflit détecté', 'Un gestionnaire doit confirmer le conducteur.');
       refresh();
     } else if (event.type === 'kill_switch') {
       showConfirm('Session terminée', event.reason || 'Votre session a été clôturée.');
@@ -63,51 +110,31 @@ export function DriverScreen() {
     }
   }, 'driver');
 
-  // Charge la liste des véhicules de la flotte (pour « Je conduis »), avec vehicle_id réel.
-  const loadVehicles = useCallback(async () => {
-    try {
-      const list: Vehicle[] = await getVehicles();
-      setVehicles(
-        list
-          .filter((v) => v.id)
-          .map((v) => ({ vehicle_id: v.id, plate: v.plate ?? '—', model: v.model })),
-      );
-    } catch {
-      // Pas de blocage : la liste peut être vide (aucune donnée réelle).
-      setVehicles([]);
-    }
+  // Charge flotte (pour recherche/récents) + trajets (pour récents) une fois.
+  useEffect(() => {
+    vehiclesStore.load();
+    tripsStore.load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Scanner BLE (natif). Sur web : reste inactif (indisponible), sans bloquer l'UI.
   useEffect(() => {
-    loadVehicles();
-  }, [loadVehicles]);
-
-  // Start BLE scanner on mount (if enabled).
-  useEffect(() => {
-    if (!bleEnabled) return;
     bleScanner.setCallbacks({
       onStateChange: (s) => setScannerState(s),
-      onDetection: (id, rssi) => setLastDetection({ id, rssi }),
-      onError: (msg) => {
-        if (msg.toLowerCase().includes('permission')) {
-          setBlePermissionDenied(true);
-        }
-      },
+      onError: () => {},
     });
     bleScanner.start();
     return () => {
       bleScanner.stop();
     };
-  }, [bleEnabled, setBlePermissionDenied]);
+  }, []);
 
   const onSetMode = useCallback(
     async (mode: 'professional' | 'personal') => {
       setModeSubmitting(mode);
       const ok = await setMode(mode);
       setModeSubmitting(null);
-      if (!ok) {
-        showConfirm('Erreur', "Impossible d'enregistrer ce mode. Réessayez.");
-      }
+      if (!ok) showConfirm('Erreur', "Impossible d'enregistrer ce mode. Réessayez.");
     },
     [setMode],
   );
@@ -115,71 +142,72 @@ export function DriverScreen() {
   const onRefresh = useCallback(async () => {
     await refresh();
     await triggerFlush();
-    await loadVehicles();
-  }, [refresh, triggerFlush, loadVehicles]);
+    await tripsStore.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh, triggerFlush]);
 
-  // « Je conduis »
   const onClaim = useCallback(async () => {
-    if (!selectedVehicle) {
+    if (!selected) {
       showConfirm('Véhicule requis', 'Sélectionnez d’abord un véhicule.');
       return;
     }
-    const res = await claim(selectedVehicle);
+    const res = await claim(selected.id);
     if ('error' in res) {
       showConfirm('Erreur', res.error);
       return;
     }
     if (res.status === 'conflict') {
-      // La bannière conflit s'affiche déjà ; on informe.
-      showConfirm(
-        'Conflit signalé',
-        'Un gestionnaire doit confirmer le conducteur de ce véhicule.',
-      );
+      showConfirm('Conflit signalé', 'Un gestionnaire doit confirmer le conducteur de ce véhicule.');
+    } else {
+      setSelected(null);
     }
-  }, [selectedVehicle, claim]);
+  }, [selected, claim]);
 
-  // « Je m'arrête » — confirmation + idempotence + anti-double-clic (submitting).
   const onStop = useCallback(() => {
-    showConfirm(
-      'Terminer la conduite',
-      'Confirmez-vous vouloir clôturer votre session en cours ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Je m’arrête',
-          style: 'destructive',
-          onPress: async () => {
-            const res = await stop();
-            if ('error' in res) {
-              showConfirm('Erreur', res.error);
-              return;
-            }
-            if (res.stopped) {
-              showLocalNotification(
-                'Conduite terminée',
-                `Session clôturée${res.vehicle_plate ? ` · ${res.vehicle_plate}` : ''}.`,
-              );
-            } else {
-              // Idempotence : session déjà fermée côté serveur (fin auto, timeout…).
-              showConfirm('Information', res.message || 'Aucune session active.');
-            }
-          },
+    showConfirm('Terminer la conduite', 'Confirmez-vous vouloir clôturer votre session en cours ?', [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Je m’arrête',
+        style: 'destructive',
+        onPress: async () => {
+          const res = await stop();
+          if ('error' in res) {
+            showConfirm('Erreur', res.error);
+          } else if (res.stopped) {
+            showLocalNotification(
+              'Conduite terminée',
+              `Session clôturée${res.vehicle_plate ? ` · ${res.vehicle_plate}` : ''}.`,
+            );
+          } else {
+            showConfirm('Information', res.message || 'Aucune session active.');
+          }
         },
-      ],
-    );
+      },
+    ]);
   }, [stop]);
 
+  const openPicker = useCallback(() => {
+    nav.navigate('VehiclePicker', { onPick: (v: Vehicle) => setSelected(v) });
+  }, [nav]);
+
   const activeMode = session?.mobile_override;
+  // Le backend (get_current_session) ne renvoie QUE des sessions ouvertes (OPEN_STATUSES) ;
+  // il est la source de vérité. On affiche donc dès qu'une session non fermée existe,
+  // qu'elle soit "open" (BLE en cours), "automatic", "confirmed", "manual" ou "pending".
   const hasSession = Boolean(
-    session && session.id && session.status !== 'closed' && session.active_driver !== false,
+    session && session.id && session.status !== 'closed',
   );
   const plate = session?.vehicle?.plate ?? null;
   const model = session?.vehicle?.model ?? null;
-  const sourceLabel = session?.identification_source || 'APP';
-  const confidenceLabel =
-    session?.confidence == null
-      ? 'Confirmé'
-      : `${Math.round(session.confidence)} %`;
+  const badge = sourceBadge(session?.identification_source);
+  const auto = isAutoBle(session?.identification_source);
+
+  // Véhicules récents dérivés des trajets réels du chauffeur.
+  const recents = useMemo(
+    () => deriveRecentVehicles(tripsStore.trips, vehiclesStore.vehicles, 5),
+    [tripsStore.trips, vehiclesStore.vehicles],
+  );
+  const fleetCount = vehiclesStore.vehicles.length;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -198,86 +226,102 @@ export function DriverScreen() {
           </View>
         </View>
 
-        {/* Conflict banner (ne PAS masquer) */}
+        {/* Bannière conflit (jamais masquée) */}
         {conflict ? (
           <View style={styles.conflictBanner} testID="driver-conflict-banner">
-            <Text style={styles.conflictText}>Conflit signalé</Text>
+            <Text style={styles.conflictText}>Identification à vérifier</Text>
             <Text style={styles.conflictSub}>
-              Un gestionnaire doit confirmer le conducteur de ce véhicule.
+              Plusieurs chauffeurs ont été détectés pour ce véhicule. Un gestionnaire doit confirmer
+              le conducteur.
             </Text>
           </View>
         ) : null}
 
-        {/* Vehicle / session card */}
-        <View style={[styles.vehicleCard, hasSession ? styles.vehicleCardActive : null]}>
-          {hasSession ? (
-            <>
-              <View style={styles.pulseRow}>
-                <View style={styles.pulse} />
-                <Text style={styles.pulseLabel}>SESSION ACTIVE · {sourceLabel}</Text>
-              </View>
-              <Text style={styles.plate} testID="driver-vehicle-plate">
-                {plate ?? '—'}
+        {hasSession ? (
+          /* ============ MODE A — VÉHICULE IDENTIFIÉ ============ */
+          <View style={[styles.vehicleCard, styles.vehicleCardActive]} testID="driver-active-card">
+            <View style={styles.pulseRow}>
+              <View style={styles.pulse} />
+              <Text style={styles.pulseLabel}>
+                {auto ? '✓ VÉHICULE IDENTIFIÉ AUTOMATIQUEMENT' : 'SESSION ACTIVE'}
               </Text>
-              <Text style={styles.model}>{model ?? '—'}</Text>
-              <View style={styles.metricsRow}>
-                <Metric
-                  label="Début"
-                  value={formatTime(session?.started_at)}
-                />
-                <Metric label="Confiance" value={confidenceLabel} />
-                <Metric label="Détections" value={String(session?.detection_count ?? 0)} />
-              </View>
-            </>
-          ) : (
-            <>
-              <Text style={styles.noVehicleTitle}>Aucune session active</Text>
-              <Text style={styles.noVehicleBody}>
-                Sélectionnez votre véhicule puis appuyez sur « Je conduis ». Le scan Bluetooth
-                (build natif) peut aussi vous identifier automatiquement.
-              </Text>
-              {lastDetection ? (
-                <Text style={styles.detectionHint}>
-                  Dernier signal : {lastDetection.id} · {lastDetection.rssi} dBm
-                </Text>
-              ) : null}
-            </>
-          )}
-        </View>
+            </View>
+            <Text style={styles.plate} testID="driver-vehicle-plate">
+              {plate ?? '—'}
+            </Text>
+            <Text style={styles.model}>{model ?? '—'}</Text>
 
-        {/* Vehicle selector + « Je conduis » (visible sans session active) */}
-        {!hasSession ? (
-          <View style={styles.claimBlock}>
-            <Text style={styles.sectionLabel}>Choisir un véhicule</Text>
-            {vehicles.length === 0 ? (
-              <Text style={styles.emptyVehicles} testID="driver-no-vehicles">
-                Aucun véhicule disponible pour votre flotte (ou données indisponibles).
+            <View style={styles.sessionMetaRow}>
+              <View style={[styles.badge, auto ? styles.badgeAuto : styles.badgeManual]}>
+                <Text style={styles.badgeText}>{badge.label}</Text>
+              </View>
+              <Text style={styles.sessionSince}>Session depuis {formatTime(session?.started_at)}</Text>
+            </View>
+
+            {auto ? (
+              <Text style={styles.autoHint} testID="driver-auto-hint">
+                Identifié automatiquement par votre tag BLE
               </Text>
             ) : (
-              <View style={styles.vehicleList}>
-                {vehicles.map((v) => (
+              <Text style={styles.autoHint}>Identification manuelle</Text>
+            )}
+          </View>
+        ) : (
+          /* ============ MODE B — AUCUN VÉHICULE IDENTIFIÉ ============ */
+          <View style={styles.vehicleCard}>
+            <Text style={styles.noVehicleTitle}>Aucune session active</Text>
+            <Text style={styles.noVehicleBody}>
+              Nous n'avons pas identifié automatiquement votre véhicule.
+            </Text>
+
+            <TouchableOpacity style={styles.searchBtn} onPress={openPicker} testID="driver-open-search">
+              <Text style={styles.searchBtnText}>🔎  Rechercher un véhicule</Text>
+            </TouchableOpacity>
+
+            {/* Sélection courante */}
+            {selected ? (
+              <View style={styles.selectedRow} testID="driver-selected-vehicle">
+                <Text style={styles.selectedCheck}>✓</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.selectedPlate}>{selected.plate}</Text>
+                  {selected.model ? <Text style={styles.selectedModel}>{selected.model}</Text> : null}
+                </View>
+                <TouchableOpacity onPress={() => setSelected(null)} testID="driver-clear-selection">
+                  <Text style={styles.clearSel}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ) : recents.length > 0 ? (
+              <>
+                <Text style={styles.sectionLabel}>Véhicules récents</Text>
+                {recents.map((v) => (
                   <TouchableOpacity
-                    key={v.vehicle_id}
-                    style={[
-                      styles.vehicleChip,
-                      selectedVehicle === v.vehicle_id ? styles.vehicleChipActive : null,
-                    ]}
-                    onPress={() => setSelectedVehicle(v.vehicle_id)}
-                    testID={`driver-vehicle-option-${v.plate}`}
+                    key={v.id}
+                    style={styles.recentRow}
+                    onPress={() => setSelected(v)}
+                    testID={`driver-recent-${v.plate}`}
                   >
-                    <Text style={styles.vehicleChipPlate}>{v.plate}</Text>
-                    {v.model ? <Text style={styles.vehicleChipModel}>{v.model}</Text> : null}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.recentPlate}>{v.plate}</Text>
+                      {v.model ? <Text style={styles.recentModel}>{v.model}</Text> : null}
+                    </View>
+                    <Text style={styles.chevron}>›</Text>
                   </TouchableOpacity>
                 ))}
-              </View>
-            )}
+              </>
+            ) : null}
+
+            {/* Voir tous les véhicules */}
+            <TouchableOpacity style={styles.seeAll} onPress={openPicker} testID="driver-see-all">
+              <Text style={styles.seeAllText}>
+                Voir tous les véhicules{fleetCount ? ` (${fleetCount})` : ''}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Je conduis — actif seulement si un véhicule est sélectionné */}
             <TouchableOpacity
               onPress={onClaim}
-              disabled={submitting || !selectedVehicle}
-              style={[
-                styles.claimBtn,
-                (submitting || !selectedVehicle) && { opacity: 0.5 },
-              ]}
+              disabled={submitting || !selected}
+              style={[styles.claimBtn, (submitting || !selected) && { opacity: 0.5 }]}
               testID="driver-claim-button"
             >
               {submitting ? (
@@ -287,26 +331,20 @@ export function DriverScreen() {
               )}
             </TouchableOpacity>
           </View>
-        ) : null}
+        )}
 
-        {/* Override banner */}
+        {/* Override PRO/PRIVÉ banner */}
         {activeMode ? (
           <View
-            style={[
-              styles.banner,
-              activeMode === 'professional' ? styles.bannerPro : styles.bannerPerso,
-            ]}
+            style={[styles.banner, activeMode === 'professional' ? styles.bannerPro : styles.bannerPerso]}
           >
             <Text style={styles.bannerText}>
               Mode {activeMode === 'professional' ? 'PROFESSIONNEL' : 'PRIVÉ'} actif
             </Text>
-            <Text style={styles.bannerSub}>
-              Tous les trajets en cours seront classés selon ce mode.
-            </Text>
           </View>
         ) : null}
 
-        {/* Mode buttons */}
+        {/* PRO / PRIVÉ (indépendant de l'identité chauffeur) */}
         <View style={styles.modesRow}>
           <ModeButton
             label="PRO"
@@ -330,7 +368,85 @@ export function DriverScreen() {
           />
         </View>
 
-        {/* « Je m'arrête » — visible uniquement si session active */}
+        {/* Phase 2 — Confidentialité : mode Privé (masque la position) / Professionnel */}
+        {privateMode.status.allowed ? (
+          <View style={styles.privacyCard} testID="private-mode-section">
+            <Text style={styles.privacyTitle}>Confidentialité</Text>
+            <Text style={styles.privacyState} testID="private-mode-state">
+              {privateMode.status.state === 'PRIVATE'
+                ? 'Mode Privé activé'
+                : privateMode.status.state === 'BUSINESS'
+                ? 'Mode Professionnel activé'
+                : privateMode.status.state === 'PENDING_CONFIRMATION'
+                ? (privateMode.sentMessage
+                    || privateMode.status.pending_message
+                    || 'Commande envoyée')
+                : privateMode.status.state === 'PRIVATE_REQUESTED'
+                ? 'Commande Privé envoyée'
+                : privateMode.status.state === 'BUSINESS_REQUESTED'
+                ? 'Commande Professionnel envoyée'
+                : 'État indéterminé'}
+            </Text>
+            {privateMode.status.state === 'PRIVATE' ? (
+              <Text style={styles.privacyHint}>
+                Votre position n’est pas affichée.
+                {privateMode.privateOdometerSupported
+                  ? ' Les kilomètres parcourus restent comptabilisés.'
+                  : ''}
+              </Text>
+            ) : (
+              <Text style={styles.privacyHint}>
+                Position utilisée pour le suivi du véhicule.
+              </Text>
+            )}
+
+            <View style={styles.modesRow}>
+              <ModeButton
+                label="Professionnel"
+                sub="Position visible"
+                color={colors.primary}
+                active={privateMode.status.state === 'BUSINESS'}
+                disabled={privateMode.busy || privateMode.status.state === 'BUSINESS'}
+                loading={privateMode.status.state === 'BUSINESS_REQUESTED'}
+                onPress={() => privateMode.requestMode('BUSINESS')}
+                testID="private-mode-business"
+              />
+              <ModeButton
+                label="Privé"
+                sub="Position masquée"
+                color={colors.perso}
+                active={privateMode.status.state === 'PRIVATE'}
+                disabled={privateMode.busy || privateMode.status.state === 'PRIVATE'}
+                loading={privateMode.status.state === 'PRIVATE_REQUESTED'}
+                onPress={() => privateMode.requestMode('PRIVATE')}
+                testID="private-mode-private"
+              />
+            </View>
+
+            {privateMode.error ? (
+              <Text style={styles.privacyError} testID="private-mode-error">
+                {privateMode.error}
+              </Text>
+            ) : null}
+          </View>
+        ) : privateMode.status.reason &&
+          privateMode.status.reason !== 'PRIVATE_MODE_NO_VEHICLE' &&
+          privateMode.status.reason !== 'PRIVATE_MODE_FEATURE_DISABLED' ? (
+          /* Non autorisé pour une raison "utile" à afficher (véhicule non compatible,
+             indisponibilité temporaire). Message simple, sans jargon technique.
+             Si feature globalement OFF ou pas de véhicule -> on n'affiche RIEN (discret). */
+          <View style={styles.privacyCard} testID="private-mode-unavailable">
+            <Text style={styles.privacyTitle}>Confidentialité</Text>
+            <Text style={styles.privacyHint}>
+              {privateMode.status.reason === 'PRIVATE_MODE_NOT_SUPPORTED'
+                ? 'Mode Privé indisponible pour ce véhicule.'
+                : 'Mode Privé temporairement indisponible.'}
+            </Text>
+          </View>
+        ) : null}
+
+
+        {/* Je m'arrête — visible uniquement si session active */}
         {hasSession ? (
           <TouchableOpacity
             onPress={onStop}
@@ -346,7 +462,7 @@ export function DriverScreen() {
           </TouchableOpacity>
         ) : null}
 
-        {/* BLE status footer */}
+        {/* Statut discret scanner / file offline */}
         <View style={styles.footerCard}>
           <Text style={styles.footerLine}>
             <Text style={styles.footerKey}>Scanner BLE : </Text>
@@ -360,32 +476,12 @@ export function DriverScreen() {
           </Text>
           {blePermissionDenied ? (
             <Text style={[styles.footerLine, { color: colors.warning }]}>
-              ⚠ Bluetooth/Permission refusée. Activez le Bluetooth et accordez l'accès dans les
-              paramètres pour la détection automatique.
+              ⚠ Bluetooth/Permission refusée. Activez le Bluetooth pour la détection automatique.
             </Text>
           ) : null}
         </View>
       </ScrollView>
     </SafeAreaView>
-  );
-}
-
-function formatTime(iso?: string): string {
-  if (!iso) return '—';
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString('fr-CH', { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '—';
-  }
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.metric}>
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
-    </View>
   );
 }
 
@@ -432,7 +528,7 @@ function scannerStateLabel(s: ScannerState): string {
     case 'idle':
       return 'inactif';
     case 'requesting-permissions':
-      return 'demande des permissions';
+      return 'permissions…';
     case 'starting':
       return 'démarrage…';
     case 'scanning':
@@ -440,13 +536,12 @@ function scannerStateLabel(s: ScannerState): string {
     case 'paused':
       return 'en pause';
     case 'error':
-      return 'erreur';
+      return 'indisponible';
   }
 }
-
 function scannerStateColor(s: ScannerState): string {
   if (s === 'scanning') return colors.success;
-  if (s === 'error') return colors.danger;
+  if (s === 'error') return colors.textMuted;
   if (s === 'paused' || s === 'idle') return colors.textMuted;
   return colors.warning;
 }
@@ -454,12 +549,7 @@ function scannerStateColor(s: ScannerState): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, paddingTop: spacing.sm },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   helloLabel: { color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase' },
   helloName: { color: colors.text, fontSize: font.size.lg, fontWeight: '600' },
 
@@ -484,47 +574,66 @@ const styles = StyleSheet.create({
   },
   vehicleCardActive: { borderColor: colors.primary },
   pulseRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
-  pulse: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.success,
-    marginRight: spacing.sm,
-  },
-  pulseLabel: { color: colors.success, fontSize: font.size.xs, letterSpacing: 2, fontWeight: '600' },
+  pulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.success, marginRight: spacing.sm },
+  pulseLabel: { color: colors.success, fontSize: font.size.xs, letterSpacing: 1, fontWeight: '700' },
   plate: { color: colors.text, fontSize: font.size.hero, fontWeight: '700', letterSpacing: 2 },
   model: { color: colors.textMuted, fontSize: font.size.md, marginBottom: spacing.md },
-  metricsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  metric: { flex: 1, alignItems: 'flex-start' },
-  metricValue: { color: colors.text, fontSize: font.size.lg, fontWeight: '600' },
-  metricLabel: { color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase' },
+  sessionMetaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  badge: { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
+  badgeAuto: { backgroundColor: 'rgba(34,197,94,0.18)' },
+  badgeManual: { backgroundColor: 'rgba(148,163,184,0.18)' },
+  badgeText: { color: colors.text, fontSize: font.size.xs, fontWeight: '700' },
+  sessionSince: { color: colors.textMuted, fontSize: font.size.sm },
+  autoHint: { color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.sm },
 
   noVehicleTitle: { color: colors.text, fontSize: font.size.lg, fontWeight: '600' },
-  noVehicleBody: { color: colors.textMuted, fontSize: font.size.sm, marginTop: spacing.sm, lineHeight: 20 },
-  detectionHint: { color: colors.primary, fontSize: font.size.xs, marginTop: spacing.md },
-
-  claimBlock: { marginBottom: spacing.md },
+  noVehicleBody: { color: colors.textMuted, fontSize: font.size.sm, marginTop: spacing.xs, lineHeight: 20 },
+  searchBtn: {
+    marginTop: spacing.md,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  searchBtnText: { color: colors.primary, fontSize: font.size.md, fontWeight: '600' },
   sectionLabel: {
     color: colors.textMuted,
-    fontSize: font.size.sm,
+    fontSize: font.size.xs,
     textTransform: 'uppercase',
     letterSpacing: 1,
+    marginTop: spacing.md,
     marginBottom: spacing.sm,
   },
-  emptyVehicles: { color: colors.textMuted, fontSize: font.size.sm, marginBottom: spacing.md },
-  vehicleList: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
-  vehicleChip: {
-    backgroundColor: colors.bgCard,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
+  recentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  vehicleChipActive: { borderColor: colors.primary, backgroundColor: 'rgba(59,130,246,0.12)' },
-  vehicleChipPlate: { color: colors.text, fontSize: font.size.md, fontWeight: '600' },
-  vehicleChipModel: { color: colors.textMuted, fontSize: font.size.xs },
+  recentPlate: { color: colors.text, fontSize: font.size.md, fontWeight: '600' },
+  recentModel: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
+  chevron: { color: colors.textMuted, fontSize: font.size.lg },
+  selectedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(59,130,246,0.12)',
+  },
+  selectedCheck: { color: colors.primary, fontSize: font.size.lg, fontWeight: '700', marginRight: spacing.sm },
+  selectedPlate: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+  selectedModel: { color: colors.textMuted, fontSize: font.size.xs },
+  clearSel: { color: colors.textMuted, fontSize: font.size.lg, paddingHorizontal: spacing.sm },
+  seeAll: { marginTop: spacing.md, alignItems: 'center', paddingVertical: spacing.sm },
+  seeAllText: { color: colors.primary, fontSize: font.size.sm, fontWeight: '500' },
   claimBtn: {
+    marginTop: spacing.md,
     backgroundColor: colors.success,
     paddingVertical: spacing.lg,
     borderRadius: radius.lg,
@@ -536,7 +645,17 @@ const styles = StyleSheet.create({
   bannerPro: { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderColor: colors.primary, borderWidth: 1 },
   bannerPerso: { backgroundColor: 'rgba(71, 85, 105, 0.15)', borderColor: colors.perso, borderWidth: 1 },
   bannerText: { color: colors.text, fontWeight: '600', fontSize: font.size.md },
-  bannerSub: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 2 },
+
+  privacyCard: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md,
+    borderWidth: 1, borderColor: 'rgba(148,163,184,0.25)',
+  },
+  privacyTitle: { color: colors.text, fontWeight: '700', fontSize: font.size.md, marginBottom: spacing.xs },
+  privacyState: { color: colors.text, fontSize: font.size.md, marginBottom: spacing.xs },
+  privacyHint: { color: '#94a3b8', fontSize: font.size.sm, marginBottom: spacing.sm },
+  privacyError: { color: '#ef4444', fontSize: font.size.sm, marginTop: spacing.xs },
+
 
   modesRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   modeBtn: {
@@ -545,7 +664,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 130,
+    minHeight: 120,
   },
   modeBtnActive: { borderWidth: 3, borderColor: colors.text },
   modeLabel: { color: colors.text, fontSize: font.size.hero, fontWeight: '700', letterSpacing: 2 },

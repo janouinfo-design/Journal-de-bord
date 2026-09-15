@@ -1,0 +1,346 @@
+{
+  "project": "journal",
+  "detected_from": "env",
+  "disclaimer": "CHECK 5 = hygiène multi-tenant, PAS une preuve d'absence de fuite.",
+  "collections": {
+    "app_state": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "assignments": {
+      "total": 6,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 6,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "audit_log": {
+      "total": 14198,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 13499,
+      "tenant_absent": 699,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "A_VERIFIER"
+    },
+    "ble_aliases": {
+      "total": 1,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 1,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "ble_detections": {
+      "total": 293,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 293,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "ble_tags": {
+      "total": 35,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 35,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "driver_sessions": {
+      "total": 463,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 463,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "drivers": {
+      "total": 179,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 179,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fines": {
+      "total": 31,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 31,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "fuel_anomalies": {
+      "total": 8,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 8,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fuel_card_assignments": {
+      "total": 1,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 1,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fuel_cards": {
+      "total": 1,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 1,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fuel_demo_state": {
+      "total": 0,
+      "class": "GLOBAL?",
+      "tenant_field": null,
+      "verdict": "NON_APPLICABLE",
+      "reason": "aucune clé tenant détectée (échantillon)"
+    },
+    "fuel_exchange_rates": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "fuel_import_jobs": {
+      "total": 1,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 1,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "fuel_import_mappings": {
+      "total": 1,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 1,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "fuel_import_rows": {
+      "total": 7,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 7,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fuel_statement_lines": {
+      "total": 24,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 24,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fuel_statements": {
+      "total": 2,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 2,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "fuel_transaction_matches": {
+      "total": 40,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 40,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "fuel_transactions": {
+      "total": 46,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 46,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "geofences": {
+      "total": 35,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 35,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "impersonation_tokens": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "invitations": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "login_attempts": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "notification_preferences": {
+      "total": 2,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 2,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "notifications_log": {
+      "total": 680,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 680,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": true,
+      "verdict": "OK"
+    },
+    "push_tokens": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "reconciliation_alert_candidates": {
+      "total": 0,
+      "class": "GLOBAL?",
+      "tenant_field": null,
+      "verdict": "NON_APPLICABLE",
+      "reason": "aucune clé tenant détectée (échantillon)"
+    },
+    "schedules": {
+      "total": 2,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 2,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "settings": {
+      "total": 3,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 3,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "tenants": {
+      "class": "GLOBAL",
+      "verdict": "NON_APPLICABLE",
+      "reason": "collection globale/référence légitime (non tenant-scopée)"
+    },
+    "tracker_privacy_state": {
+      "total": 10,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 10,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "trip_tracks": {
+      "total": 316,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 316,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "trips": {
+      "total": 5440,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 5440,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "user_notifications": {
+      "total": 11,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 11,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "users": {
+      "total": 70,
+      "class": "USER",
+      "tenant_field": "tenant_id",
+      "tenant_present": 69,
+      "tenant_absent": 1,
+      "of_which_superadmin_legit": 1,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    },
+    "vehicles": {
+      "total": 18,
+      "class": "TENANT_SCOPED",
+      "tenant_field": "tenant_id",
+      "tenant_present": 18,
+      "tenant_absent": 0,
+      "of_which_superadmin_legit": null,
+      "has_tenant_index": false,
+      "verdict": "OK"
+    }
+  }
+}
