@@ -302,6 +302,130 @@ async def close_from_candidate(db, *, tenant_id: str, vehicle_id: str,
         confirmation_source=confirmation_source, degraded=True)
 
 
+# Une confirmation BUSINESS tardive peut arriver APRÈS qu'une session ait été
+# clôturée depuis son candidat END en DEGRADED. Dans ce cas, on améliore
+# UNIQUEMENT la qualité/provenance : les bornes km restent strictement immuables.
+LATE_CONFIRM_MATCH_MAX_S = 5.0
+
+_AUTHORITATIVE_LATE_CONFIRM_SOURCES = {
+    "TELEMETRY_CONFIRMED",
+    "DEVICE_RESPONSE",
+    "DEVICE_STATE_READ",
+}
+
+
+async def promote_degraded_after_confirmation(
+    db,
+    *,
+    tenant_id: str,
+    vehicle_id: str,
+    tracker_id: Optional[int],
+    business_command_sent_at: Optional[str],
+    confirmation_source: Optional[str],
+) -> Optional[str]:
+    """Promote une session CLOSED DEGRADED -> OK après confirmation BUSINESS tardive.
+
+    Garde-fous :
+    - uniquement une vraie source de confirmation autoritative ;
+    - même tenant / véhicule / tracker ;
+    - même cycle BUSINESS (horodatages à <= 5 s) ;
+    - END final doit être exactement le candidat END du OFF ;
+    - private_km doit déjà être calculé et valide.
+
+    Ne modifie JAMAIS :
+      odometer_start_km
+      odometer_end_km
+      odometer_end_candidate_km
+      private_km
+      private_started_at
+      private_ended_at
+      business_command_sent_at
+    """
+    if not enabled():
+        return None
+
+    if confirmation_source not in _AUTHORITATIVE_LATE_CONFIRM_SOURCES:
+        return None
+
+    target_ts = _parse_ts(business_command_sent_at)
+    if target_ts is None:
+        return None
+
+    tk = int(tracker_id) if tracker_id is not None else None
+    coll = db[COLLECTION]
+
+    cursor = coll.find(
+        {
+            "tenant_id": tenant_id,
+            "vehicle_id": vehicle_id,
+            "tracker_id": tk,
+            "state": S_CLOSED,
+            "quality": Q_DEGRADED,
+        },
+        {"_id": 0},
+    )
+
+    best = None
+    best_delta = None
+
+    async for sess in cursor:
+        session_ts = _parse_ts(sess.get("business_command_sent_at"))
+        if session_ts is None:
+            continue
+
+        delta = abs((session_ts - target_ts).total_seconds())
+
+        if best_delta is None or delta < best_delta:
+            best = sess
+            best_delta = delta
+
+    if best is None or best_delta is None:
+        return None
+
+    if best_delta > LATE_CONFIRM_MATCH_MAX_S:
+        return None
+
+    candidate = best.get("odometer_end_candidate_km")
+    final_end = best.get("odometer_end_km")
+
+    if candidate is None or final_end is None:
+        return None
+
+    try:
+        if abs(float(candidate) - float(final_end)) > 0.000001:
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    if best.get("private_km") is None:
+        return None
+
+    if best.get("reason") is not None:
+        return None
+
+    # IMPORTANT : uniquement métadonnées de qualité.
+    # Les bornes kilométriques sont volontairement absentes du $set.
+    await coll.update_one(
+        {
+            "id": best["id"],
+            "state": S_CLOSED,
+            "quality": Q_DEGRADED,
+        },
+        {
+            "$set": {
+                "quality": Q_OK,
+                "quality_previous": Q_DEGRADED,
+                "quality_promotion_reason": "LATE_BUSINESS_CONFIRMATION",
+                "quality_promoted_at": _now(),
+                "confirmation_source": confirmation_source,
+                "updated_at": _now(),
+            }
+        },
+    )
+
+    return best["id"]
+
+
 # ---------------------------------------------------------------------------
 # Agrégation par période AVEC CUTOVER (intervalles disjoints, pas de double comptage).
 # ---------------------------------------------------------------------------

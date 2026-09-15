@@ -1037,11 +1037,26 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         if requested == BUSINESS:
             try:
                 from app import private_mileage as _pm
+
+                # Cas normal : session encore OPEN -> fermeture directement OK.
                 await _pm.close_session(
                     db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
                     end_source="AVL16", confirmation_source=source, degraded=False)
+
+                # Cas récupération tardive : la session a déjà pu être fermée
+                # DEGRADED depuis le candidat END. La confirmation BUSINESS réelle
+                # améliore alors uniquement la QUALITÉ, jamais les bornes km.
+                await _pm.promote_degraded_after_confirmation(
+                    db,
+                    tenant_id=tid,
+                    vehicle_id=vehicle_id,
+                    tracker_id=tracker_id,
+                    business_command_sent_at=st.get("command_sent_at"),
+                    confirmation_source=source,
+                )
             except Exception:
-                logger.warning("private_mileage: fermeture (confirm async) ignorée", exc_info=False)
+                logger.warning("private_mileage: fermeture/promotion (confirm async) ignorée",
+                               exc_info=False)
         # Nettoyage des coordonnées d'ancre (usage interne de confirmation uniquement).
         if requested == BUSINESS:
             new_doc.pop("private_gps_anchor_lat", None)

@@ -246,3 +246,100 @@ def test_unfinished_session_stays_open_not_counted():
              end_utc=datetime(2026, 9, 30, tzinfo=timezone.utc), gps_fallback_km=_gps))
     # pas de cutover, pas de session CLOSED -> UNAVAILABLE
     assert r["private_km_source"] == pm.SRC_UNAVAILABLE and r["private_km"] is None
+
+
+def test_late_business_confirmation_promotes_degraded_without_changing_km():
+    """DEGRADED depuis candidat OFF + confirmation BUSINESS tardive -> OK,
+    sans changer aucune borne ni private_km."""
+    db = _DB()
+
+    _open(db, odo=10000.0)
+
+    _run(pm.capture_end_candidate(
+        db,
+        tenant_id="default",
+        vehicle_id="vA",
+        tracker_id=781479,
+        odo_end_candidate=10008.0,
+        end_candidate_sample_at="2026-09-20T10:00:00.000000+00:00",
+        business_command_sent_at="2026-09-20T10:00:00.001000+00:00",
+    ))
+
+    _run(pm.close_from_candidate(
+        db,
+        tenant_id="default",
+        vehicle_id="vA",
+        tracker_id=781479,
+        confirmation_source="PENDING_TIMEOUT_DEGRADED",
+    ))
+
+    before = dict(db._c.docs[0])
+
+    assert before["state"] == pm.S_CLOSED
+    assert before["quality"] == pm.Q_DEGRADED
+    assert before["private_km"] == 8.0
+
+    sid = _run(pm.promote_degraded_after_confirmation(
+        db,
+        tenant_id="default",
+        vehicle_id="vA",
+        tracker_id=781479,
+        business_command_sent_at="2026-09-20T10:00:00.003000+00:00",
+        confirmation_source="TELEMETRY_CONFIRMED",
+    ))
+
+    after = db._c.docs[0]
+
+    assert sid == before["id"]
+    assert after["quality"] == pm.Q_OK
+    assert after["quality_previous"] == pm.Q_DEGRADED
+    assert after["confirmation_source"] == "TELEMETRY_CONFIRMED"
+
+    # Invariants absolus : aucune borne de calcul ne change.
+    for field in (
+        "odometer_start_km",
+        "odometer_end_candidate_km",
+        "odometer_end_km",
+        "private_km",
+        "private_started_at",
+        "private_ended_at",
+        "business_command_sent_at",
+    ):
+        assert after.get(field) == before.get(field)
+
+
+def test_late_business_confirmation_wrong_cycle_does_not_promote():
+    """Une confirmation d'un autre cycle BUSINESS ne peut jamais promouvoir."""
+    db = _DB()
+
+    _open(db, odo=10000.0)
+
+    _run(pm.capture_end_candidate(
+        db,
+        tenant_id="default",
+        vehicle_id="vA",
+        tracker_id=781479,
+        odo_end_candidate=10008.0,
+        end_candidate_sample_at="2026-09-20T10:00:00Z",
+        business_command_sent_at="2026-09-20T10:00:00Z",
+    ))
+
+    _run(pm.close_from_candidate(
+        db,
+        tenant_id="default",
+        vehicle_id="vA",
+        tracker_id=781479,
+        confirmation_source="PENDING_TIMEOUT_DEGRADED",
+    ))
+
+    sid = _run(pm.promote_degraded_after_confirmation(
+        db,
+        tenant_id="default",
+        vehicle_id="vA",
+        tracker_id=781479,
+        business_command_sent_at="2026-09-20T11:00:00Z",
+        confirmation_source="TELEMETRY_CONFIRMED",
+    ))
+
+    assert sid is None
+    assert db._c.docs[0]["quality"] == pm.Q_DEGRADED
