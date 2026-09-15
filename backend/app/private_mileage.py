@@ -348,3 +348,57 @@ async def aggregate_private_km(
     total = round(gps_val + avl_val, 1)
     return {"private_km": total, "private_km_source": SRC_MIXED,
             "session_count": n, "avl16_km": avl, "gps_km": gps}
+
+
+# ---------------------------------------------------------------------------
+# Agrégation MULTI-VÉHICULE (rapports flotte/chauffeur). Réutilise STRICTEMENT
+# l'agrégateur canonique par véhicule ci-dessus (aucune 2e logique AVL16).
+# ---------------------------------------------------------------------------
+async def aggregate_private_km_for_scope(
+    db, *, tenant_id: str, vehicle_ids: list[str],
+    start_utc: datetime, end_utc: datetime,
+    gps_fallback_km_for_vehicle: Callable[[str, datetime, datetime], Awaitable[Optional[float]]],
+) -> dict:
+    """Km privés agrégés sur un ENSEMBLE de véhicules (même politique cutover/fallback).
+
+    - Somme les contributions numériques par véhicule (via aggregate_private_km).
+    - Provenance flotte : AVL16 (que de l'AVL16), GPS_FALLBACK (que du GPS),
+      MIXED_TRANSITION (mélange AVL16+GPS sur la fenêtre), UNAVAILABLE (aucune
+      contribution numérique -> None, jamais 0 inventé).
+    - null != 0 : si aucun véhicule ne produit de nombre -> private_km=None.
+    """
+    total = None
+    n_sessions = 0
+    saw_avl = saw_gps = saw_mixed = saw_unavail = False
+    for vid in vehicle_ids:
+        async def _gps(s, e, _vid=vid):
+            return await gps_fallback_km_for_vehicle(_vid, s, e)
+        r = await aggregate_private_km(
+            db, tenant_id=tenant_id, vehicle_id=vid,
+            start_utc=start_utc, end_utc=end_utc, gps_fallback_km=_gps)
+        src = r.get("private_km_source")
+        if src == SRC_AVL16:
+            saw_avl = True
+        elif src == SRC_GPS_FALLBACK:
+            saw_gps = True
+        elif src == SRC_MIXED:
+            saw_mixed = True
+        elif src == SRC_UNAVAILABLE:
+            saw_unavail = True
+        n_sessions += int(r.get("session_count") or 0)
+        km = r.get("private_km")
+        if isinstance(km, (int, float)):
+            total = (total or 0.0) + float(km)
+    # Provenance agrégée.
+    if saw_mixed or (saw_avl and saw_gps):
+        source = SRC_MIXED
+    elif saw_avl:
+        source = SRC_AVL16
+    elif saw_gps:
+        source = SRC_GPS_FALLBACK
+    else:
+        source = SRC_UNAVAILABLE
+    if total is None and not (saw_avl or saw_gps or saw_mixed):
+        source = SRC_UNAVAILABLE
+    return {"private_km": (round(total, 1) if total is not None else None),
+            "private_km_source": source, "session_count": n_sessions}

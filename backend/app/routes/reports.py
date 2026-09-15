@@ -120,12 +120,35 @@ async def tax_swiss_report(
     start = f"{year}-01-01T00:00:00+00:00"
     end = f"{year}-12-31T23:59:59+00:00"
     q = await filter_trips_query(db, user, start, end, driver_id, vehicle_id, None)
-    # Swiss tax report aggregate — only need distance, classification, fuel
-    projection = {"_id": 0, "distance_km": 1, "classification": 1, "fuel_l": 1}
+    # Swiss tax report aggregate — need distance, classification, fuel, vehicle_id.
+    projection = {"_id": 0, "distance_km": 1, "classification": 1, "fuel_l": 1, "vehicle_id": 1}
     trips = await db.trips.find(q, projection).limit(20000).to_list(20000)
 
     pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
-    perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")
+
+    # Km PRIVÉ = source canonique AVL16 (même agrégateur/cutover que km-summary).
+    # Flag OFF -> l'agrégateur retombe sur le GPS legacy (mêmes chiffres qu'avant).
+    from datetime import datetime, timezone
+    from app import private_mileage as _pm
+    tenant_id = user.get("tenant_id") or "default"
+    start_utc = datetime(year, 1, 1, tzinfo=timezone.utc)
+    end_utc = datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    scope_vids = sorted({t.get("vehicle_id") for t in trips if t.get("vehicle_id")})
+
+    async def _gps_personal_for_vehicle(vid, s_utc, e_utc):
+        qq = dict(q)
+        qq.update({"vehicle_id": vid, "classification": "personal",
+                   "start_time": {"$gte": s_utc.isoformat(), "$lt": e_utc.isoformat()}})
+        docs = await db.trips.find(qq, {"_id": 0, "distance_km": 1}).limit(20000).to_list(20000)
+        return round(sum((d.get("distance_km") or 0) for d in docs), 1)
+
+    priv_agg = await _pm.aggregate_private_km_for_scope(
+        db, tenant_id=tenant_id, vehicle_ids=scope_vids,
+        start_utc=start_utc, end_utc=end_utc,
+        gps_fallback_km_for_vehicle=_gps_personal_for_vehicle)
+    perso_km = priv_agg["private_km"] if priv_agg["private_km"] is not None else 0.0
+    private_km_source = priv_agg["private_km_source"]
+
     total_km = pro_km + perso_km
     pro_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "professional")
     perso_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "personal")
@@ -137,6 +160,8 @@ async def tax_swiss_report(
         "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
         "pro_fuel": round(pro_fuel, 2),
         "perso_fuel": round(perso_fuel, 2),
+        # Traçabilité interne/audit (non affichée en gros dans le PDF) :
+        "private_km_source": private_km_source,
     }
 
     owner = ""
