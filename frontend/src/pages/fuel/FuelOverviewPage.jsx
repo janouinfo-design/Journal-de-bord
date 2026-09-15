@@ -46,7 +46,7 @@ export default function FuelOverviewPage() {
               testId="fuel-stat-amount" />
         <Stat icon={Droplets} label="Litres" value={fmtQty(data.quantities?.L, "L")} testId="fuel-stat-liters" />
         <Stat icon={Zap} label="Recharge" value={fmtQty(data.quantities?.kWh, "kWh")} testId="fuel-stat-kwh" />
-        <Link to="/livre/carburant/anomalies" data-testid="fuel-stat-anomalies"
+        <Link to="/livre/energie/anomalies" data-testid="fuel-stat-anomalies"
               className={`bg-white rounded-lg border p-4 transition-colors hover:bg-slate-50 ${data.anomalies_open ? "border-rose-300" : "border-slate-200"}`}>
           <div className="flex items-center gap-2 text-slate-400 text-[11px] uppercase tracking-wider font-semibold">
             <AlertTriangle className={`w-3.5 h-3.5 ${data.anomalies_open ? "text-rose-500" : ""}`} /> Anomalies ouvertes

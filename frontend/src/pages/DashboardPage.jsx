@@ -170,9 +170,9 @@ export default function DashboardPage() {
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPro} label="% professionnel" value={fmtPct(k.pct_pro)} accent="pro" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiPctPerso} label="% personnel" value={fmtPct(k.pct_perso)} accent="perso" icon={PieIcon} />
         <KpiCard testId={TEST_IDS.dashboard.kpiFuel} label="Carburant professionnel" value={`${k.pro_fuel.toFixed(1)} L`} accent="pro" icon={Fuel}
-          sub="Consommation pro" />
+          sub="Estimation locale — en attente du module Énergie" />
         <KpiCard testId={TEST_IDS.dashboard.kpiFuelPerso} label="Carburant personnel" value={`${k.perso_fuel.toFixed(1)} L`} accent="warning" icon={Fuel}
-          sub="Consommation perso" />
+          sub="Estimation locale — en attente du module Énergie" />
       </div>
 
       <FuelWidget />
@@ -241,7 +241,7 @@ export default function DashboardPage() {
             </thead>
             <tbody>
               {data.table.map((r, i) => (
-                <tr key={r.driver_id || `row-${i}`} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                <tr key={`${r.driver_id || "d"}-${r.vehicle_plate || "v"}-${i}`} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                   <td className="py-3 px-5 font-medium text-slate-800">{r.driver_name}</td>
                   <td className="py-3 px-4 text-slate-600 font-mono text-xs">{r.vehicle_plate}</td>
                   <td className="py-3 px-4 text-right text-[#1976D2] font-medium">{fmtKm(r.pro_km)}</td>

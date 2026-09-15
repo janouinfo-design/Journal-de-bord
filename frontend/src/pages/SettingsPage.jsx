@@ -22,6 +22,9 @@ import ScheduleEditor from "@/components/livre/ScheduleEditor";
 import PrivacyCompatCard from "@/components/livre/PrivacyCompatCard";
 import PrivacyEnforcementCard from "@/components/livre/PrivacyEnforcementCard";
 import NotificationsPreferencesCard from "@/components/livre/NotificationsPreferencesCard";
+import ReconciliationSettingsCard from "@/components/livre/ReconciliationSettingsCard";
+import ReconciliationAlertsCard from "@/components/livre/ReconciliationAlertsCard";
+import EnergyTenantCard from "@/components/livre/EnergyTenantCard";
 import SmtpTestCard from "@/components/livre/SmtpTestCard";
 
 const MODE_OPTIONS = [
@@ -146,6 +149,19 @@ export default function SettingsPage() {
     } catch (e) {
       console.debug("[SettingsPage] vehicle mode change refused:", e);
       toast.error("Refusé");
+    }
+  }
+
+  async function changeVehicleFuelType(vehicleId, fuelType) {
+    try {
+      await api.put(`/livre/vehicles/${vehicleId}/fuel-type`, {
+        fuel_type: fuelType === "unknown" ? null : fuelType,
+        source: "manual_admin_ui",
+      });
+      toast.success("Motorisation mise à jour");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Refusé");
     }
   }
 
@@ -412,6 +428,7 @@ export default function SettingsPage() {
                     <th className="text-left py-2.5 px-3">Plaque</th>
                     <th className="text-left py-2.5 px-3">Modèle</th>
                     <th className="text-left py-2.5 px-3">Tag BLE</th>
+                    <th className="text-right py-2.5 px-3">Motorisation</th>
                     <th className="text-right py-2.5 px-3">Mode</th>
                     <th className="text-right py-2.5 px-3">Affectations</th>
                   </tr>
@@ -428,6 +445,24 @@ export default function SettingsPage() {
                           canEdit={canEdit}
                           onSave={(id) => saveBleTag(v.id, id)}
                         />
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        <Select value={v.fuel_type || "unknown"}
+                          onValueChange={(val) => changeVehicleFuelType(v.id, val)}
+                          disabled={user?.role !== "admin"}>
+                          <SelectTrigger className="w-44 ml-auto h-8 text-xs"
+                            data-testid={`settings-vehicle-fueltype-${v.plate.replace(/\s+/g, "-")}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unknown">Inconnue</SelectItem>
+                            <SelectItem value="diesel">Diesel</SelectItem>
+                            <SelectItem value="essence">Essence</SelectItem>
+                            <SelectItem value="hybrid">Hybride</SelectItem>
+                            <SelectItem value="phev">Hybride rechargeable</SelectItem>
+                            <SelectItem value="electric">Électrique</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </td>
                       <td className="py-2.5 px-3 text-right">
                         <Select value={v.mode} onValueChange={(val) => changeVehicleMode(v.id, val)} disabled={!canEdit}>
@@ -456,6 +491,10 @@ export default function SettingsPage() {
 
       {/* SECTION 5 — NOTIFICATION PREFERENCES */}
       <NotificationsPreferencesCard />
+
+      <EnergyTenantCard />
+      <ReconciliationSettingsCard />
+      <ReconciliationAlertsCard />
     </div>
   );
 }

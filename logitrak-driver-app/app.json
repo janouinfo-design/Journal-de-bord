@@ -10,7 +10,9 @@
       "backgroundColor": "#0B0F14",
       "resizeMode": "contain"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "web": {
       "bundler": "metro"
     },
@@ -19,10 +21,15 @@
       "bundleIdentifier": "ch.logitrak.driver",
       "buildNumber": "1",
       "infoPlist": {
-        "NSBluetoothAlwaysUsageDescription": "Logitrak utilise le Bluetooth pour identifier automatiquement le vehicule conduit.",
-        "NSBluetoothPeripheralUsageDescription": "Detection des tags BLE installes a bord du vehicule.",
-        "NSLocationWhenInUseUsageDescription": "Requis par iOS pour le scan BLE en arriere-plan.",
-        "UIBackgroundModes": ["bluetooth-central", "fetch", "remote-notification", "processing"]
+        "NSBluetoothAlwaysUsageDescription": "Logitrak utilise le Bluetooth pour identifier automatiquement le véhicule conduit.",
+        "NSBluetoothPeripheralUsageDescription": "Détection des tags BLE installés à bord du véhicule.",
+        "NSLocationWhenInUseUsageDescription": "Requis par iOS pour le scan BLE en arrière-plan.",
+        "UIBackgroundModes": [
+          "bluetooth-central",
+          "fetch",
+          "remote-notification",
+          "processing"
+        ]
       }
     },
     "android": {
@@ -50,23 +57,42 @@
       "expo-secure-store",
       [
         "expo-build-properties",
-        { "android": { "minSdkVersion": 24, "compileSdkVersion": 34, "targetSdkVersion": 34 } }
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34
+          }
+        }
       ],
-      ["expo-notifications", { "color": "#3b82f6" }],
+      [
+        "expo-notifications",
+        {
+          "color": "#3b82f6"
+        }
+      ],
       [
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": true,
-          "modes": ["central"],
-          "bluetoothAlwaysPermission": "Logitrak utilise le Bluetooth pour identifier automatiquement le vehicule conduit."
+          "modes": [
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "Logitrak utilise le Bluetooth pour identifier automatiquement le véhicule conduit."
         }
       ]
     ],
     "extra": {
-      "router": { "origin": false },
-      "eas": { "projectId": "84443c92-d226-4775-8f87-e63c0ea42aeb" }
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "84443c92-d226-4775-8f87-e63c0ea42aeb"
+      }
     },
     "owner": "logititrak",
-    "runtimeVersion": { "policy": "appVersion" }
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
   }
 }

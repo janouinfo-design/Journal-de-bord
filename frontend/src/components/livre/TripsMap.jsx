@@ -13,8 +13,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import maplibregl from "maplibre-gl";
 import { api } from "@/lib/api";
+import { isPrivateTrip } from "@/lib/privateMode";
 import { Card } from "@/components/ui/card";
-import { Map as MapIcon, EyeOff, Loader2 } from "lucide-react";
+import { Map as MapIcon, EyeOff, Loader2, ShieldOff } from "lucide-react";
 
 const COLORS = {
   professional: "#2196F3",
@@ -57,13 +58,24 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
   const fetchedRef = useRef(new Set());
 
   // ✱ Strict masked-mode filter — applied here regardless of role.
+  // Les trajets Privé (device) sont TOUJOURS exclus de la carte (défense en
+  // profondeur : le backend a déjà retiré leurs coordonnées).
   const visibleTrips = useMemo(() => {
-    const arr = (trips || []).filter(validCoord);
+    const arr = (trips || []).filter(t => validCoord(t) && !isPrivateTrip(t));
     if (settingsMode === "masked") {
       return arr.filter(t => t.classification === "professional");
     }
     return arr;
   }, [trips, settingsMode]);
+
+  // Trajets en mode Privé (device) : le backend a masqué la position (coords
+  // null) -> ils n'apparaissent jamais sur la carte. On les COMPTE pour informer
+  // explicitement le gestionnaire (« Position masquée — Mode Privé ») au lieu de
+  // les faire disparaître silencieusement.
+  const privateMaskedCount = useMemo(
+    () => (trips || []).filter(isPrivateTrip).length,
+    [trips],
+  );
 
   const hiddenCount = (trips?.filter(validCoord).length || 0) - visibleTrips.length;
 
@@ -257,6 +269,14 @@ export default function TripsMap({ trips, settingsMode, height = 420 }) {
              data-testid="trips-map-masked-notice">
           <EyeOff className="w-3.5 h-3.5" />
           Mode Personnel Masqué — {hiddenCount} trajet(s) personnel(s) masqué(s) sur la carte.
+        </div>
+      )}
+
+      {privateMaskedCount > 0 && (
+        <div className="px-4 py-2 bg-violet-50 border-b border-violet-200 text-violet-800 text-[11px] flex items-center gap-2"
+             data-testid="trips-map-private-notice">
+          <ShieldOff className="w-3.5 h-3.5" />
+          Position masquée — Mode Privé : {privateMaskedCount} trajet(s) privé(s) non affiché(s) (distance conservée, position GPS masquée).
         </div>
       )}
 

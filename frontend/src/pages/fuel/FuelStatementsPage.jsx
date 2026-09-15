@@ -45,7 +45,7 @@ export default function FuelStatementsPage() {
       const { data } = await api.post("/livre/fuel/statements", payload);
       toast.success(`Décompte ${data.number} créé (brouillon)`);
       setCreateOpen(false);
-      navigate(`/livre/carburant/decomptes/${data.id}`);
+      navigate(`/livre/energie/approvisionnements/decomptes/${data.id}`);
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
   }
@@ -89,7 +89,7 @@ export default function FuelStatementsPage() {
               return (
                 <tr key={s.id} data-testid={`fuel-stmt-row-${s.id}`}
                     className="border-b border-slate-100 hover:bg-slate-50/60 cursor-pointer"
-                    onClick={() => navigate(`/livre/carburant/decomptes/${s.id}`)}>
+                    onClick={() => navigate(`/livre/energie/approvisionnements/decomptes/${s.id}`)}>
                   <td className="px-4 py-2.5 text-xs font-mono font-medium">{s.number}</td>
                   <td className="px-4 py-2.5 text-xs whitespace-nowrap">{s.date_from} → {s.date_to}</td>
                   <td className="px-4 py-2.5 text-xs">{s.type === "corrective" ? "Correctif" : "Régulier"}</td>

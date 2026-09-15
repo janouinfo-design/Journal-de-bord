@@ -1,0 +1,47 @@
+{
+  "summary": "Campagne Énergie (mode ENERGY_API_MODE=fixture) : 19 tests pytest E2E créés (test_iteration25_energy_fixture.py) + 9 tests existants test_energy_contract.py → 25 PASS / 3 SKIP, 0 échec. Contrat Energy→Journal v1 validé sur trajets réels (clés value/unit/availability/measurement_type/source/timestamp exactes, ICE mesuré/estimé, BEV mesuré SoC 82→64, BEV REFERENCE VEHICLE_SPEC, PHEV électrique+carburant séparés, STALE, no_data, valeur null jamais 0), RBAC (driver 403 sur /energy/overview, manager 200), isolation tenant B → trip_not_found, overview 18 véhicules / powertrain_set 0. Frontend : nouvelle nav admin/manager/driver, bannière FIXTURE violette, page Consommations (badges Mesuré/Estimé/Référence/Indisponible/Périmé, SoC, 'Non disponible', flag fixture, filtres véhicule+dates fonctionnels), Journal & trajets (bouton éclair → TripEnergyBlock, colonne 'Carb. (est.)' + tooltip, exports PDF/Excel/CSV téléchargés OK), domaine Conducteurs (5 sous-onglets conformes, Sessions sans KPI, Éco-conduite placeholder honnête), 5/5 redirections legacy OK (query préservée), non-régression Approvisionnements (aperçu/transactions+dialog/cartes/décomptes+détail/anomalies) et widget carburant du dashboard OK, responsive 390px sans débordement.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/livre/trips (role driver)", "issue": "DONNÉES (pas code) : le chauffeur chauffeur@logitrak.ch / Jean Dupont (driver id 1580345e…) n'a AUCUN trajet — 0 trip avec driver_id correspondant et 0 assignment véhicule↔chauffeur en base. Conséquence : le scénario 'driver reçoit 200 sur /energy/trips pour SES trajets' n'a pas pu être vérifié (test skippé) et le dashboard chauffeur affiche 0 km / 0.0 L partout. Le cas négatif (trajet d'un autre conducteur → trip_not_found) est lui bien vérifié."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TripEnergyBlock (cas UNAVAILABLE)", "issue": "DOM invalide : le <p> ligne 66 contient <EnergyBadge> qui rend un <div> (Badge) → warning React 'In HTML, <div> cannot be a descendant of <p>. This will cause a hydration error.' visible en console sur /livre/energie/consommations et /livre/history/pro. Remplacer le <p> par un <div>/<span>.", "selector": "[data-testid=\"trip-energy-unavailable\"]", "priority": "MEDIUM"},
+      {"component": "DashboardPage.jsx:244 (Synthèse par chauffeur)", "issue": "Warning React 'Encountered two children with the same key 31de6832-… (POLICE 56974)' — la synthèse renvoie plusieurs lignes pour un même driver_id (une par véhicule). Utiliser une clé composite driver_id+vehicle_id.", "selector": "tbody tr", "priority": "LOW"},
+      {"component": "TripEnergyBlock (enveloppe no_data en mode fixture)", "issue": "Le bloc 'Indisponible / Aucune donnée transmise par le module Énergie' n'affiche PAS le flag 'Fixture — démo contractuelle' (présent sur tous les autres cas). Risque de présenter un vide fixture comme un vide réel.", "selector": "[data-testid=\"trip-energy-unavailable\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/livre/energie/consommations et /livre/history/pro (filtres DU/AU)", "issues": ["Utilisation du date picker natif du navigateur (placeholder US 'mm/dd/yyyy') au lieu du composant Calendar shadcn — incohérent avec une UI 100% française (jj.mm.aaaa). Pré-existant sur HistoryPage, reproduit sur la nouvelle page Consommations."]},
+      {"screen": "/livre/dashboard (role driver)", "issues": ["Le chauffeur voit les filtres Chauffeur / Véhicule / Groupe / Société alors qu'il n'a accès qu'à ses propres données — bruit inutile (à confirmer côté produit)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration25_energy_fixture.py",
+    "/app/backend/tests/test_energy_contract.py",
+    "/app/test_reports/pytest/iter25_energy.xml"
+  ],
+  "action_items": [
+    "TripEnergyBlock.jsx ligne 66 : remplacer <p> par <div> (Badge = <div> → hydration error React).",
+    "DashboardPage.jsx ligne 244 : clé React composite (driver_id + vehicle_id) pour supprimer le warning de clés dupliquées.",
+    "Afficher le flag 'Fixture — démo contractuelle' aussi sur le bloc UNAVAILABLE/no_data pour ne jamais laisser croire à un vide réel.",
+    "Optionnel/produit : remplacer les inputs type=date par le Calendar shadcn (format fr) sur EnergyConsumptionPage et HistoryPage.",
+    "DONNÉES : rattacher des trajets (driver_id ou assignment véhicule) à Jean Dupont pour pouvoir valider le RBAC 'chauffeur voit ses trajets' et la page énergie côté driver."
+  ],
+  "critical_code_review_comments": [
+    "energy_client.py : contrat propre — aucune valeur calculée côté Journal, unavailable_metric() renvoie bien value=None (jamais 0), fixtures déterministes via sha256%8 et systématiquement marquées mode='fixture'. Conforme à l'exigence 'Journal = consommateur'.",
+    "routes/energy.py : RBAC correct (READ_ROLES sans driver pour /overview, filter_trips_query pour le scoping tenant/driver) et complétion des trip_ids manquants en trip_not_found — l'ordre de la réponse est préservé (vérifié en test).",
+    "energy_overview : les comptages flotte (db.vehicles.count_documents) ne filtrent PAS sur tenant_id alors que le tenant est exigé en amont (_tenant_or_400). Sur un tenant B, vehicles_total renverrait le comptage global — à aligner avec le tenant effectif.",
+    "EnergyConsumptionPage : limite MAX_TRIPS=30 appliquée côté client après un GET /livre/trips limit=500 par défaut — coût réseau inutile ; passer limit=30 au backend."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration25_energy_fixture.py"],
+  "success_rate": {"backend": "100% (25 PASS / 3 SKIP sur 28)", "frontend": "100% des flux testés fonctionnels (3 warnings/nettoyages UI à corriger)"},
+  "seed_data_creation": "Aucune. Aucune donnée créée ou supprimée (lecture seule + exports). Fixtures énergie fournies par ENERGY_API_MODE=fixture.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123, admin-b@test.ch/testb123 (tous validés, aucun verrouillage brute force déclenché). Aucun compte lecture_seule avec mot de passe connu → rôle lecture_seule non testé côté UI (couvert indirectement : READ_ROLES inclut lecture_seule).",
+  "context_for_next_testing_agent": "Backend en ENERGY_API_MODE=fixture (ne pas modifier les .env). Suite de régression énergie : /app/backend/tests/test_iteration25_energy_fixture.py (utilise des trip_ids réels et vérifie la couverture des 8 scénarios fixture, l'isolation tenant et le RBAC). Le test 'driver_gets_own_trips_200' SKIPPE tant que Jean Dupont n'a aucun trajet en base. Testids utiles : energy-overview-page, energy-status-banner, energy-consumption-page, energy-filter-vehicle/start/end, energy-trip-row-{id}, trip-energy-btn-{id}, trip-energy-fixture-flag, trip-energy-stale, energy-soc-start/end, drivers-overview-page, drivers-kpi-*, ident-kpis, eco-driving-page. Les 5 redirections legacy et les exports PDF/Excel/CSV sont vérifiés OK au 19.08.2026.",
+  "rca_of_the_issue": "Warning hydration : EnergyBadge rend un Badge shadcn (<div>) inséré dans un <p> (TripEnergyBlock.jsx:66) — HTML interdit un élément block dans un paragraphe. Warning clés dupliquées : /livre/dashboard renvoie plusieurs lignes de synthèse par chauffeur (une par véhicule) mais le rendu utilise key={r.driver_id}. Chauffeur sans trajet : aucune donnée trips.driver_id ni assignments pour le driver Jean Dupont en base, donc filter_trips_query retourne un ensemble vide (comportement code correct, données incomplètes)."
+}

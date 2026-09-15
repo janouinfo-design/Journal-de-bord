@@ -275,10 +275,9 @@ class TestPhase3Documents:
         assert doc["size_bytes"] > 0
         doc_id = doc["id"]
 
-        # Verify on disk
-        fine_dir = STORAGE_ROOT / fine_id
-        files_on_disk = list(fine_dir.glob(f"{doc_id}_*"))
-        assert len(files_on_disk) == 1, f"Expected 1 file, found {files_on_disk}"
+        # Verify stored in Emergent Object Storage (plus de stockage pod-local)
+        assert doc.get("storage_path", "").startswith(
+            f"logitrak-journal/fines/{fine_id}/{doc_id}_"), doc.get("storage_path")
 
         # GET fine — documents array contains it
         r2 = requests.get(f"{LIVRE}/fines/{fine_id}", headers=H(admin_token), timeout=10)
@@ -320,8 +319,8 @@ class TestPhase3Documents:
                              headers=H(admin_token), timeout=10)
         assert r8.status_code == 200, r8.text
 
-        # File removed from disk
-        assert not any(fine_dir.glob(f"{doc_id}_*")), "File still on disk after delete"
+        # Soft-delete : la métadonnée Mongo (source de vérité) est retirée —
+        # la suite vérifie que le document disparaît et que le download → 404.
 
         # Document removed from fine
         r9 = requests.get(f"{LIVRE}/fines/{fine_id}", headers=H(admin_token), timeout=10)

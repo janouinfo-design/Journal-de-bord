@@ -93,7 +93,7 @@ export default function FuelStatementDetailPage() {
 
   const load = useCallback(() => {
     api.get(`/livre/fuel/statements/${id}`).then(({ data }) => setStmt(data))
-      .catch((e) => { toast.error(formatApiErrorDetail(e.response?.data?.detail)); navigate("/livre/carburant/decomptes"); });
+      .catch((e) => { toast.error(formatApiErrorDetail(e.response?.data?.detail)); navigate("/livre/energie/approvisionnements/decomptes"); });
   }, [id, navigate]);
   useEffect(() => { load(); }, [load]);
 
@@ -172,7 +172,7 @@ export default function FuelStatementDetailPage() {
       {/* En-tête */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <button data-testid="fuel-stmt-back" onClick={() => navigate("/livre/carburant/decomptes")}
+          <button data-testid="fuel-stmt-back" onClick={() => navigate("/livre/energie/approvisionnements/decomptes")}
                   className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 mb-1">
             <ArrowLeft className="w-3.5 h-3.5" /> Décomptes
           </button>
@@ -215,7 +215,7 @@ export default function FuelStatementDetailPage() {
                         className="text-rose-600"
                         onClick={() => window.confirm(`Supprimer le brouillon ${stmt.number} ?`)
                           && act(() => api.delete(`/livre/fuel/statements/${id}`), "Brouillon supprimé")
-                          && navigate("/livre/carburant/decomptes")}>
+                          && navigate("/livre/energie/approvisionnements/decomptes")}>
                   <Trash2 className="w-3.5 h-3.5" />
                 </Button>
               )}
@@ -264,7 +264,7 @@ export default function FuelStatementDetailPage() {
               <li>
                 {b.unmatched.count} transaction(s) non rapprochée(s) — {fmtAmount(b.unmatched.amount_chf)}{" "}
                 <Link data-testid="fuel-stmt-link-unmatched" className="underline font-medium"
-                      to="/livre/carburant/transactions?match_status=unmatched">
+                      to="/livre/energie/approvisionnements/transactions?match_status=unmatched">
                   Voir les transactions non rapprochées
                 </Link>
               </li>
@@ -274,7 +274,7 @@ export default function FuelStatementDetailPage() {
                 {b.fx_pending.count} conversion(s) en attente — montant CHF indisponible
                 ({Object.entries(b.fx_pending.amounts_by_currency || {}).map(([c, v]) => `${v} ${c}`).join(", ")}){" "}
                 <Link data-testid="fuel-stmt-link-fx" className="underline font-medium"
-                      to="/livre/carburant/transactions?fx_status=pending">
+                      to="/livre/energie/approvisionnements/transactions?fx_status=pending">
                   Voir les conversions en attente
                 </Link>
               </li>
@@ -283,7 +283,7 @@ export default function FuelStatementDetailPage() {
               <li>
                 {b.anomalies.count} anomalie(s) critique(s) non résolue(s){" "}
                 <Link data-testid="fuel-stmt-link-anomalies" className="underline font-medium"
-                      to="/livre/carburant/anomalies">
+                      to="/livre/energie/anomalies">
                   Voir les anomalies
                 </Link>
               </li>

@@ -6,7 +6,7 @@ Strategy:
 - zone/list     → geofences (type inferred from label keywords)
 - track/list    → trips (per tracker, chunked by 7 days). Pulled for last N days.
 
-Trips are upserted by `navixy_track_id`. Manual classifications
+Trips are upserted by `(tenant_id, navixy_tracker_id, navixy_track_id)`. Manual classifications
 (auto_classified=False) are preserved across syncs.
 
 Refactored in iteration 26 (22/06/2026): the previously monolithic 200-line
@@ -35,8 +35,45 @@ PRO_KEYWORDS = ("dépôt", "depot", "entrepôt", "entrepot", "chantier",
                 "atelier", "garage", "client", "bureau", "depôt", "site")
 PERSO_KEYWORDS = ("domicile", "home", "maison", "perso", "privé", "prive")
 
-# Heuristic fuel estimate: 8.5 L / 100 km
+# Heuristic fuel estimate: 8.5 L / 100 km — LEGACY, jamais une mesure.
 FUEL_L_PER_KM = 0.085
+# Métadonnées obligatoires pour toute valeur issue de ce calcul fixe :
+# elle doit TOUJOURS être identifiable comme ESTIMATED (jamais mesurée).
+LEGACY_FUEL_META = {
+    "measurement_type": "ESTIMATED",
+    "source": "LOGITRAK_HISTORICAL",
+    "method": "distance_km × 0.085 L/km (8,5 L/100 km)",
+    "unit": "L",
+}
+
+# Mapping canonique motorisation — UNIQUEMENT depuis vehicles.fuel_type,
+# JAMAIS déduit du nom/modèle/plaque/label Navixy. Non prouvé → UNKNOWN.
+POWERTRAIN_FROM_FUEL_TYPE = {
+    "ice": "ICE", "diesel": "ICE", "essence": "ICE", "petrol": "ICE",
+    "hybrid": "HEV", "hev": "HEV", "phev": "PHEV",
+    "electric": "BEV", "bev": "BEV", "ev": "BEV",
+}
+
+
+def powertrain_from_fuel_type(fuel_type) -> str:
+    return POWERTRAIN_FROM_FUEL_TYPE.get((fuel_type or "").lower(), "UNKNOWN")
+
+
+def legacy_fuel_estimation_allowed(vehicle: dict | None) -> bool:
+    """Le legacy litres/km (0,085) est-il autorisé pour ce véhicule ?
+
+    ICE (ice/diesel/essence/petrol) → OUI.
+    BEV (electric/bev/ev) → NON — aucun litre ne doit jamais être créé.
+    HEV/PHEV → NON — aucune convention thermique n'a été validée pour le
+      legacy 8,5 L/100 km sur hybrides : cas ambigu ⇒ pas de calcul (documenté).
+    UNKNOWN → OUI — dette résiduelle assumée : le comportement historique est
+      conservé pour ne pas casser la fiscalité de la flotte actuelle (0/18
+      motorisations renseignées). UNKNOWN n'est JAMAIS converti en BEV ni ICE.
+    """
+    pt = powertrain_from_fuel_type((vehicle or {}).get("fuel_type"))
+    if pt in ("BEV", "HEV", "PHEV"):
+        return False
+    return True  # ICE + UNKNOWN (dette résiduelle documentée)
 
 # Navixy track/list span limit
 TRACK_CHUNK_DAYS = 7
@@ -79,21 +116,57 @@ def _point_in_zone(lat: float, lng: float, zone: dict) -> bool:
     return (lat_lo <= lat <= lat_hi) and (lng_lo <= lng <= lng_hi)
 
 
-def _normalize_navixy_date(s: str) -> str:
-    """Navixy returns 'YYYY-MM-DD HH:MM:SS' (server tz, treated as UTC)."""
-    if not s:
-        return ""
-    if "T" in s:
-        return s
-    return s.replace(" ", "T") + "+00:00"
+def _normalize_navixy_date(value: str) -> str:
+    """Navixy server-local datetime -> canonical UTC ISO datetime."""
+    raw = str(value or "").strip()
+
+    if not raw:
+        raise ValueError("Empty Navixy datetime")
+
+    # Handles ISO forms, fractional seconds and explicit offsets.
+    try:
+        dt = datetime.fromisoformat(
+            raw.replace("Z", "+00:00")
+        )
+    except ValueError:
+        dt = datetime.strptime(
+            raw,
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+    # Navixy track/list returns naive strings in server/account timezone.
+    if dt.tzinfo is None:
+        dt = dt.replace(
+            tzinfo=_navixy_server_timezone()
+        )
+
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _parse(iso: str) -> datetime:
     return datetime.fromisoformat(iso.replace("Z", "+00:00"))
 
 
+def _navixy_server_timezone():
+    """Timezone used by Navixy track/list naive date strings."""
+    import os
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(
+        os.getenv("NAVIXY_SERVER_TIMEZONE", "Europe/Zurich")
+    )
+
+
 def _fmt(d: datetime) -> str:
-    return d.strftime("%Y-%m-%d %H:%M:%S")
+    """UTC/internal datetime -> Navixy server-local naive datetime."""
+    if d.tzinfo is None:
+        # Backward compatibility: internal naive datetimes historically
+        # represented UTC in this sync module.
+        d = d.replace(tzinfo=timezone.utc)
+
+    return d.astimezone(
+        _navixy_server_timezone()
+    ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _zone_centroid(b: dict) -> tuple[float, float]:
@@ -224,7 +297,7 @@ async def _sync_zones(db) -> tuple[int, list[dict]]:
 # Phase 4 — Tracks / Trips
 # ---------------------------------------------------------------------------
 async def _build_trip_doc(
-    db, vehicle: dict, tr: dict, zones_local: list[dict],
+    db, vehicle: dict, tracker_id: int, tr: dict, zones_local: list[dict],
 ) -> dict:
     """Translate a Navixy track payload into a local `trips` document."""
     start_iso = _normalize_navixy_date(tr["start_date"])
@@ -247,12 +320,19 @@ async def _build_trip_doc(
         if dd:
             resolved_driver_name = dd["name"]
 
-    return {
-        "tenant_id": "default",
+    tenant_id = vehicle.get("tenant_id")
+    if not tenant_id:
+        raise ValueError(
+            f"Missing tenant_id for vehicle {vehicle.get('id')}"
+        )
+
+    doc = {
+        "tenant_id": tenant_id,
         "driver_id": resolved_driver_id,
         "driver_name": resolved_driver_name or vehicle.get("plate"),
         "vehicle_id": vehicle["id"],
         "vehicle_plate": vehicle["plate"],
+        "navixy_tracker_id": int(tracker_id),
         "navixy_track_id": tr["id"],
         "start_time": start_iso,
         "end_time": end_iso,
@@ -264,25 +344,59 @@ async def _build_trip_doc(
         "end_zone_type": _classify_point(end_lat, end_lng, zones_local),
         "distance_km": round(length_km, 1),
         "duration_min": dur_min,
-        "fuel_l": round(length_km * FUEL_L_PER_KM, 2),
         "avg_speed": float(tr.get("avg_speed", 0) or 0),
         "max_speed": float(tr.get("max_speed", 0) or 0),
     }
+    # Garde-fou BEV : le legacy 0,085 L/km n'est écrit que si la motorisation
+    # l'autorise (jamais BEV/HEV/PHEV). Sinon fuel_l reste ABSENT — jamais 0.
+    if legacy_fuel_estimation_allowed(vehicle):
+        doc["fuel_l"] = round(length_km * FUEL_L_PER_KM, 2)
+    return doc
 
 
 async def _upsert_trip(db, doc: dict) -> str:
-    """Insert or update a trip by navixy_track_id. Returns 'new' or 'updated'.
+    """Insert or update a trip by tenant + vehicle + Navixy track id.
+
+    Navixy track ids are not globally unique across trackers. The local
+    identity must therefore be scoped to the canonical vehicle and tenant.
 
     Manual classifications (auto_classified=False) are preserved: we do NOT
     overwrite the driver_id chosen by the user on a manually-edited trip.
     """
-    navixy_track_id = doc["navixy_track_id"]
-    existing = await db.trips.find_one({"navixy_track_id": navixy_track_id})
+    identity = {
+        "tenant_id": doc["tenant_id"],
+        "navixy_tracker_id": doc["navixy_tracker_id"],
+        "navixy_track_id": doc["navixy_track_id"],
+    }
+
+    existing = await db.trips.find_one(identity)
+
+    # Lazy migration of legacy documents created before navixy_tracker_id
+    # was stored on trips. Scope by tenant + canonical vehicle + track id,
+    # never by track id alone.
+    if not existing:
+        legacy_identity = {
+            "tenant_id": doc["tenant_id"],
+            "vehicle_id": doc["vehicle_id"],
+            "navixy_track_id": doc["navixy_track_id"],
+            "start_time": doc["start_time"],
+            "end_time": doc["end_time"],
+            "navixy_tracker_id": {"$exists": False},
+        }
+        existing = await db.trips.find_one(legacy_identity)
+        if existing:
+            await db.trips.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"navixy_tracker_id": doc["navixy_tracker_id"]}},
+            )
     if existing:
         update = {**doc}
         if not existing.get("auto_classified", True):
             update.pop("driver_id", None)
-        await db.trips.update_one({"navixy_track_id": navixy_track_id}, {"$set": update})
+        await db.trips.update_one(
+            {"_id": existing["_id"]},
+            {"$set": update},
+        )
         if doc.get("end_time"):
             from app.ble_engine import mark_sessions_trip_end
             await mark_sessions_trip_end(db, {**doc, "id": existing.get("id")})
@@ -324,7 +438,9 @@ async def _sync_tracks_for_vehicle(
             cursor = chunk_end
             continue
         for tr in resp.get("list", []):
-            doc = await _build_trip_doc(db, vehicle, tr, zones_local)
+            doc = await _build_trip_doc(
+                db, vehicle, tracker_id, tr, zones_local
+            )
             status = await _upsert_trip(db, doc)
             if status == "new":
                 new_count += 1

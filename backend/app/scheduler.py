@@ -135,12 +135,26 @@ async def _run_session_sweep():
     try:
         from app.db import get_db, get_raw_db
         from app.ble_engine import sweep_sessions
+        from app.navixy_driver_sync import reconcile_closed_sessions
         from app.tenant_context import reset_current_tenant, set_current_tenant
         raw = get_raw_db()
         async for t in raw.tenants.find({"status": "active"}, {"_id": 0, "id": 1}):
             token = set_current_tenant(t["id"])
             try:
-                await sweep_sessions(get_db())
+                db = get_db()
+                sweep_result = await sweep_sessions(db)
+                navixy_result = await reconcile_closed_sessions(db)
+                if (
+                    navixy_result.get("processed")
+                    or navixy_result.get("errors")
+                    or navixy_result.get("superseded")
+                ):
+                    logger.info(
+                        "Session sweep tenant=%s: sweep=%s navixy=%s",
+                        t["id"],
+                        sweep_result,
+                        navixy_result,
+                    )
             finally:
                 reset_current_tenant(token)
     except Exception as e:

@@ -100,6 +100,27 @@ def _r_fuel_anomaly(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], 
     )
 
 
+def _r_sos(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any], str | None]:
+    who = payload.get("driver_name") or "Un chauffeur"
+    veh = payload.get("vehicle_plate")
+    body = f"{who} a déclenché une alerte SOS."
+    if veh:
+        body += f" Véhicule : {veh}."
+    return (
+        "🆘 Alerte SOS",
+        body,
+        {
+            "type": "sos.triggered",
+            "sos_id": payload.get("sos_id"),
+            "driver_id": payload.get("driver_id"),
+            "vehicle_id": payload.get("vehicle_id"),
+            "has_location": payload.get("has_location"),
+            "link": "/livre/dashboard",
+        },
+        None,
+    )
+
+
 # Stubs for future business events — already in the catalog so prefs UI
 # can list them and the backend can hook into the dispatcher later.
 def _generic_render(title: str, body_tpl: str):
@@ -142,6 +163,14 @@ EVENT_CATALOG: dict[str, dict[str, Any]] = {
         "audience": "admin",
         "inapp": True,       # toujours déposée dans le centre de notifications in-app
         "email_real": True,  # email SMTP réel si l'utilisateur l'active (désactivé par défaut)
+    },
+    "sos.triggered": {
+        "label": "Alerte SOS chauffeur",
+        "default_channels": {"push": True, "email": True, "sms": True},
+        "render": _r_sos,
+        "audience": "admin",   # gestionnaires/admins reçoivent l'alerte
+        "inapp": True,         # toujours déposée dans le centre de notifications
+        "email_real": True,    # urgence : email réel si SMTP configuré
     },
     # Future events (stubs)
     "contract.renewal": {

@@ -1,0 +1,25 @@
+{
+  "summary": "Frontend-only E2E testing (Playwright) of Phase 'Alertes À contrôler — préparation (aucun envoi)' + Export PDF du rapprochement. Admin (admin@logitrak.ch) : page /livre/energie/rapprochement charge (recon-page), 4 KPI + 18 lignes véhicules, tous statuts 'Impossible' (Energy non connecté = attendu, bannière ENERGY_API_BASE_URL affichée). Export PDF (recon-export-pdf-btn) et Export Excel (recon-export-btn) tous deux visibles côte à côte : téléchargements réels capturés (rapprochement_carburant_2026-01-01_2026-08-25.pdf / .xlsx) + toasts 'Export PDF généré' / 'Export Excel généré' (le code valide le content-type pdf/spreadsheetml avant le toast succès). Panneau recon-alerts-panel présent sous le tableau avec bannière 'APERÇU — AUCUN MESSAGE ENVOYÉ', texte de verrou REAL ENERGY, bouton Générer (admin) et lien Configurer qui navigue vers /livre/settings. Génération d'aperçu : toast '0 candidat(s) créé(s) · 0 doublon(s) ignoré(s) — aucun message envoyé', compteur reste 'Aucun candidat d'alerte enregistré.'. Paramètres : settings-alerts-card rendue APRÈS settings-recon-card (ordre DOM vérifié), bannière APERÇU, interrupteur settings-alerts-switch disabled/non cliquable (aria-checked reste false), badge 'Verrouillé — campagne REAL ENERGY non validée' + lock_reason backend. Destinataires : e-mail invalide 'pas-un-email' → 400 backend + toast 'Adresse e-mail invalide : pas-un-email' sans chip ; e-mail valide → toast 'Destinataires enregistrés — aucun message envoyé' + chip ; suppression via settings-alerts-remove-* → liste vide, confirmée après reload (NETTOYAGE EFFECTUÉ). Non-régression : les 7 filtres (period/vehicle/group/powertrain/measurement/reliability/status) filtrent, Réinitialiser les filtres revient à 18 lignes, drawer détail (recon-details-*) s'ouvre. RBAC lecture_seule (lecture@logitrak.ch) : bouton Générer ABSENT (count=0), panneau + bannière visibles, exports PDF et Excel fonctionnels (2 téléchargements réussis). Aucun seuil enregistré, aucune donnée opérationnelle modifiée, aucun envoi testé.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Rapprochement / Paramètres", "issues": ["Aucun défaut bloquant. Note mineure cosmétique : les 7 filtres s'affichent sur 2 lignes (4+3) en 1920px, layout acceptable ; la bannière APERÇU (slate-100/slate-700) a un contraste correct."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "EnergyReconciliationPage.jsx: le catch de generate() et doExport() avale l'erreur (catch sans variable) — pas de log console pour diagnostiquer un 409/500 futur ; envisager de remonter e.response.data.detail dans le toast.",
+    "AlertsPreparationPanel charge les candidats une seule fois au mount (useEffect []) sans dépendre de range — après changement de période le compteur n'est pas rechargé (acceptable car la liste est globale, mais à surveiller si le backend filtre par période).",
+    "ReconciliationAlertsCard: la validation d'e-mail est déléguée au backend (400) ; une validation côté client éviterait un aller-retour et un message d'erreur console 400."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only request)", "frontend": "100% (11/11 scénarios demandés PASS)"},
+  "seed_data_creation": "Aucune. Destinataire temporaire test.recette@logitrak.ch ajouté puis supprimé (liste remise à vide, vérifiée après reload). Aucun seuil enregistré, aucun candidat créé (0).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Tous les data-testids annoncés existent et fonctionnent : recon-page, recon-export-btn, recon-export-pdf-btn, recon-alerts-panel/-preview-banner/-generate-btn/-settings-link/-count, recon-filter-{period,vehicle,group,powertrain,measurement,reliability,status,reset}, recon-details-{vehicle_id}, settings-recon-card, settings-alerts-card/-banner/-switch/-lock/-lock-reason/-recipient-input/-add-recipient/-recipients/-remove-{email}/-candidates-count. Les téléchargements se font via blob + <a download> : utiliser page.expect_download(). Energy non connecté => 18 lignes 'Impossible', 0 candidat : c'est l'état attendu. Ne pas enregistrer de seuil, ne pas laisser de destinataire.",
+  "rca_of_the_issue": "Aucun défaut détecté durant cette itération."
+}

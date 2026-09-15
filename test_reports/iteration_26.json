@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend-only campaign on the new 'Rapprochement achats ↔ consommation' screen (Énergie & carburant). Verified via Playwright on the public URL: tab position/visibility, FIXTURE banner, 4 KPIs (0/0/1/17 as expected), 18-row table (6 'Non mappé' badges, 9 'Non disponible', all 'Motorisation inconnue', gaps '—' never 0), status badges + tooltips (17 IMPOSSIBLE / 1 INDICATIF with correct French reasons), detail drawer for an INDICATIF vehicle and for an unmapped vehicle (all 4 sections correct), all 7 filters (period presets incl. custom date inputs, vehicle, group, powertrain, measurement=Mesuré→6, reliability=Exploitable→6, status=Indicatif→1, status=OK→empty-state message), period switch to 'Mois précédent' reloads data (period column 2026-07-01→2026-07-31, purchases/gaps recomputed), 390px responsive column hiding + no horizontal overflow + usable drawer, RBAC (manager sees tab+page with 18 rows; driver has no Énergie tab and direct URL /livre/energie/rapprochement redirects to /livre/dashboard), and non-regression on the other energy tabs (Vue d'ensemble, Consommations, Approvisionnements incl. 7 fuel subtabs, Anomalies), Journal & trajets (/livre/history/pro) and Dashboard — no blocking console errors. Backend tests skipped as instructed.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Rapprochement — colonne Véhicule", "issues": ["Le libellé véhicule affiche r.model qui, pour les véhicules Navixy, contient des identifiants techniques ('telfmb003_fmc003', 'iosnavixytracker_xgps', 'navixymobile_xgps') peu lisibles pour un utilisateur métier ; la plaque (ex: '1-Enyaq 01 Bern') serait plus parlante en libellé principal (la plaque est d'ailleurs masquée en mobile, donc sur 390px l'utilisateur ne voit que l'identifiant technique)."]},
+      {"screen": "Rapprochement — filtres", "issues": ["Pas de bouton 'Réinitialiser les filtres' : avec 7 filtres il faut repasser chacun sur 'Tous' manuellement (confort, non bloquant)."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optionnel (cosmétique) : privilégier la plaque comme libellé principal dans la colonne Véhicule (ou 'plaque — modèle') afin d'éviter d'afficher des identifiants de tracker; important en mobile où la colonne Plaque est masquée.",
+    "Optionnel : ajouter un bouton de réinitialisation des filtres (data-testid recon-filter-reset)."
+  ],
+  "critical_code_review_comments": [
+    "EnergyReconciliationPage.jsx: le filtre 'Groupe' est déduit du premier token de la plaque ((r.plate||'').split(' ')[0]) → produit des pseudo-groupes hétérogènes ('GE', '1-Enyaq', 'KAIO'). À remplacer par le vrai champ groupe du véhicule quand il existe, sinon renommer le filtre pour éviter la confusion métier.",
+    "EnergyReconciliationPage.jsx: FilterSelect est déclaré à l'intérieur du composant → nouveau type de composant à chaque render (remount des Select). À extraire hors du composant pour éviter des re-montages inutiles.",
+    "Erreurs console 401 observées juste après le login (appels /api émis avant que le token soit posé) — bruit pré-existant, non bloquant, à nettoyer (attendre l'auth avant les fetch)."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "not tested (per request)", "frontend": "100% (9/9 scenarios PASS)" },
+  "seed_data_creation": "Aucune donnée créée ni supprimée (lecture seule).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@logitrak.ch/admin123, manager@logitrak.ch/manager123, chauffeur@logitrak.ch/chauffeur123",
+  "context_for_next_testing_agent": "Écran Rapprochement (/livre/energie/rapprochement) validé en fixture: KPI 0/0/1/17, 18 lignes, 6 non mappés, Mesuré×6, Estimé×3, Aucun×9. Le véhicule INDICATIF est '1-Enyaq 01 Bern' (11 tx, 592.00 L, écart +495.90 L / +83.8 %). Note: les Select shadcn nécessitent 200-300ms après ouverture; les options se ciblent via get_by_role('option', name=..., exact=True). Chemin Journal & trajets = /livre/history/pro (pas /livre/trajets).",
+  "rca_of_the_issue": "Aucun défaut fonctionnel détecté sur l'écran; les deux points relevés sont cosmétiques/confort et un point de dette technique sur le filtre Groupe déduit de la plaque."
+}
