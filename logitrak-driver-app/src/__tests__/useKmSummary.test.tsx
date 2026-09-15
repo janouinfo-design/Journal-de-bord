@@ -83,4 +83,31 @@ describe('useKmSummary', () => {
     expect(api.getKmSummary).toHaveBeenCalledTimes(2);
     tree.unmount();
   });
+
+  it('changement de période (semaine) -> refetch avec la bonne période + label', async () => {
+    const refObj: { current: ReturnType<typeof useKmSummary> | null } = { current: null };
+    function Probe({ period }: { period: 'today' | 'week' | 'month' }) {
+      refObj.current = useKmSummary('vA', period);
+      return <Text>p</Text>;
+    }
+    (api.getKmSummary as jest.Mock).mockResolvedValue({
+      period: 'today', period_label: "Aujourd'hui", vehicle_id: 'vA',
+      pro_km: 12, private_km: 2, available: true,
+    });
+    let tree: any;
+    await act(async () => { tree = create(<Probe period="today" />); });
+    await flush();
+    expect(api.getKmSummary).toHaveBeenLastCalledWith('today');
+
+    (api.getKmSummary as jest.Mock).mockResolvedValue({
+      period: 'week', period_label: '14 – 20 septembre', vehicle_id: 'vA',
+      pro_km: 88, private_km: 9, available: true,
+    });
+    await act(async () => { tree.update(<Probe period="week" />); });
+    await flush();
+    expect(api.getKmSummary).toHaveBeenLastCalledWith('week');
+    expect(refObj.current?.proKm).toBe(88);
+    expect(refObj.current?.periodLabel).toBe('14 – 20 septembre');
+    tree.unmount();
+  });
 });

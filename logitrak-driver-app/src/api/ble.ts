@@ -151,8 +151,11 @@ export async function getMyVehicles(): Promise<Vehicle[]> {
   return vehicles;
 }
 
+export type KmPeriod = 'today' | 'week' | 'month';
+
 export type KmSummary = {
-  period: 'today' | 'month';
+  period: KmPeriod;
+  period_label?: string | null;
   vehicle_id: string | null;
   pro_km: number | null;
   private_km: number | null;
@@ -160,9 +163,25 @@ export type KmSummary = {
 };
 
 // Km Pro / Km Privé du véhicule actif (source backend uniquement — jamais calcul GPS mobile).
-export async function getKmSummary(period: 'today' | 'month' = 'today'): Promise<KmSummary> {
+export async function getKmSummary(period: KmPeriod = 'today'): Promise<KmSummary> {
   const { data } = await apiClient.get('/api/livre/driver/km-summary', { params: { period } });
   return data as KmSummary;
+}
+
+// Odomètre matériel du véhicule actif — lecture READ-ONLY exposée par le backend
+// (jamais d'appel Navixy direct depuis l'app). Honnête : null + status si indisponible.
+export type OdometerReading = {
+  vehicle_id: string | null;
+  vehicle_plate?: string | null;
+  odometer_km: number | null;
+  source?: string | null;
+  status: 'OK' | 'UNAVAILABLE' | string;
+  reason?: string | null;
+};
+
+export async function getVehicleOdometer(): Promise<OdometerReading> {
+  const { data } = await apiClient.get('/api/livre/driver/vehicle/odometer');
+  return data as OdometerReading;
 }
 
 export type SosResult = {
