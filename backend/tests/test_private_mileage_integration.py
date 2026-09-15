@@ -214,3 +214,85 @@ def test_private_command_refused_creates_no_session():
         assert coll.docs == []   # aucune session ouverte
     finally:
         _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "1"
+
+
+def _real_cmd_failed():
+    """Commande RÉELLE tentée mais NON appliquée (mode=REAL, applied=False)."""
+    async def _c(tid, cmd):
+        return {"applied": False, "mode": "REAL", "command": cmd, "error": "navixy_not_configured"}
+    return _c
+
+
+def test_real_but_applied_false_creates_no_session():
+    """FIX PR#6 : mode=REAL + applied=False (échec d'envoi) -> AUCUNE session ouverte."""
+    db = _db()
+    coll = db["private_mileage_session"]
+    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+         send_command=_real_cmd_failed(), confirm=_confirm("no"), read_odo_km=_odo([10000.0]),
+         tenant_id="default"))
+    assert [d for d in coll.docs if d["state"] == pmil.S_OPEN] == []
+
+
+def test_delayed_business_confirmation_uses_candidate_not_post_off_km():
+    """FIX PR#6 : PRIVATE -> BUSINESS envoyé SANS confirmation immédiate (PENDING).
+    Le candidat END (au OFF) = 10012.4. Puis des km PRO s'accumulent (odo=10050.0).
+    Confirmation BUSINESS asynchrone -> la session se ferme avec le CANDIDAT (12.4),
+    PAS avec la lecture tardive (qui donnerait 50.0). Aucun km post-OFF compté."""
+    db = _db()
+    coll = db["private_mileage_session"]
+
+    # PRIVATE accepté (REAL) mais NON confirmé -> PENDING + session OPEN (start=10000.0)
+    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+         send_command=_real_cmd(), confirm=_confirm("no"), read_odo_km=_odo([10000.0]),
+         tenant_id="default"))
+    # BUSINESS envoyé (REAL) mais NON confirmé -> candidat END capturé = 10012.4 (au OFF)
+    _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
+         send_command=_real_cmd(), confirm=_confirm("no"), read_odo_km=_odo([10012.4]),
+         tenant_id="default"))
+    sess = coll.docs[0]
+    assert sess["state"] == pmil.S_OPEN
+    assert sess["odometer_end_candidate_km"] == 10012.4
+
+    # Confirmation BUSINESS asynchrone plus tard ; l'odomètre a AVANCÉ (km PRO) -> 10050.0.
+    # close_session doit utiliser le CANDIDAT (12.4), pas la lecture tardive.
+    async def _confirm_business(tenant_id, tracker_id, requested, sent, vc, **kw):
+        return (pm.BUSINESS, pm.SRC_TELEMETRY)
+    import app.private_mode_engine as _eng
+    _orig = _eng.telemetry_confirm
+    _eng.telemetry_confirm = _confirm_business
+    try:
+        _run(pm.resolve_pending_confirmation(db, "vA", "default", read_odo_km=_odo([10050.0])))
+    finally:
+        _eng.telemetry_confirm = _orig
+
+    closed = [d for d in coll.docs if d["state"] == pmil.S_CLOSED]
+    assert len(closed) == 1
+    assert closed[0]["private_km"] == 12.4          # candidat, PAS 50.0
+    assert closed[0]["odometer_end_km"] == 10012.4
+    # private_ended_at = borne OFF (business_command_sent_at), pas l'heure de confirmation
+    assert closed[0]["private_ended_at"] == closed[0]["business_command_sent_at"]
+
+
+def test_stale_open_does_not_contaminate_next_private():
+    """FIX PR#6 : une OPEN résiduelle (BUSINESS jamais confirmé) ne bloque pas et ne
+    contamine pas la prochaine PRIVATE (nouveau odometer_start, ancienne résolue)."""
+    db = _db()
+    coll = db["private_mileage_session"]
+    # PRIVATE (start=10000) non confirmé -> OPEN, puis BUSINESS non confirmé -> candidat 10012.4
+    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+         send_command=_real_cmd(), confirm=_confirm("no"), read_odo_km=_odo([10000.0]),
+         tenant_id="default"))
+    _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
+         send_command=_real_cmd(), confirm=_confirm("no"), read_odo_km=_odo([10012.4]),
+         tenant_id="default"))
+    # Nouvelle PRIVATE (start=20000) : l'ancienne OPEN (avec candidat) doit être clôturée
+    # DEGRADED, une nouvelle OPEN créée avec start=20000 -> exactement 1 OPEN.
+    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+         send_command=_real_cmd(), confirm=_confirm("no"), read_odo_km=_odo([20000.0]),
+         tenant_id="default"))
+    opens = [d for d in coll.docs if d["state"] == pmil.S_OPEN]
+    assert len(opens) == 1
+    assert opens[0]["odometer_start_km"] == 20000.0            # jamais l'ancien 10000
+    # l'ancienne session a été clôturée DEGRADED via le candidat (12.4)
+    closed = [d for d in coll.docs if d["state"] == pmil.S_CLOSED]
+    assert any(c.get("private_km") == 12.4 and c.get("quality") == pmil.Q_DEGRADED for c in closed)

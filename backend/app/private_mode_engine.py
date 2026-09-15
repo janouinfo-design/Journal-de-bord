@@ -860,7 +860,8 @@ async def request_mode(
     # Symétrie : END candidat à l'envoi accepté du BUSINESS. Feature-flag OFF -> no-op total.
     # On ne dépend PAS de la confirmation pour préserver les km (le device peut passer en
     # privé sans confirmation backend fiable — prouvé terrain).
-    _cmd_effective = cmd_res.get("mode") == "REAL" or simulate_confirm_enabled()
+    _cmd_effective = (cmd_res.get("mode") == "REAL" and cmd_res.get("applied") is True) \
+        or simulate_confirm_enabled()
     try:
         from app import private_mileage as _pm
         if _cmd_effective and target_mode == PRIVATE:
@@ -1029,15 +1030,16 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
             new_doc["private_distance_km"] = _private_distance(
                 st.get("private_start_odometer_km"), odo_end)
         # Historise/ferme la session AVL16 au retour Business confirmé ASYNC (idempotent).
+        # FIX PR#6 : on NE relit PAS un odomètre plus récent (des km PRO ont pu s'accumuler
+        # entre le OFF et la confirmation asynchrone). close_session utilise le CANDIDAT END
+        # capturé au moment du OFF -> aucun km post-OFF dans private_km ; private_ended_at
+        # = borne OFF, pas l'heure de confirmation.
         if requested == BUSINESS:
             try:
                 from app import private_mileage as _pm
-                odo_end_c, _c = await _read_odometer_snapshot(
-                    db, tid, vehicle_id, tracker_id, read_odo_km)
                 await _pm.close_session(
                     db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
-                    odo_end=odo_end_c, end_source="AVL16",
-                    confirmation_source=source, degraded=False)
+                    end_source="AVL16", confirmation_source=source, degraded=False)
             except Exception:
                 logger.warning("private_mileage: fermeture (confirm async) ignorée", exc_info=False)
         # Nettoyage des coordonnées d'ancre (usage interne de confirmation uniquement).
@@ -1071,6 +1073,19 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
                               "result": "pending_timeout",
                               "transition_result": TRANSITION_TIMEOUT,
                               "previous_state": st.get("previous_state")})
+            # FIX PR#6 : un BUSINESS réellement envoyé mais non confirmé ne doit PAS laisser
+            # la session kilométrique OPEN indéfiniment (elle bloquerait la prochaine PRIVATE).
+            # Si un candidat END existe (OFF envoyé), on clôture en DEGRADED depuis ce candidat.
+            # On ne fabrique JAMAIS de confirmation de mode : l'état métier reste UNKNOWN.
+            if requested == BUSINESS:
+                try:
+                    from app import private_mileage as _pm
+                    await _pm.close_from_candidate(
+                        db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
+                        confirmation_source="PENDING_TIMEOUT_DEGRADED")
+                except Exception:
+                    logger.warning("private_mileage: clôture DEGRADED au timeout ignorée",
+                                   exc_info=False)
             return timed
     return st  # toujours PENDING
 

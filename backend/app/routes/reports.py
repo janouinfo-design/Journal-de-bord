@@ -133,7 +133,21 @@ async def tax_swiss_report(
     tenant_id = user.get("tenant_id") or "default"
     start_utc = datetime(year, 1, 1, tzinfo=timezone.utc)
     end_utc = datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
-    scope_vids = sorted({t.get("vehicle_id") for t in trips if t.get("vehicle_id")})
+
+    # SCOPE des véhicules : trajets présents (PRO/PRIVÉ GPS) UNION véhicules ayant une
+    # session AVL16 CLOSED dans la période (FIX PR#6 : un véhicule privé AVL16 SANS trip
+    # GPS dans la fenêtre doit quand même entrer dans l'agrégation privée).
+    scope_vids = {t.get("vehicle_id") for t in trips if t.get("vehicle_id")}
+    sess_q = {"tenant_id": tenant_id, "state": _pm.S_CLOSED,
+              "private_ended_at": {"$gte": start_utc.isoformat(), "$lte": end_utc.isoformat()}}
+    if driver_id:
+        sess_q["driver_id"] = driver_id
+    if vehicle_id:
+        sess_q["vehicle_id"] = vehicle_id
+    async for s in db[_pm.COLLECTION].find(sess_q, {"_id": 0, "vehicle_id": 1}):
+        if s.get("vehicle_id"):
+            scope_vids.add(s["vehicle_id"])
+    scope_vids = sorted(scope_vids)
 
     async def _gps_personal_for_vehicle(vid, s_utc, e_utc):
         qq = dict(q)
@@ -146,23 +160,41 @@ async def tax_swiss_report(
         db, tenant_id=tenant_id, vehicle_ids=scope_vids,
         start_utc=start_utc, end_utc=end_utc,
         gps_fallback_km_for_vehicle=_gps_personal_for_vehicle)
-    perso_km = priv_agg["private_km"] if priv_agg["private_km"] is not None else 0.0
+    # FIX PR#6 : ne JAMAIS convertir None -> 0. Un privé indisponible reste indisponible
+    # (pas de faux 0 km / 0 %). Le générateur PDF gère l'état "Indisponible".
+    perso_km = priv_agg["private_km"]                 # peut être None
     private_km_source = priv_agg["private_km_source"]
+    perso_available = isinstance(perso_km, (int, float))
 
-    total_km = pro_km + perso_km
     pro_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "professional")
     perso_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "personal")
-    stats = {
-        "pro_km": round(pro_km, 1),
-        "perso_km": round(perso_km, 1),
-        "total_km": round(total_km, 1),
-        "pct_pro": round(pro_km / total_km * 100, 1) if total_km else 0,
-        "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
-        "pro_fuel": round(pro_fuel, 2),
-        "perso_fuel": round(perso_fuel, 2),
-        # Traçabilité interne/audit (non affichée en gros dans le PDF) :
-        "private_km_source": private_km_source,
-    }
+
+    if perso_available:
+        total_km = pro_km + perso_km
+        stats = {
+            "pro_km": round(pro_km, 1),
+            "perso_km": round(perso_km, 1),
+            "total_km": round(total_km, 1),
+            "pct_pro": round(pro_km / total_km * 100, 1) if total_km else 0,
+            "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
+            "pro_fuel": round(pro_fuel, 2),
+            "perso_fuel": round(perso_fuel, 2),
+            "perso_available": True,
+            "private_km_source": private_km_source,   # traçabilité interne/audit
+        }
+    else:
+        # Privé indisponible : on n'invente NI km NI % ; pro reste factuel.
+        stats = {
+            "pro_km": round(pro_km, 1),
+            "perso_km": None,
+            "total_km": None,
+            "pct_pro": None,
+            "pct_perso": None,
+            "pro_fuel": round(pro_fuel, 2),
+            "perso_fuel": round(perso_fuel, 2),
+            "perso_available": False,
+            "private_km_source": private_km_source,   # UNAVAILABLE
+        }
 
     owner = ""
     if driver_id:
