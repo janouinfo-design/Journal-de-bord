@@ -103,6 +103,13 @@ async def on_startup():
     await raw.vehicle_documents.create_index([("tenant_id", 1), ("id", 1)], unique=True)
     await raw.vehicle_inspections.create_index([("tenant_id", 1), ("vehicle_id", 1), ("created_at", -1)])
     await raw.vehicle_inspections.create_index([("tenant_id", 1), ("id", 1)], unique=True)
+    # Sessions kilométriques privées AVL16 (index dont l'UNIQUE PARTIEL {state:OPEN}
+    # garantit l'idempotence d'ouverture même sous concurrence).
+    try:
+        from app.private_mileage import ensure_indexes as _ensure_pm_indexes
+        await _ensure_pm_indexes(raw)
+    except Exception as _e:
+        logger.warning("private_mileage indexes non créés au démarrage: %s", _e)
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
     await apply_rules_to_all(db)
