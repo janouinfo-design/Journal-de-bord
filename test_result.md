@@ -19,6 +19,9 @@ backend:
     status_history:
       - working: true
         agent: "testing"
+        comment: "PR #6 REVIEW FIXES VERIFIED - All 130 tests PASSED (30 fix-specific + 100 non-regression). CONTEXT: Verified 6 reported issues fixed for AVL16 PRIVATE-km feature (software-only; feature-flag PRIVATE_KM_SOURCE_AVL16 default '0' OFF; all device/odometer hooks MOCKED; no real Navixy/device commands; no .env prod changes). FIX-SPECIFIC TESTS (30/30 PASSED in 2.03s): test_private_mileage.py (9 tests) ✓ including test_all_closed_none_is_unavailable_not_zero (null != 0 fix) ✓, test_crossing_cutover_avl_side_unavailable_is_failclosed (fail-closed partial data fix) ✓. test_private_mileage_sessions.py (10 tests) ✓ including test_reopen_supersedes_stale_open_single_open_no_start_contamination (stale OPEN resolved before new session) ✓, test_concurrent_open_dupkey_is_idempotent_single_open (DB-level idempotency) ✓. test_private_mileage_integration.py (5 tests) ✓ including test_delayed_business_confirmation_uses_candidate_not_post_off_km (BUSINESS END uses candidate captured at OFF, not late re-read; private_ended_at = business_command_sent_at, NOT confirmation time; no post-OFF professional km counted as private) ✓, test_real_but_applied_false_creates_no_session (mode=REAL + applied=False -> no session) ✓, test_stale_open_does_not_contaminate_next_private (residual OPEN resolved with DEGRADED close, new PRIVATE opens with correct start, exactly 1 OPEN) ✓. test_reports_private_km_avl16.py (6 tests) ✓ including test_scope_fail_closed_when_one_vehicle_unavailable (ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE/null) ✓, test_scope_crossing_cutover_mixed_all_measurable (720 km total with BOTH GPS-before AND AVL16-after measurable) ✓. NON-REGRESSION TESTS (100/100 PASSED in 9.45s): test_reports_private_redaction.py (6) ✓, test_private_mode_phase2.py (26) ✓, test_fmc130_prive_pro_ux.py (8) ✓, test_fmc130_business_recovery.py (7) ✓, test_fmc130_lkp_fixes.py (11) ✓, test_fmc130_resolve_pending.py (7) ✓, test_fmc130_confirmation_fix.py (17) ✓, test_fmc130_lkp_no_samples.py (5) ✓, test_private_mode_gate.py (14) ✓. BUSINESS recovery + private redaction still pass. BACKEND SERVICE: RUNNING (pid 6446, uptime 0:01:47). FIXES VERIFIED: (1) BUSINESS END uses END CANDIDATE captured at privatemode OFF (resolve_pending_confirmation no longer re-reads odometer; close_session uses stored candidate as authoritative END; private_ended_at = business_command_sent_at, never confirmation time) ✓, (2) close_from_candidate wired: open_session resolves residual OPEN before creating new one (candidate -> DEGRADED close; else ABANDONED reason SUPERSEDED_NEW_PRIVATE); resolve_pending_confirmation BUSINESS pending-timeout calls close_from_candidate (DEGRADED), state stays UNKNOWN (never fabricated confirmation) ✓, (3) null != 0: _sum_avl16_km returns number ONLY if >=1 CLOSED session has NUMERIC private_km; all-None CLOSED -> None (UNAVAILABLE), never 0.0/AVL16; aggregate_private_km gates on avl is not None ✓, (4) Fail-closed partial data: aggregate_private_km MIXED branch requires BOTH GPS-before AND AVL16-after measurable; if AVL side unavailable -> UNAVAILABLE (null), no partial total; aggregate_private_km_for_scope: if ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE (null) ✓, (5) Tax report scope includes AVL16-only vehicles (vehicles with CLOSED sessions in period, even without GPS trips) via union with private_mileage_session; None NEVER converted to 0.0 (perso_km/pct stay None → PDF renders 'Indisponible'/'—'); reports.py + reports.swiss_tax_report_pdf None-safe ✓, (6) Session opens only if command really sent: _cmd_effective requires cmd_res.mode=='REAL' AND cmd_res.applied is True (or simulate); mode=REAL+applied=False -> no session, no END candidate ✓. TOTAL: 130/130 PASSED (100%). NO ISSUES FOUND."
+      - working: true
+        agent: "testing"
         comment: "PRIVATE KM AVL16 FEATURE VERIFIED - All 112 tests PASSED (18 new + 94 regression). NEW FEATURE: Private km computed from hardware AVL16 odometer (not GPS), because in PRIVATE mode FMC130 masks GPS but AVL16 keeps increasing. Software-only, NO device commands, NO real Navixy calls, NO .env prod changes. Feature-flag PRIVATE_KM_SOURCE_AVL16 (default '0' = OFF). All device/odometer hooks MOCKED in tests. NEW MODULE (backend/app/private_mileage.py): collection private_mileage_session (append-only history), states OPEN/CLOSED/ABANDONED. open_session (Q4b: START captured when PRIVATE command accepted/sent), capture_end_candidate (END candidate at BUSINESS send), close_session (idempotent), close_from_candidate (DEGRADED), abandon on tracker change. private_distance() fail-closed (negative delta -> None), null != 0. aggregate_private_km() with CUTOVER logic: flag OFF -> legacy GPS; flag ON -> disjoint intervals: GPS before cutover + AVL16 after cutover; source enum AVL16 | GPS_FALLBACK | MIXED_TRANSITION | UNAVAILABLE; post-cutover with no AVL16 session -> UNAVAILABLE (null), never silent GPS. ensure_indexes(): UNIQUE PARTIAL index {state:'OPEN'} on (tenant_id,vehicle_id,tracker_id) => DB-level idempotency (two concurrent PRIVATE -> 1 OPEN). CHANGES: private_mode_engine.py: request_mode() opens session on PRIVATE accepted (REAL/simulate) and captures END candidate + closes on BUSINESS confirmed; resolve_pending_confirmation() closes session on async BUSINESS confirm. All wrapped so flag OFF = no-op and exceptions never block mode switch. routes/identification.py: GET /driver/km-summary now computes private_km via aggregate_private_km (with GPS-fallback closure) and returns private_km_source. pro_km unchanged. Periods already in Europe/Zurich; added 'week' earlier. server.py: calls ensure_indexes at startup. TEST RESULTS: (1) NEW AVL16 UNIT + INTEGRATION SUITES: 18/18 PASSED in 0.60s - test_private_mileage.py (7 tests): flag OFF -> GPS_FALLBACK ✓, no-cutover+sessions -> AVL16 ✓, entirely pre-cutover -> GPS_FALLBACK ✓, entirely post-cutover with session -> AVL16, WITHOUT session -> UNAVAILABLE (private_km None, NOT GPS) ✓, crossing cutover -> MIXED_TRANSITION = GPS(before)+AVL16(after) disjoint (e.g. 350+220=570) ✓, private_distance: 10000.0->10012.4 = 12.4; negative delta -> None; None inputs -> None ✓, finalize_fields fail-closed ✓. test_private_mileage_sessions.py (9 tests): open->close computes 12.4 ✓, DOUBLE OPEN idempotent (exactly 1 OPEN, 2nd returns None via simulated DuplicateKeyError) ✓, DOUBLE CLOSE only once (no 2nd private_km) ✓, negative delta -> None + reason NEGATIVE_DELTA ✓, end missing -> UNAVAILABLE ✓, tracker change abandons previous OPEN ✓, close_from_candidate -> DEGRADED ✓, flag OFF -> no session created ✓, unfinished session stays OPEN and is NOT counted ✓. test_private_mileage_integration.py (2 tests): PRIVATE accepted (REAL) opens session with odometer_start=10000.0; BUSINESS confirmed closes it with private_km=12.4, quality OK ✓, PRIVATE with DEVICE_WRITE=0 (refused before send) creates NO session ✓. (2) NON-REGRESSION SUITE: 94/94 PASSED in 9.00s - test_private_mode_phase2.py (26 tests) ✓, test_fmc130_prive_pro_ux.py (8 tests) ✓, test_fmc130_business_recovery.py (7 tests) ✓, test_fmc130_lkp_fixes.py (11 tests) ✓, test_fmc130_resolve_pending.py (7 tests) ✓, test_fmc130_confirmation_fix.py (17 tests) ✓, test_fmc130_lkp_no_samples.py (5 tests) ✓, test_private_mode_gate.py (14 tests) ✓. All BUSINESS recovery fix tests still pass, no PRIVATE/BUSINESS regression. (3) BACKEND SERVICE: RUNNING (supervisor, uptime 0:01:10, no errors in logs). VERIFICATION CONSTRAINTS: NO code modifications (verification only) ✓, ignored unrelated integration tests with HTTP 401 login (out of scope) ✓. TOTAL: 112/112 PASSED (100%). NO ISSUES FOUND."
   - task: "FMC130 BUSINESS confirmation bug fix - software-only unit tests"
     implemented: true
@@ -1345,4 +1348,146 @@ agent_communication:
       
       CONCLUSION:
       Security hardening correctly implemented. Dedicated fail-closed allowlist gate (ODOMETER_CALIBRATION_PILOT_TENANTS, ODOMETER_CALIBRATION_PILOT_TRACKERS) independent from Private Mode. Gate requires ALL conditions (env + write + tenant + tracker). When allowlist ABSENT → fail-closed (never "all allowed"). Gate checked BEFORE any device command. Anti-false-delta protection intact (calibration jumps never counted as distance). All 27 tests pass (original T1-T14 + NEW gate tests T15-T24 + env test). Wider regression 100 tests pass. NO real device commands sent. NO ISSUES FOUND.
+  - agent: "testing"
+    message: |
+      PR #6 REVIEW FIXES VERIFICATION COMPLETE (2026-09-15)
+      
+      CONTEXT: Verified 6 reported issues fixed for AVL16 PRIVATE-km feature (software-only; feature-flag PRIVATE_KM_SOURCE_AVL16 default "0" OFF; all device/odometer hooks MOCKED; no real Navixy/device commands; no .env prod changes).
+      
+      FIXES APPLIED (as per PR #6):
+      1. BUSINESS END uses the END CANDIDATE captured at privatemode OFF (not a late odometer re-read). private_mode_engine.resolve_pending_confirmation no longer re-reads odometer for session close; private_mileage.close_session now uses stored candidate as authoritative END and sets private_ended_at to OFF boundary (business_command_sent_at), never confirmation time. => no post-OFF (professional) km counted as private.
+      2. close_from_candidate is now wired: (a) open_session resolves residual OPEN before creating new one (with candidate -> DEGRADED close; else ABANDONED reason SUPERSEDED_NEW_PRIVATE) so stale OPEN never blocks/contaminates next PRIVATE; (b) resolve_pending_confirmation BUSINESS pending-timeout path calls close_from_candidate (DEGRADED) — state stays UNKNOWN (never fabricated confirmation).
+      3. null != 0: _sum_avl16_km returns number ONLY if >=1 CLOSED session has NUMERIC private_km; all-None CLOSED sessions -> None (UNAVAILABLE), never 0.0/AVL16. aggregate_private_km no-cutover & post-cutover branches now gate on avl is not None (not session count).
+      4. Fail-closed partial data: aggregate_private_km MIXED branch requires BOTH GPS-before AND AVL16-after measurable; if AVL side unavailable -> UNAVAILABLE (null), no partial total. aggregate_private_km_for_scope: if ANY vehicle in scope is UNAVAILABLE -> whole scope UNAVAILABLE (null) (saw_unavail now used).
+      5. Tax report scope includes AVL16-only vehicles (vehicles with CLOSED sessions in period, even without GPS trips) via union with private_mileage_session; None is NEVER converted to 0.0 (perso_km/pct stay None → PDF renders "Indisponible"/"—"). reports.py + reports.swiss_tax_report_pdf made None-safe.
+      6. Session opens only if command really sent: _cmd_effective requires cmd_res.mode=="REAL" AND cmd_res.applied is True (or simulate). mode=REAL+applied=False -> no session, no END candidate.
+      
+      TEST RESULTS (pytest 9.0.3, working dir /app/backend, python -m pytest):
+      
+      ✅ (1) FIX-SPECIFIC SUITES: 30/30 PASSED in 2.03s
+      
+      test_private_mileage.py (9 tests):
+      ✅ test_flag_off_uses_gps_legacy
+      ✅ test_no_cutover_uses_avl16_when_sessions_exist
+      ✅ test_period_entirely_pre_cutover_is_gps
+      ✅ test_period_entirely_post_cutover_avl16_or_unavailable
+      ✅ test_period_crossing_cutover_is_mixed_disjoint
+      ✅ test_private_distance_helpers
+      ✅ test_finalize_fields_fail_closed
+      ✅ test_all_closed_none_is_unavailable_not_zero (FIX #3: null != 0)
+      ✅ test_crossing_cutover_avl_side_unavailable_is_failclosed (FIX #4: fail-closed partial data)
+      
+      test_private_mileage_sessions.py (10 tests):
+      ✅ test_open_then_close_computes_distance
+      ✅ test_reopen_supersedes_stale_open_single_open_no_start_contamination (FIX #2: stale OPEN resolved)
+      ✅ test_concurrent_open_dupkey_is_idempotent_single_open (FIX #2: DB-level idempotency)
+      ✅ test_double_close_only_once
+      ✅ test_negative_delta_refused
+      ✅ test_end_missing_unavailable
+      ✅ test_tracker_change_abandons_previous_open
+      ✅ test_end_candidate_then_close_from_candidate_degraded
+      ✅ test_flag_off_no_session_created
+      ✅ test_unfinished_session_stays_open_not_counted
+      
+      test_private_mileage_integration.py (5 tests):
+      ✅ test_private_then_business_creates_and_closes_session_1024
+      ✅ test_private_command_refused_creates_no_session
+      ✅ test_real_but_applied_false_creates_no_session (FIX #6: mode=REAL + applied=False -> no session)
+      ✅ test_delayed_business_confirmation_uses_candidate_not_post_off_km (FIX #1: BUSINESS END uses candidate, private_ended_at = business_command_sent_at)
+      ✅ test_stale_open_does_not_contaminate_next_private (FIX #2: residual OPEN resolved with DEGRADED, new PRIVATE opens with correct start, exactly 1 OPEN)
+      
+      test_reports_private_km_avl16.py (6 tests):
+      ✅ test_flag_off_scope_equals_gps_legacy_sum
+      ✅ test_scope_post_cutover_all_avl16
+      ✅ test_scope_post_cutover_no_session_is_unavailable_not_gps
+      ✅ test_scope_crossing_cutover_mixed_all_measurable (FIX #4: 720 km total with BOTH GPS-before AND AVL16-after measurable)
+      ✅ test_scope_fail_closed_when_one_vehicle_unavailable (FIX #4: ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE/null)
+      ✅ test_pct_perso_uses_aggregated_private_km
+      
+      ✅ (2) NON-REGRESSION SUITES: 100/100 PASSED in 9.45s
+      
+      test_reports_private_redaction.py: 6 PASSED ✓
+      test_private_mode_phase2.py: 26 PASSED ✓
+      test_fmc130_prive_pro_ux.py: 8 PASSED ✓
+      test_fmc130_business_recovery.py: 7 PASSED ✓ (BUSINESS recovery still works)
+      test_fmc130_lkp_fixes.py: 11 PASSED ✓
+      test_fmc130_resolve_pending.py: 7 PASSED ✓
+      test_fmc130_confirmation_fix.py: 17 PASSED ✓
+      test_fmc130_lkp_no_samples.py: 5 PASSED ✓
+      test_private_mode_gate.py: 14 PASSED ✓
+      
+      ✅ (3) BACKEND SERVICE: RUNNING (pid 6446, uptime 0:01:47)
+      
+      PASS/FAIL TABLE:
+      | Test Suite                              | Expected | Actual | Status |
+      |-----------------------------------------|----------|--------|--------|
+      | test_private_mileage.py                 | ~9       | 9      | ✅ PASS |
+      | test_private_mileage_sessions.py        | ~10      | 10     | ✅ PASS |
+      | test_private_mileage_integration.py     | ~5       | 5      | ✅ PASS |
+      | test_reports_private_km_avl16.py        | ~6       | 6      | ✅ PASS |
+      | **FIX-SPECIFIC TOTAL**                  | **~30**  | **30** | ✅ PASS |
+      | test_reports_private_redaction.py       | 6        | 6      | ✅ PASS |
+      | test_private_mode_phase2.py             | 26       | 26     | ✅ PASS |
+      | test_fmc130_prive_pro_ux.py             | 8        | 8      | ✅ PASS |
+      | test_fmc130_business_recovery.py        | 7        | 7      | ✅ PASS |
+      | test_fmc130_lkp_fixes.py                | 11       | 11     | ✅ PASS |
+      | test_fmc130_resolve_pending.py          | 7        | 7      | ✅ PASS |
+      | test_fmc130_confirmation_fix.py         | 17       | 17     | ✅ PASS |
+      | test_fmc130_lkp_no_samples.py           | 5        | 5      | ✅ PASS |
+      | test_private_mode_gate.py               | 14       | 14     | ✅ PASS |
+      | **NON-REGRESSION TOTAL**                | **100**  | **100**| ✅ PASS |
+      | **GRAND TOTAL**                         | **130**  | **130**| ✅ PASS |
+      
+      SPECIFIC FIX VERIFICATION:
+      
+      ✅ FIX #1 - BUSINESS END uses candidate (not late re-read):
+         - test_delayed_business_confirmation_uses_candidate_not_post_off_km PASSED
+         - After OFF candidate=10012.4, odometer later advances to 10050.0 (pro km)
+         - Async BUSINESS confirm closes with private_km=12.4 (candidate), NOT 50.0
+         - private_ended_at == business_command_sent_at (OFF boundary, not confirmation time)
+         - No post-OFF professional km counted as private ✓
+      
+      ✅ FIX #2 - close_from_candidate wired:
+         - test_stale_open_does_not_contaminate_next_private PASSED
+         - Residual OPEN resolved (DEGRADED 12.4), new PRIVATE opens with start=20000 (not old 10000)
+         - Exactly 1 OPEN session (stale never blocks/contaminates) ✓
+         - test_reopen_supersedes_stale_open_single_open_no_start_contamination PASSED
+         - test_concurrent_open_dupkey_is_idempotent_single_open PASSED (DB-level idempotency)
+      
+      ✅ FIX #3 - null != 0:
+         - test_all_closed_none_is_unavailable_not_zero PASSED
+         - _sum_avl16_km returns number ONLY if >=1 CLOSED session has NUMERIC private_km
+         - All-None CLOSED sessions -> None (UNAVAILABLE), never 0.0/AVL16 ✓
+         - aggregate_private_km gates on avl is not None (not session count) ✓
+      
+      ✅ FIX #4 - Fail-closed partial data:
+         - test_crossing_cutover_avl_side_unavailable_is_failclosed PASSED
+         - aggregate_private_km MIXED branch requires BOTH GPS-before AND AVL16-after measurable
+         - If AVL side unavailable -> UNAVAILABLE (null), no partial total ✓
+         - test_scope_fail_closed_when_one_vehicle_unavailable PASSED
+         - aggregate_private_km_for_scope: if ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE (null) ✓
+         - test_scope_crossing_cutover_mixed_all_measurable PASSED (720 km with BOTH sides measurable)
+      
+      ✅ FIX #5 - Tax report scope includes AVL16-only vehicles:
+         - test_reports_private_km_avl16.py all 6 tests PASSED
+         - Vehicles with CLOSED sessions in period included (even without GPS trips)
+         - None NEVER converted to 0.0 (perso_km/pct stay None → PDF renders "Indisponible"/"—") ✓
+         - reports.py + reports.swiss_tax_report_pdf None-safe ✓
+      
+      ✅ FIX #6 - Session opens only if command really sent:
+         - test_real_but_applied_false_creates_no_session PASSED
+         - _cmd_effective requires cmd_res.mode=="REAL" AND cmd_res.applied is True (or simulate)
+         - mode=REAL + applied=False -> no session, no END candidate ✓
+      
+      VERIFICATION CONSTRAINTS:
+      ✅ NO code modifications (verification only)
+      ✅ Ignored unrelated integration tests with HTTP 401 login (out of scope)
+      ✅ All device/odometer hooks MOCKED in tests
+      ✅ NO real Navixy calls
+      ✅ NO device commands sent
+      ✅ NO .env prod changes
+      ✅ Feature flag default OFF (no behavior change)
+      
+      CONCLUSION:
+      All 6 reported issues in PR #6 are correctly fixed and verified. All 130 tests passed (30 fix-specific + 100 non-regression). BUSINESS recovery + private redaction still pass. Backend service running cleanly. NO FAILURES. NO REGRESSIONS. NO ISSUES FOUND.
 
