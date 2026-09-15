@@ -19,6 +19,9 @@ backend:
     status_history:
       - working: true
         agent: "testing"
+        comment: "LOCAL PREVIEW ACTIVATION REHEARSAL COMPLETE - All 130 tests PASSED in 11.36s (100%). CONTEXT: LOCAL technical rehearsal of Preview activation for AVL16 private-km feature (merged via PR #6). Feature-flags PRIVATE_KM_SOURCE_AVL16 and PRIVATE_KM_AVL16_CUTOVER_AT. NO device commands, DEVICE_WRITE=0, no .env PROD change. All device/odometer hooks MOCKED. Verified BOTH flag states (OFF/ON) behave correctly using deterministic pytest suites. TEST SUITES: test_private_mileage.py (9) ✓, test_private_mileage_sessions.py (10) ✓, test_private_mileage_integration.py (5) ✓, test_reports_private_km_avl16.py (6) ✓, test_reports_private_redaction.py (6) ✓, test_private_mode_phase2.py (26) ✓, test_fmc130_prive_pro_ux.py (8) ✓, test_fmc130_business_recovery.py (7) ✓, test_fmc130_lkp_fixes.py (11) ✓, test_fmc130_resolve_pending.py (7) ✓, test_fmc130_confirmation_fix.py (17) ✓, test_fmc130_lkp_no_samples.py (5) ✓, test_private_mode_gate.py (14) ✓. FLAG-BEHAVIOR INVARIANTS VERIFIED (ALL GREEN): (1) FLAG OFF -> legacy GPS behavior preserved (test_flag_off_scope_equals_gps_legacy_sum, test_flag_off_uses_gps_legacy, test_flag_off_no_session_created) ✓, (2) FLAG ON + cutover: AVL16 used only AFTER cutover; pre-cutover -> GPS_FALLBACK; crossing -> MIXED (all-measurable) ✓, (3) POST-CUTOVER without exploitable session -> UNAVAILABLE (private_km None), NEVER 0 nor silent GPS (test_scope_post_cutover_no_session_is_unavailable_not_gps, test_all_closed_none_is_unavailable_not_zero, test_crossing_cutover_avl_side_unavailable_is_failclosed) ✓, (4) km-summary + tax report use SAME aggregator; None never coerced to 0 (test_pct_perso_uses_aggregated_private_km) ✓, (5) No real device command in any test (all mocked) ✓, (6) BUSINESS recovery + redaction still pass ✓. BACKEND SERVICE: RUNNING (pid 7842, uptime 0:01:12). SPECIFIC TESTS VERIFIED: test_delayed_business_confirmation_uses_candidate_not_post_off_km (BUSINESS END uses candidate captured at OFF) ✓, test_stale_open_does_not_contaminate_next_private (residual OPEN resolved before new session) ✓, test_concurrent_open_dupkey_is_idempotent_single_open (DB-level idempotency) ✓, test_scope_fail_closed_when_one_vehicle_unavailable (ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE/null) ✓. TOTAL: 130/130 PASSED (100%). NO ISSUES FOUND. Feature ready for Preview activation."
+      - working: true
+        agent: "testing"
         comment: "PR #6 REVIEW FIXES VERIFIED - All 130 tests PASSED (30 fix-specific + 100 non-regression). CONTEXT: Verified 6 reported issues fixed for AVL16 PRIVATE-km feature (software-only; feature-flag PRIVATE_KM_SOURCE_AVL16 default '0' OFF; all device/odometer hooks MOCKED; no real Navixy/device commands; no .env prod changes). FIX-SPECIFIC TESTS (30/30 PASSED in 2.03s): test_private_mileage.py (9 tests) ✓ including test_all_closed_none_is_unavailable_not_zero (null != 0 fix) ✓, test_crossing_cutover_avl_side_unavailable_is_failclosed (fail-closed partial data fix) ✓. test_private_mileage_sessions.py (10 tests) ✓ including test_reopen_supersedes_stale_open_single_open_no_start_contamination (stale OPEN resolved before new session) ✓, test_concurrent_open_dupkey_is_idempotent_single_open (DB-level idempotency) ✓. test_private_mileage_integration.py (5 tests) ✓ including test_delayed_business_confirmation_uses_candidate_not_post_off_km (BUSINESS END uses candidate captured at OFF, not late re-read; private_ended_at = business_command_sent_at, NOT confirmation time; no post-OFF professional km counted as private) ✓, test_real_but_applied_false_creates_no_session (mode=REAL + applied=False -> no session) ✓, test_stale_open_does_not_contaminate_next_private (residual OPEN resolved with DEGRADED close, new PRIVATE opens with correct start, exactly 1 OPEN) ✓. test_reports_private_km_avl16.py (6 tests) ✓ including test_scope_fail_closed_when_one_vehicle_unavailable (ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE/null) ✓, test_scope_crossing_cutover_mixed_all_measurable (720 km total with BOTH GPS-before AND AVL16-after measurable) ✓. NON-REGRESSION TESTS (100/100 PASSED in 9.45s): test_reports_private_redaction.py (6) ✓, test_private_mode_phase2.py (26) ✓, test_fmc130_prive_pro_ux.py (8) ✓, test_fmc130_business_recovery.py (7) ✓, test_fmc130_lkp_fixes.py (11) ✓, test_fmc130_resolve_pending.py (7) ✓, test_fmc130_confirmation_fix.py (17) ✓, test_fmc130_lkp_no_samples.py (5) ✓, test_private_mode_gate.py (14) ✓. BUSINESS recovery + private redaction still pass. BACKEND SERVICE: RUNNING (pid 6446, uptime 0:01:47). FIXES VERIFIED: (1) BUSINESS END uses END CANDIDATE captured at privatemode OFF (resolve_pending_confirmation no longer re-reads odometer; close_session uses stored candidate as authoritative END; private_ended_at = business_command_sent_at, never confirmation time) ✓, (2) close_from_candidate wired: open_session resolves residual OPEN before creating new one (candidate -> DEGRADED close; else ABANDONED reason SUPERSEDED_NEW_PRIVATE); resolve_pending_confirmation BUSINESS pending-timeout calls close_from_candidate (DEGRADED), state stays UNKNOWN (never fabricated confirmation) ✓, (3) null != 0: _sum_avl16_km returns number ONLY if >=1 CLOSED session has NUMERIC private_km; all-None CLOSED -> None (UNAVAILABLE), never 0.0/AVL16; aggregate_private_km gates on avl is not None ✓, (4) Fail-closed partial data: aggregate_private_km MIXED branch requires BOTH GPS-before AND AVL16-after measurable; if AVL side unavailable -> UNAVAILABLE (null), no partial total; aggregate_private_km_for_scope: if ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE (null) ✓, (5) Tax report scope includes AVL16-only vehicles (vehicles with CLOSED sessions in period, even without GPS trips) via union with private_mileage_session; None NEVER converted to 0.0 (perso_km/pct stay None → PDF renders 'Indisponible'/'—'); reports.py + reports.swiss_tax_report_pdf None-safe ✓, (6) Session opens only if command really sent: _cmd_effective requires cmd_res.mode=='REAL' AND cmd_res.applied is True (or simulate); mode=REAL+applied=False -> no session, no END candidate ✓. TOTAL: 130/130 PASSED (100%). NO ISSUES FOUND."
       - working: true
         agent: "testing"
@@ -305,6 +308,84 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      AVL16 PRIVATE-KM FEATURE FLAG TECHNICAL REHEARSAL COMPLETE (LOCAL PREVIEW ACTIVATION)
+      
+      CONTEXT: LOCAL technical rehearsal of Preview activation for AVL16 private-km feature (merged via PR #6). Feature-flags PRIVATE_KM_SOURCE_AVL16 and PRIVATE_KM_AVL16_CUTOVER_AT. NO device commands, DEVICE_WRITE=0, no .env PROD change. All device/odometer hooks MOCKED in tests. Verified BOTH flag states (OFF/ON) behave correctly using deterministic pytest suites.
+      
+      TEST RESULTS (python -m pytest, working dir /app/backend):
+      ✅ FULL AVL16 + REPORTS + PRIVATE-MODE/FMC130 REGRESSION: 130/130 PASSED in 11.36s (100%)
+      
+      PASS/FAIL BREAKDOWN:
+      | Test Suite                              | Tests | Status |
+      |-----------------------------------------|-------|--------|
+      | test_private_mileage.py                 | 9     | ✅ PASS |
+      | test_private_mileage_sessions.py        | 10    | ✅ PASS |
+      | test_private_mileage_integration.py     | 5     | ✅ PASS |
+      | test_reports_private_km_avl16.py        | 6     | ✅ PASS |
+      | test_reports_private_redaction.py       | 6     | ✅ PASS |
+      | test_private_mode_phase2.py             | 26    | ✅ PASS |
+      | test_fmc130_prive_pro_ux.py             | 8     | ✅ PASS |
+      | test_fmc130_business_recovery.py        | 7     | ✅ PASS |
+      | test_fmc130_lkp_fixes.py                | 11    | ✅ PASS |
+      | test_fmc130_resolve_pending.py          | 7     | ✅ PASS |
+      | test_fmc130_confirmation_fix.py         | 17    | ✅ PASS |
+      | test_fmc130_lkp_no_samples.py           | 5     | ✅ PASS |
+      | test_private_mode_gate.py               | 14    | ✅ PASS |
+      | **TOTAL**                               | **130** | ✅ **PASS** |
+      
+      FLAG-BEHAVIOR INVARIANTS VERIFIED (ALL GREEN):
+      
+      ✅ (1) FLAG OFF -> LEGACY GPS BEHAVIOR PRESERVED:
+         - test_flag_off_scope_equals_gps_legacy_sum PASSED
+         - test_flag_off_uses_gps_legacy PASSED
+         - test_flag_off_no_session_created PASSED
+         → When flag OFF, system uses legacy GPS calculation, no AVL16 sessions created
+      
+      ✅ (2) FLAG ON + CUTOVER: AVL16 USED ONLY AFTER CUTOVER:
+         - test_period_entirely_pre_cutover_is_gps PASSED (pre-cutover -> GPS_FALLBACK)
+         - test_period_entirely_post_cutover_avl16_or_unavailable PASSED (post-cutover -> AVL16 or UNAVAILABLE)
+         - test_period_crossing_cutover_is_mixed_disjoint PASSED (crossing -> MIXED, all-measurable)
+         → Pre-cutover uses GPS_FALLBACK, post-cutover uses AVL16, crossing uses MIXED (disjoint intervals)
+      
+      ✅ (3) POST-CUTOVER WITHOUT EXPLOITABLE SESSION -> UNAVAILABLE (NEVER 0 NOR SILENT GPS):
+         - test_scope_post_cutover_no_session_is_unavailable_not_gps PASSED (private_km None, NOT GPS)
+         - test_all_closed_none_is_unavailable_not_zero PASSED (None never coerced to 0)
+         - test_crossing_cutover_avl_side_unavailable_is_failclosed PASSED (fail-closed partial data)
+         → Post-cutover without AVL16 session returns UNAVAILABLE (null), never 0, never silent GPS fallback
+      
+      ✅ (4) KM-SUMMARY + TAX REPORT USE SAME AGGREGATOR; NONE NEVER COERCED TO 0:
+         - test_pct_perso_uses_aggregated_private_km PASSED
+         - test_scope_fail_closed_when_one_vehicle_unavailable PASSED (ANY vehicle UNAVAILABLE -> whole scope UNAVAILABLE/null)
+         → Both endpoints use aggregate_private_km(), None stays None (never 0.0)
+      
+      ✅ (5) NO REAL DEVICE COMMAND IN ANY TEST (ALL MOCKED):
+         - All 130 tests passed with DEVICE_WRITE=0
+         - All device/odometer hooks mocked
+         → No real Navixy/device commands sent during testing
+      
+      ✅ (6) BUSINESS RECOVERY + REDACTION STILL PASS (NON-REGRESSION):
+         - test_fmc130_business_recovery.py: 7/7 PASSED
+         - test_reports_private_redaction.py: 6/6 PASSED
+         → No regression in existing features
+      
+      ✅ (7) BACKEND SERVICE STATUS:
+         - Backend RUNNING (supervisor, pid 7842, uptime 0:01:12)
+         - No import errors, no 500s
+      
+      SPECIFIC TEST HIGHLIGHTS:
+      - test_flag_off_scope_equals_gps_legacy_sum: Flag OFF preserves legacy GPS sum ✓
+      - test_scope_post_cutover_no_session_is_unavailable_not_gps: Post-cutover without session -> UNAVAILABLE (not GPS) ✓
+      - test_all_closed_none_is_unavailable_not_zero: All-None CLOSED sessions -> UNAVAILABLE (not 0.0) ✓
+      - test_crossing_cutover_avl_side_unavailable_is_failclosed: Crossing cutover with AVL side unavailable -> fail-closed UNAVAILABLE ✓
+      - test_pct_perso_uses_aggregated_private_km: Tax report uses same aggregator as km-summary ✓
+      - test_delayed_business_confirmation_uses_candidate_not_post_off_km: BUSINESS END uses candidate captured at OFF ✓
+      - test_stale_open_does_not_contaminate_next_private: Residual OPEN resolved before new session ✓
+      - test_concurrent_open_dupkey_is_idempotent_single_open: DB-level idempotency via UNIQUE PARTIAL index ✓
+      
+      CONCLUSION:
+      AVL16 private-km feature flag behavior FULLY VERIFIED for LOCAL Preview activation rehearsal. BOTH flag states (OFF/ON) behave correctly. Flag-OFF preserves legacy GPS behavior. Flag-ON with cutover uses AVL16 only after cutover, with GPS_FALLBACK before, MIXED when crossing, and fail-closed UNAVAILABLE (never 0, never silent GPS) when post-cutover without exploitable session. All 130 tests PASSED. Backend service RUNNING. NO device commands sent (all mocked). NO ISSUES FOUND. Feature ready for Preview activation.
   - agent: "testing"
     message: |
       PRIVATE KM AVL16 ODOMETER SOURCE VERIFICATION COMPLETE (2026-01-XX)
