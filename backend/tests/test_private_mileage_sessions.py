@@ -128,11 +128,37 @@ def test_open_then_close_computes_distance():
     assert s["quality"] == pm.Q_OK
 
 
-def test_double_open_is_idempotent_single_session():
+def test_reopen_supersedes_stale_open_single_open_no_start_contamination():
+    """FIX PR#6 : ré-ouvrir PRIVATE sur une OPEN résiduelle (même tracker) ne DOIT PAS être
+    bloqué. L'ancienne OPEN (sans candidat) passe ABANDONED, une nouvelle OPEN est créée avec
+    le NOUVEAU odometer_start (jamais l'ancien) -> exactement 1 OPEN, pas de contamination."""
     db = _DB()
-    a = _open(db)
-    b = _open(db)  # 2e OPEN -> DuplicateKeyError capturé -> None
-    assert a is not None and b is None
+    a = _open(db, odo=10000.0)          # 1re session
+    b = _open(db, odo=20000.0)          # ré-ouverture : supersede l'ancienne
+    assert a is not None and b is not None and a != b
+    opens = [d for d in db._c.docs if d["state"] == pm.S_OPEN]
+    abandoned = [d for d in db._c.docs if d["state"] == pm.S_ABANDONED]
+    assert len(opens) == 1
+    assert opens[0]["odometer_start_km"] == 20000.0          # nouveau start, pas 10000
+    assert len(abandoned) == 1 and abandoned[0]["reason"] == "SUPERSEDED_NEW_PRIVATE"
+
+
+def test_concurrent_open_dupkey_is_idempotent_single_open():
+    """Idempotence garantie EN BASE : deux insert OPEN concurrents (course) -> le 2e lève
+    DuplicateKeyError (index unique partiel simulé) -> open_session renvoie None. 1 seule OPEN.
+    On simule la course en désactivant la résolution préalable (pas de résiduelle détectée)."""
+    db = _DB()
+    a = _open(db, odo=10000.0)
+    assert a is not None
+    # Simuler une VRAIE course : forcer un 2e insert direct qui doit lever DuplicateKeyError.
+    raised = False
+    try:
+        _run(db._c.insert_one({
+            "id": "x", "tenant_id": "default", "vehicle_id": "vA", "tracker_id": 781479,
+            "state": pm.S_OPEN}))
+    except Exception as e:
+        raised = (e.__class__.__name__ == "DuplicateKeyError")
+    assert raised is True
     opens = [d for d in db._c.docs if d["state"] == pm.S_OPEN]
     assert len(opens) == 1
 

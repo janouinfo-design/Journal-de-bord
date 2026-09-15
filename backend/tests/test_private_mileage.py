@@ -194,3 +194,34 @@ def test_finalize_fields_fail_closed():
     # degraded flag -> DEGRADED
     f4 = pm._finalize_fields(100.0, 112.4, "AVL16", "X", True)
     assert f4["private_km"] == 12.4 and f4["quality"] == pm.Q_DEGRADED
+
+
+def test_all_closed_none_is_unavailable_not_zero():
+    """FIX PR#6 (null != 0) : des sessions CLOSED toutes en private_km=None -> UNAVAILABLE,
+    jamais 0.0/AVL16."""
+    db = _DB()
+    db["x"].docs += [_closed("vA", "2026-09-20T10:00:00+00:00", None),
+                     _closed("vA", "2026-09-21T10:00:00+00:00", None)]
+    r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
+             start_utc=_dt("2026-09-01T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
+             gps_fallback_km=_gps_zero))
+    assert r["private_km"] is None
+    assert r["private_km_source"] == pm.SRC_UNAVAILABLE
+
+
+def test_crossing_cutover_avl_side_unavailable_is_failclosed():
+    """FIX PR#6 : période traversant le cutover mais portion AVL16 post-cutover indisponible
+    -> ne PAS annoncer un total partiel (GPS seul) ; fail-closed UNAVAILABLE (null)."""
+    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-09-15T00:00:00Z"
+    try:
+        db = _DB()  # aucune session post-cutover
+
+        async def gps(s, e):
+            return 300.0  # portion GPS connue, mais AVL16 après = indisponible
+        r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
+                 start_utc=_dt("2026-09-01T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
+                 gps_fallback_km=gps))
+        assert r["private_km"] is None
+        assert r["private_km_source"] == pm.SRC_UNAVAILABLE
+    finally:
+        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)

@@ -132,25 +132,47 @@ def test_scope_post_cutover_no_session_is_unavailable_not_gps():
         _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
 
 
-def test_scope_crossing_cutover_is_mixed_no_double_count():
-    # cutover en milieu d'année : GPS avant + AVL16 après, intervalles disjoints
+def test_scope_crossing_cutover_mixed_all_measurable():
+    """Crossing cutover, TOUS les véhicules mesurables (AVL16 après pour chacun) -> MIXED,
+    somme des intervalles disjoints, sans double comptage."""
     _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-07-01T00:00:00Z"
     try:
         db = _DB()
-        # sessions AVL16 APRÈS cutover uniquement (rattachées par private_ended_at)
-        db._c.docs += [_closed("vA", "2026-08-10T10:00:00+00:00", 220.0)]
-        s, e = _y()
+        db._c.docs += [_closed("vA", "2026-08-10T10:00:00+00:00", 220.0),
+                       _closed("vB", "2026-08-11T10:00:00+00:00", 30.0)]
 
         async def gps(vid, s2, e2):
-            # doit être borné à [start, cutover]
-            assert e2 == datetime(2026, 7, 1, tzinfo=timezone.utc)
+            assert e2 == datetime(2026, 7, 1, tzinfo=timezone.utc)   # borné à [start, cutover]
             return _GPS.get(vid, 0.0)
         r = _run(pm.aggregate_private_km_for_scope(
             db, tenant_id="default", vehicle_ids=["vA", "vB"],
-            start_utc=s, end_utc=e, gps_fallback_km_for_vehicle=gps))
-        # vA: GPS 350 (avant) + AVL16 220 (après) ; vB: GPS 120 (avant) + AVL16 0
-        assert r["private_km"] == 690.0
+            start_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_utc=datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc),
+            gps_fallback_km_for_vehicle=gps))
+        # vA: 350+220=570 (MIXED) ; vB: 120+30=150 (MIXED) -> 720
+        assert r["private_km"] == 720.0
         assert r["private_km_source"] == pm.SRC_MIXED
+    finally:
+        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
+
+
+def test_scope_fail_closed_when_one_vehicle_unavailable():
+    """FIX PR#6 : si UN véhicule du scope est UNAVAILABLE (post-cutover sans session),
+    le total flotte n'est pas entièrement mesurable -> UNAVAILABLE (null), pas de sous-comptage."""
+    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-07-01T00:00:00Z"
+    try:
+        db = _DB()
+        db._c.docs += [_closed("vA", "2026-08-10T10:00:00+00:00", 220.0)]  # vB: aucune session
+
+        async def gps(vid, s2, e2):
+            return _GPS.get(vid, 0.0)
+        r = _run(pm.aggregate_private_km_for_scope(
+            db, tenant_id="default", vehicle_ids=["vA", "vB"],
+            start_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_utc=datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc),
+            gps_fallback_km_for_vehicle=gps))
+        assert r["private_km"] is None                       # jamais un total partiel silencieux
+        assert r["private_km_source"] == pm.SRC_UNAVAILABLE
     finally:
         _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
 

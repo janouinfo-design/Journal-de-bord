@@ -489,15 +489,22 @@ def swiss_tax_report_pdf(stats: dict, year: int, owner: str = "") -> bytes:
     flow.append(Spacer(1, 0.5 * cm))
     flow.append(Paragraph("Synthèse kilométrique", h2))
 
+    # Formatage None-safe : un privé indisponible s'affiche « Indisponible » (jamais faux 0).
+    def _km(v):
+        return (f"{v:,.1f} km".replace(",", "'")) if isinstance(v, (int, float)) else "Indisponible"
+
+    def _pct(v):
+        return (f"{v:.1f} %") if isinstance(v, (int, float)) else "—"
+
     data = [
         ["Catégorie", "Valeur"],
-        ["Kilomètres professionnels", f"{stats['pro_km']:,.1f} km".replace(",", "'")],
-        ["Kilomètres personnels", f"{stats['perso_km']:,.1f} km".replace(",", "'")],
-        ["Kilomètres totaux", f"{stats['total_km']:,.1f} km".replace(",", "'")],
-        ["Pourcentage professionnel", f"{stats['pct_pro']:.1f} %"],
-        ["Pourcentage personnel", f"{stats['pct_perso']:.1f} %"],
-        ["Carburant professionnel (L) — Estimé*", f"{stats['pro_fuel']:.2f}"],
-        ["Carburant personnel (L) — Estimé*", f"{stats['perso_fuel']:.2f}"],
+        ["Kilomètres professionnels", _km(stats.get("pro_km"))],
+        ["Kilomètres personnels", _km(stats.get("perso_km"))],
+        ["Kilomètres totaux", _km(stats.get("total_km"))],
+        ["Pourcentage professionnel", _pct(stats.get("pct_pro"))],
+        ["Pourcentage personnel", _pct(stats.get("pct_perso"))],
+        ["Carburant professionnel (L) — Estimé*", f"{stats.get('pro_fuel', 0):.2f}"],
+        ["Carburant personnel (L) — Estimé*", f"{stats.get('perso_fuel', 0):.2f}"],
     ]
     t = Table(data, colWidths=[9 * cm, 7 * cm])
     t.setStyle(TableStyle([
