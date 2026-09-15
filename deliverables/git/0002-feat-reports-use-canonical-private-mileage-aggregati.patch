@@ -1,0 +1,327 @@
+From 4d3627f5b27daef18a0141ecce8f3b8d1830f761 Mon Sep 17 00:00:00 2001
+From: emergent-agent-e1 <github@emergent.sh>
+Date: Tue, 15 Sep 2026 11:49:20 +0000
+Subject: [PATCH] feat(reports): use canonical private mileage aggregation
+ (AVL16 + cutover)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Aligns the Swiss fiscal/monthly report (/reports/tax-swiss) private km with the SAME
+source as km-summary (no 2nd AVL16 logic):
+- private_mileage.aggregate_private_km_for_scope(): multi-vehicle wrapper reusing the
+  per-vehicle aggregate_private_km; fleet source AVL16|GPS_FALLBACK|MIXED_TRANSITION|
+  UNAVAILABLE; null!=0.
+- reports.py tax-swiss: perso_km + pct_perso/pct_pro/total_km via the aggregator over the
+  vehicles in the scoped trips; pro_km unchanged; private_km_source kept for audit.
+Flag PRIVATE_KM_SOURCE_AVL16 default OFF => reports keep legacy GPS numbers (no prod change).
+Tests: +5 report-alignment (flag OFF==legacy, post-cutover AVL16/UNAVAILABLE, crossing=MIXED,
+pct_perso from AVL16). Full regression 123/123 PASS. Verified by testing_agent.
+
+Note: weekly driver report endpoint does not exist yet (documented); CSV/XLSX/PDF per-trip
+exports keep trip rows (location redacted) — km totals coherence handled via aggregator.
+---
+ backend/app/private_mileage.py                |  54 ++++++
+ backend/app/routes/reports.py                 |  31 +++-
+ .../tests/test_reports_private_km_avl16.py    | 175 ++++++++++++++++++
+ 3 files changed, 257 insertions(+), 3 deletions(-)
+ create mode 100644 backend/tests/test_reports_private_km_avl16.py
+
+diff --git a/backend/app/private_mileage.py b/backend/app/private_mileage.py
+index 72bc579..5ae4cc0 100644
+--- a/backend/app/private_mileage.py
++++ b/backend/app/private_mileage.py
+@@ -348,3 +348,57 @@ async def aggregate_private_km(
+     total = round(gps_val + avl_val, 1)
+     return {"private_km": total, "private_km_source": SRC_MIXED,
+             "session_count": n, "avl16_km": avl, "gps_km": gps}
++
++
++# ---------------------------------------------------------------------------
++# Agrégation MULTI-VÉHICULE (rapports flotte/chauffeur). Réutilise STRICTEMENT
++# l'agrégateur canonique par véhicule ci-dessus (aucune 2e logique AVL16).
++# ---------------------------------------------------------------------------
++async def aggregate_private_km_for_scope(
++    db, *, tenant_id: str, vehicle_ids: list[str],
++    start_utc: datetime, end_utc: datetime,
++    gps_fallback_km_for_vehicle: Callable[[str, datetime, datetime], Awaitable[Optional[float]]],
++) -> dict:
++    """Km privés agrégés sur un ENSEMBLE de véhicules (même politique cutover/fallback).
++
++    - Somme les contributions numériques par véhicule (via aggregate_private_km).
++    - Provenance flotte : AVL16 (que de l'AVL16), GPS_FALLBACK (que du GPS),
++      MIXED_TRANSITION (mélange AVL16+GPS sur la fenêtre), UNAVAILABLE (aucune
++      contribution numérique -> None, jamais 0 inventé).
++    - null != 0 : si aucun véhicule ne produit de nombre -> private_km=None.
++    """
++    total = None
++    n_sessions = 0
++    saw_avl = saw_gps = saw_mixed = saw_unavail = False
++    for vid in vehicle_ids:
++        async def _gps(s, e, _vid=vid):
++            return await gps_fallback_km_for_vehicle(_vid, s, e)
++        r = await aggregate_private_km(
++            db, tenant_id=tenant_id, vehicle_id=vid,
++            start_utc=start_utc, end_utc=end_utc, gps_fallback_km=_gps)
++        src = r.get("private_km_source")
++        if src == SRC_AVL16:
++            saw_avl = True
++        elif src == SRC_GPS_FALLBACK:
++            saw_gps = True
++        elif src == SRC_MIXED:
++            saw_mixed = True
++        elif src == SRC_UNAVAILABLE:
++            saw_unavail = True
++        n_sessions += int(r.get("session_count") or 0)
++        km = r.get("private_km")
++        if isinstance(km, (int, float)):
++            total = (total or 0.0) + float(km)
++    # Provenance agrégée.
++    if saw_mixed or (saw_avl and saw_gps):
++        source = SRC_MIXED
++    elif saw_avl:
++        source = SRC_AVL16
++    elif saw_gps:
++        source = SRC_GPS_FALLBACK
++    else:
++        source = SRC_UNAVAILABLE
++    if total is None and not (saw_avl or saw_gps or saw_mixed):
++        source = SRC_UNAVAILABLE
++    return {"private_km": (round(total, 1) if total is not None else None),
++            "private_km_source": source, "session_count": n_sessions}
+diff --git a/backend/app/routes/reports.py b/backend/app/routes/reports.py
+index 128035f..5768c19 100644
+--- a/backend/app/routes/reports.py
++++ b/backend/app/routes/reports.py
+@@ -120,12 +120,35 @@ async def tax_swiss_report(
+     start = f"{year}-01-01T00:00:00+00:00"
+     end = f"{year}-12-31T23:59:59+00:00"
+     q = await filter_trips_query(db, user, start, end, driver_id, vehicle_id, None)
+-    # Swiss tax report aggregate — only need distance, classification, fuel
+-    projection = {"_id": 0, "distance_km": 1, "classification": 1, "fuel_l": 1}
++    # Swiss tax report aggregate — need distance, classification, fuel, vehicle_id.
++    projection = {"_id": 0, "distance_km": 1, "classification": 1, "fuel_l": 1, "vehicle_id": 1}
+     trips = await db.trips.find(q, projection).limit(20000).to_list(20000)
+ 
+     pro_km = sum(t["distance_km"] for t in trips if t.get("classification") == "professional")
+-    perso_km = sum(t["distance_km"] for t in trips if t.get("classification") == "personal")
++
++    # Km PRIVÉ = source canonique AVL16 (même agrégateur/cutover que km-summary).
++    # Flag OFF -> l'agrégateur retombe sur le GPS legacy (mêmes chiffres qu'avant).
++    from datetime import datetime, timezone
++    from app import private_mileage as _pm
++    tenant_id = user.get("tenant_id") or "default"
++    start_utc = datetime(year, 1, 1, tzinfo=timezone.utc)
++    end_utc = datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
++    scope_vids = sorted({t.get("vehicle_id") for t in trips if t.get("vehicle_id")})
++
++    async def _gps_personal_for_vehicle(vid, s_utc, e_utc):
++        qq = dict(q)
++        qq.update({"vehicle_id": vid, "classification": "personal",
++                   "start_time": {"$gte": s_utc.isoformat(), "$lt": e_utc.isoformat()}})
++        docs = await db.trips.find(qq, {"_id": 0, "distance_km": 1}).limit(20000).to_list(20000)
++        return round(sum((d.get("distance_km") or 0) for d in docs), 1)
++
++    priv_agg = await _pm.aggregate_private_km_for_scope(
++        db, tenant_id=tenant_id, vehicle_ids=scope_vids,
++        start_utc=start_utc, end_utc=end_utc,
++        gps_fallback_km_for_vehicle=_gps_personal_for_vehicle)
++    perso_km = priv_agg["private_km"] if priv_agg["private_km"] is not None else 0.0
++    private_km_source = priv_agg["private_km_source"]
++
+     total_km = pro_km + perso_km
+     pro_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "professional")
+     perso_fuel = sum(t.get("fuel_l", 0) for t in trips if t.get("classification") == "personal")
+@@ -137,6 +160,8 @@ async def tax_swiss_report(
+         "pct_perso": round(perso_km / total_km * 100, 1) if total_km else 0,
+         "pro_fuel": round(pro_fuel, 2),
+         "perso_fuel": round(perso_fuel, 2),
++        # Traçabilité interne/audit (non affichée en gros dans le PDF) :
++        "private_km_source": private_km_source,
+     }
+ 
+     owner = ""
+diff --git a/backend/tests/test_reports_private_km_avl16.py b/backend/tests/test_reports_private_km_avl16.py
+new file mode 100644
+index 0000000..f247397
+--- /dev/null
++++ b/backend/tests/test_reports_private_km_avl16.py
+@@ -0,0 +1,175 @@
++"""Tests — cohérence Km Privé des RAPPORTS avec l'agrégateur canonique AVL16.
++
++Vérifie aggregate_private_km_for_scope (multi-véhicule) utilisé par le rapport fiscal :
++flag OFF -> GPS legacy (mêmes chiffres qu'avant) ; flag ON + cutover -> AVL16 /
++GPS_FALLBACK / MIXED_TRANSITION / UNAVAILABLE, sans double comptage. null != 0.
++Fake DB async. Aucun réseau/commande device.
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++from datetime import datetime, timezone
++
++from app import private_mileage as pm
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++class _Cursor:
++    def __init__(self, docs):
++        self._docs = list(docs)
++
++    def __aiter__(self):
++        self._it = iter(self._docs)
++        return self
++
++    async def __anext__(self):
++        try:
++            return next(self._it)
++        except StopIteration:
++            raise StopAsyncIteration
++
++
++class _Coll:
++    def __init__(self):
++        self.docs = []
++
++    def _match(self, d, q):
++        for k, v in q.items():
++            if isinstance(v, dict):
++                if "$gte" in v and not (d.get(k) is not None and d.get(k) >= v["$gte"]):
++                    return False
++                if "$lte" in v and not (d.get(k) is not None and d.get(k) <= v["$lte"]):
++                    return False
++            elif d.get(k) != v:
++                return False
++        return True
++
++    def find(self, q, proj=None):
++        return _Cursor([dict(d) for d in self.docs if self._match(d, q)])
++
++
++class _DB:
++    def __init__(self):
++        self._c = _Coll()
++
++    def __getitem__(self, name):
++        return self._c
++
++
++def setup_module(_m):
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++    _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def teardown_module(_m):
++    _os.environ.pop("PRIVATE_KM_SOURCE_AVL16", None)
++    _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def _closed(vid, ended_iso, km):
++    return {"tenant_id": "default", "vehicle_id": vid, "state": pm.S_CLOSED,
++            "private_ended_at": ended_iso, "private_km": km}
++
++
++def _y(y=2026):
++    return datetime(y, 1, 1, tzinfo=timezone.utc), datetime(y, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
++
++
++# GPS legacy par véhicule (simule la somme des trajets 'personal').
++_GPS = {"vA": 350.0, "vB": 120.0}
++
++
++async def _gps_for_vehicle(vid, s, e):
++    return _GPS.get(vid, 0.0)
++
++
++def test_flag_off_scope_equals_gps_legacy_sum():
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "0"
++    try:
++        db = _DB()
++        s, e = _y()
++        r = _run(pm.aggregate_private_km_for_scope(
++            db, tenant_id="default", vehicle_ids=["vA", "vB"],
++            start_utc=s, end_utc=e, gps_fallback_km_for_vehicle=_gps_for_vehicle))
++        assert r["private_km"] == 470.0          # 350 + 120 (mêmes chiffres qu'avant)
++        assert r["private_km_source"] == pm.SRC_GPS_FALLBACK
++    finally:
++        _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++
++
++def test_scope_post_cutover_all_avl16():
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-01-01T00:00:00Z"  # tout l'an post-cutover
++    try:
++        db = _DB()
++        db._c.docs += [_closed("vA", "2026-06-10T10:00:00+00:00", 200.0),
++                       _closed("vB", "2026-07-01T10:00:00+00:00", 55.0)]
++        s, e = _y()
++        r = _run(pm.aggregate_private_km_for_scope(
++            db, tenant_id="default", vehicle_ids=["vA", "vB"],
++            start_utc=s, end_utc=e, gps_fallback_km_for_vehicle=_gps_for_vehicle))
++        assert r["private_km"] == 255.0
++        assert r["private_km_source"] == pm.SRC_AVL16
++        assert r["session_count"] == 2
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def test_scope_post_cutover_no_session_is_unavailable_not_gps():
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-01-01T00:00:00Z"
++    try:
++        db = _DB()  # aucune session
++        s, e = _y()
++        r = _run(pm.aggregate_private_km_for_scope(
++            db, tenant_id="default", vehicle_ids=["vA", "vB"],
++            start_utc=s, end_utc=e, gps_fallback_km_for_vehicle=_gps_for_vehicle))
++        assert r["private_km"] is None                    # null != 0
++        assert r["private_km_source"] == pm.SRC_UNAVAILABLE
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def test_scope_crossing_cutover_is_mixed_no_double_count():
++    # cutover en milieu d'année : GPS avant + AVL16 après, intervalles disjoints
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-07-01T00:00:00Z"
++    try:
++        db = _DB()
++        # sessions AVL16 APRÈS cutover uniquement (rattachées par private_ended_at)
++        db._c.docs += [_closed("vA", "2026-08-10T10:00:00+00:00", 220.0)]
++        s, e = _y()
++
++        async def gps(vid, s2, e2):
++            # doit être borné à [start, cutover]
++            assert e2 == datetime(2026, 7, 1, tzinfo=timezone.utc)
++            return _GPS.get(vid, 0.0)
++        r = _run(pm.aggregate_private_km_for_scope(
++            db, tenant_id="default", vehicle_ids=["vA", "vB"],
++            start_utc=s, end_utc=e, gps_fallback_km_for_vehicle=gps))
++        # vA: GPS 350 (avant) + AVL16 220 (après) ; vB: GPS 120 (avant) + AVL16 0
++        assert r["private_km"] == 690.0
++        assert r["private_km_source"] == pm.SRC_MIXED
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def test_pct_perso_uses_aggregated_private_km():
++    """% privé mensuel/fiscal cohérent avec la source AVL16 (pas GPS post-cutover)."""
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-01-01T00:00:00Z"
++    try:
++        db = _DB()
++        db._c.docs += [_closed("vA", "2026-05-01T10:00:00+00:00", 250.0)]
++        s, e = _y()
++        priv = _run(pm.aggregate_private_km_for_scope(
++            db, tenant_id="default", vehicle_ids=["vA"],
++            start_utc=s, end_utc=e, gps_fallback_km_for_vehicle=_gps_for_vehicle))
++        pro_km = 750.0
++        perso_km = priv["private_km"]          # 250 (AVL16), PAS 350 (GPS legacy)
++        total = pro_km + perso_km
++        pct_perso = round(perso_km / total * 100, 1)
++        assert perso_km == 250.0
++        assert pct_perso == 25.0               # 250 / 1000
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
+-- 
+2.39.5
+

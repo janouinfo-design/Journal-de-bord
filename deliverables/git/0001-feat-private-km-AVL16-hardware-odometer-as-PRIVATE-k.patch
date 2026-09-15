@@ -1,0 +1,1189 @@
+From c10988f6a4ce83602a614116d1cefb107ba8f174 Mon Sep 17 00:00:00 2001
+From: emergent-agent-e1 <github@emergent.sh>
+Date: Tue, 15 Sep 2026 11:40:01 +0000
+Subject: [PATCH] feat(private-km): AVL16 hardware odometer as PRIVATE km
+ source (sessions + cutover)
+
+Why: in PRIVATE mode the FMC130 masks GPS but AVL16 keeps increasing (field-proven),
+so GPS-based private km under-counts. Compute private km from the AVL16 odometer delta.
+
+- NEW app/private_mileage.py: append-only 'private_mileage_session' collection
+  (OPEN/CLOSED/ABANDONED); open (Q4b START at PRIVATE command accepted/sent),
+  capture_end_candidate (END at BUSINESS send, symmetric), close (idempotent),
+  close_from_candidate (DEGRADED); private_distance fail-closed (neg delta->None, null!=0);
+  aggregate_private_km with CUTOVER (disjoint GPS-before + AVL16-after, source
+  AVL16|GPS_FALLBACK|MIXED_TRANSITION|UNAVAILABLE; post-cutover w/o session -> UNAVAILABLE,
+  never silent GPS); ensure_indexes with UNIQUE PARTIAL {state:OPEN} => DB-level idempotency.
+- private_mode_engine.request_mode/resolve_pending_confirmation: open/close sessions
+  (flag OFF = no-op; exceptions never block the mode switch).
+- routes/identification.py km-summary: private_km via aggregate_private_km + private_km_source;
+  pro_km unchanged; periods Europe/Zurich.
+- server.py: ensure_indexes at startup (non-blocking).
+- Feature flag PRIVATE_KM_SOURCE_AVL16 (default 0) + PRIVATE_KM_AVL16_CUTOVER_AT.
+
+Tests: 18 new (aggregator/cutover, session lifecycle+idempotence+concurrency, integration
+through request_mode) + 94 private-mode/FMC130 regression = 112/112 PASS. BUSINESS fix intact.
+NO device write / real command / .env prod / deploy. Verified by testing_agent.
+---
+ backend/app/private_mileage.py                | 350 ++++++++++++++++++
+ backend/app/private_mode_engine.py            |  44 +++
+ backend/app/routes/identification.py          |  37 +-
+ backend/server.py                             |   7 +
+ backend/tests/test_private_mileage.py         | 196 ++++++++++
+ .../tests/test_private_mileage_integration.py | 216 +++++++++++
+ .../tests/test_private_mileage_sessions.py    | 222 +++++++++++
+ 7 files changed, 1062 insertions(+), 10 deletions(-)
+ create mode 100644 backend/app/private_mileage.py
+ create mode 100644 backend/tests/test_private_mileage.py
+ create mode 100644 backend/tests/test_private_mileage_integration.py
+ create mode 100644 backend/tests/test_private_mileage_sessions.py
+
+diff --git a/backend/app/private_mileage.py b/backend/app/private_mileage.py
+new file mode 100644
+index 0000000..72bc579
+--- /dev/null
++++ b/backend/app/private_mileage.py
+@@ -0,0 +1,350 @@
++"""Sessions kilométriques PRIVÉES basées sur l'odomètre matériel AVL16 (READ-ONLY côté device).
++
++Contexte terrain (FMC130 781479) : en mode PRIVÉ le GPS est masqué, mais l'AVL16
++(Teltonika Total Odometer, sensor `avl_io_16`) continue d'augmenter. Les km privés
++fiables proviennent donc du DELTA d'odomètre AVL16 entre l'entrée et la sortie du
++mode privé, jamais des points GPS.
++
++Ce module possède la collection append-only `private_mileage_session` (historique
++requêtable, 1 doc par session privée) et l'agrégateur par période avec CUTOVER
++(transition douce GPS legacy -> AVL16, intervalles temporels DISJOINTS, jamais de
++double comptage).
++
++RÈGLES CLÉS
++- Q4b : START capturé au moment où la commande PRIVATE est réellement acceptée/envoyée
++  (dernier AVL16 frais avant bascule), PAS à la confirmation (qui peut manquer).
++- END symétrique : candidat END capturé à l'envoi accepté du BUSINESS ; la confirmation
++  améliore la qualité mais n'est pas l'unique moyen de préserver les km.
++- null != 0. Aucune valeur inventée. Delta négatif (reset/rollover) -> refus.
++- Idempotence garantie EN BASE via un index unique partiel sur les sessions OPEN.
++- Feature-flag `PRIVATE_KM_SOURCE_AVL16` (défaut 0) : OFF => aucun changement de
++  comportement (les hooks n'écrivent rien, l'agrégat reste GPS legacy).
++
++Aucune écriture device, aucune commande Navixy/Teltonika, aucun secret.
++"""
++from __future__ import annotations
++
++import os
++import uuid
++import logging
++from datetime import datetime, timezone
++from typing import Optional, Callable, Awaitable
++
++logger = logging.getLogger(__name__)
++
++COLLECTION = "private_mileage_session"
++
++# États de session (machine append-only).
++S_OPEN = "OPEN"
++S_CLOSED = "CLOSED"
++S_ABANDONED = "ABANDONED"
++
++# Qualité du calcul de distance.
++Q_OK = "OK"
++Q_DEGRADED = "DEGRADED"
++Q_UNAVAILABLE = "UNAVAILABLE"
++
++# Provenance de la valeur km d'une période (exposée à l'UI/rapports).
++SRC_AVL16 = "AVL16"
++SRC_GPS_FALLBACK = "GPS_FALLBACK"
++SRC_MIXED = "MIXED_TRANSITION"
++SRC_UNAVAILABLE = "UNAVAILABLE"
++
++
++def enabled() -> bool:
++    """Feature-flag global (défaut OFF -> aucun changement de comportement).
++    Les tests peuvent l'activer explicitement dans l'environnement."""
++    return os.environ.get("PRIVATE_KM_SOURCE_AVL16", "0").strip().lower() in ("1", "true", "yes", "on")
++
++
++def cutover_at() -> Optional[datetime]:
++    """Instant de bascule GPS legacy -> AVL16 (UTC aware) ou None si non défini.
++    Avant cutover = km privés via GPS legacy ; après = via sessions AVL16.
++    Si non défini alors que le flag est ON : l'AVL16 s'applique à toute la plage
++    (comportement 'post-cutover partout')."""
++    raw = (os.environ.get("PRIVATE_KM_AVL16_CUTOVER_AT") or "").strip()
++    return _parse_ts(raw) if raw else None
++
++
++def _now() -> str:
++    return datetime.now(timezone.utc).isoformat()
++
++
++def _parse_ts(ts) -> Optional[datetime]:
++    """ISO / 'YYYY-MM-DD HH:MM:SS' / epoch -> datetime aware (UTC). None si invalide."""
++    if ts is None:
++        return None
++    if isinstance(ts, datetime):
++        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
++    if isinstance(ts, (int, float)):
++        try:
++            return datetime.fromtimestamp(float(ts), tz=timezone.utc)
++        except (OverflowError, OSError, ValueError):
++            return None
++    s = str(ts).strip()
++    if not s:
++        return None
++    try:
++        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
++        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
++    except ValueError:
++        pass
++    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
++        try:
++            return datetime.strptime(s[:19], fmt).replace(tzinfo=timezone.utc)
++        except ValueError:
++            continue
++    return None
++
++
++def private_distance(start_km, end_km) -> Optional[float]:
++    """Distance privée = end - start. Conditions strictes ; jamais inventée.
++    Delta négatif (reset odomètre / rollover) -> None (anomalie, non fourni)."""
++    try:
++        x = float(start_km)
++        y = float(end_km)
++    except (TypeError, ValueError):
++        return None
++    if y < x:
++        return None
++    return round(y - x, 3)
++
++
++# ---------------------------------------------------------------------------
++# Index Mongo — idempotence garantie EN BASE (pas seulement applicative).
++# ---------------------------------------------------------------------------
++async def ensure_indexes(db) -> None:
++    """Crée les index de la collection. L'index UNIQUE PARTIEL sur (tenant, vehicle,
++    tracker) filtré {state:OPEN} garantit qu'il ne peut exister qu'UNE session OPEN
++    par véhicule/tracker, même sous concurrence (deux PRIVATE simultanés -> 1 seule)."""
++    coll = db[COLLECTION]
++    await coll.create_index(
++        [("tenant_id", 1), ("vehicle_id", 1), ("tracker_id", 1)],
++        unique=True,
++        partialFilterExpression={"state": S_OPEN},
++        name="uniq_open_session_per_vehicle_tracker",
++    )
++    await coll.create_index(
++        [("tenant_id", 1), ("vehicle_id", 1), ("private_ended_at", 1)],
++        name="agg_by_vehicle_ended",
++    )
++    await coll.create_index(
++        [("tenant_id", 1), ("driver_id", 1), ("private_ended_at", 1)],
++        name="agg_by_driver_ended",
++    )
++    await coll.create_index(
++        [("tenant_id", 1), ("state", 1), ("private_started_at", 1)],
++        name="scan_open_sessions",
++    )
++
++
++# ---------------------------------------------------------------------------
++# Cycle de vie d'une session privée.
++# ---------------------------------------------------------------------------
++async def open_session(db, *, tenant_id: str, driver_id: Optional[str], vehicle_id: str,
++                       tracker_id: Optional[int], odo_start: Optional[float],
++                       start_source: str, start_sample_at: Optional[str],
++                       command_sent_at: Optional[str]) -> Optional[str]:
++    """Ouvre une session PRIVÉE (Q4b : à la commande PRIVATE réellement acceptée/envoyée).
++
++    Idempotence garantie EN BASE : l'index unique partiel {state:OPEN} empêche une 2e
++    session OPEN pour le même (tenant, vehicle, tracker). En cas de course, l'insert en
++    double lève DuplicateKeyError -> on renvoie None (no-op honnête, pas d'exception).
++
++    Avant d'ouvrir, toute session OPEN du MÊME véhicule mais d'un AUTRE tracker est
++    marquée ABANDONED (changement de tracker -> pas de contamination).
++    """
++    if not enabled():
++        return None
++    coll = db[COLLECTION]
++    # Anti-contamination : abandonner une OPEN résiduelle sur un autre tracker.
++    await coll.update_many(
++        {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "state": S_OPEN,
++         "tracker_id": {"$ne": (int(tracker_id) if tracker_id is not None else None)}},
++        {"$set": {"state": S_ABANDONED, "reason": "TRACKER_CHANGE", "updated_at": _now()}},
++    )
++    sid = str(uuid.uuid4())
++    doc = {
++        "id": sid, "tenant_id": tenant_id, "driver_id": driver_id,
++        "vehicle_id": vehicle_id, "tracker_id": (int(tracker_id) if tracker_id is not None else None),
++        "state": S_OPEN,
++        "private_started_at": _now(),
++        "start_source": start_source,
++        "odometer_start_km": odo_start,          # null reste null
++        "start_sample_at": start_sample_at,
++        "command_sent_at": command_sent_at,
++        # candidats END (remplis à l'envoi BUSINESS) :
++        "odometer_end_candidate_km": None,
++        "end_candidate_sample_at": None,
++        "business_command_sent_at": None,
++        # finaux (remplis à la fermeture) :
++        "private_ended_at": None, "odometer_end_km": None, "end_source": None,
++        "private_km": None, "quality": None, "reason": None,
++        "confirmation_source": None,
++        "created_at": _now(), "updated_at": _now(),
++    }
++    try:
++        await coll.insert_one(doc)
++        return sid
++    except Exception as e:  # DuplicateKeyError (course) -> OPEN déjà présente
++        if e.__class__.__name__ == "DuplicateKeyError":
++            logger.info("private_mileage: session OPEN déjà existante (idempotent) vehicle=%s", vehicle_id)
++            return None
++        raise
++
++
++async def capture_end_candidate(db, *, tenant_id: str, vehicle_id: str,
++                                tracker_id: Optional[int], odo_end_candidate: Optional[float],
++                                end_candidate_sample_at: Optional[str],
++                                business_command_sent_at: Optional[str]) -> None:
++    """Enregistre un CANDIDAT END au moment où la commande BUSINESS est acceptée/envoyée
++    (symétrie avec Q4b). Ne ferme PAS la session. Sert de filet si la confirmation manque."""
++    if not enabled():
++        return
++    await db[COLLECTION].update_one(
++        {"tenant_id": tenant_id, "vehicle_id": vehicle_id,
++         "tracker_id": (int(tracker_id) if tracker_id is not None else None), "state": S_OPEN},
++        {"$set": {"odometer_end_candidate_km": odo_end_candidate,
++                  "end_candidate_sample_at": end_candidate_sample_at,
++                  "business_command_sent_at": business_command_sent_at,
++                  "updated_at": _now()}},
++    )
++
++
++def _finalize_fields(odo_start, odo_end, end_source, confirmation_source, degraded: bool) -> dict:
++    """Calcule private_km + quality de façon fail-closed (null != 0)."""
++    if odo_end is None or odo_start is None:
++        return {"private_km": None, "quality": Q_UNAVAILABLE,
++                "reason": "ODOMETER_MISSING"}
++    dist = private_distance(odo_start, odo_end)
++    if dist is None:
++        return {"private_km": None, "quality": Q_UNAVAILABLE, "reason": "NEGATIVE_DELTA"}
++    return {"private_km": dist, "quality": Q_DEGRADED if degraded else Q_OK, "reason": None}
++
++
++async def close_session(db, *, tenant_id: str, vehicle_id: str, tracker_id: Optional[int],
++                        odo_end: Optional[float], end_source: str,
++                        confirmation_source: Optional[str], degraded: bool = False) -> Optional[str]:
++    """Ferme la session OPEN (idempotent : no-op si aucune OPEN).
++
++    private_km = end - start (fail-closed). CLOSED si OK, sinon CLOSED+quality explicite.
++    Ne prolonge JAMAIS la distance au-delà du snapshot END (pas d'ajout post-BUSINESS)."""
++    if not enabled():
++        return None
++    coll = db[COLLECTION]
++    sess = await coll.find_one(
++        {"tenant_id": tenant_id, "vehicle_id": vehicle_id,
++         "tracker_id": (int(tracker_id) if tracker_id is not None else None), "state": S_OPEN},
++        {"_id": 0})
++    if not sess:
++        return None  # idempotent : déjà fermée / inexistante
++    fin = _finalize_fields(sess.get("odometer_start_km"), odo_end, end_source,
++                           confirmation_source, degraded)
++    await coll.update_one(
++        {"id": sess["id"], "state": S_OPEN},   # garde-fou : ne ferme que si TOUJOURS OPEN
++        {"$set": {"state": S_CLOSED, "private_ended_at": _now(),
++                  "odometer_end_km": odo_end, "end_source": end_source,
++                  "confirmation_source": confirmation_source,
++                  "updated_at": _now(), **fin}},
++    )
++    return sess["id"]
++
++
++async def close_from_candidate(db, *, tenant_id: str, vehicle_id: str,
++                               tracker_id: Optional[int], confirmation_source: Optional[str]) -> Optional[str]:
++    """Clôture DEGRADED depuis le candidat END (BUSINESS envoyé mais confirmation
++    jamais obtenue, retour ultérieurement plausible). Jamais de fausse confirmation."""
++    if not enabled():
++        return None
++    coll = db[COLLECTION]
++    sess = await coll.find_one(
++        {"tenant_id": tenant_id, "vehicle_id": vehicle_id,
++         "tracker_id": (int(tracker_id) if tracker_id is not None else None), "state": S_OPEN},
++        {"_id": 0})
++    if not sess or sess.get("odometer_end_candidate_km") is None:
++        return None
++    return await close_session(
++        db, tenant_id=tenant_id, vehicle_id=vehicle_id, tracker_id=tracker_id,
++        odo_end=sess.get("odometer_end_candidate_km"),
++        end_source=(sess.get("end_source") or "AVL16_CANDIDATE"),
++        confirmation_source=confirmation_source, degraded=True)
++
++
++# ---------------------------------------------------------------------------
++# Agrégation par période AVEC CUTOVER (intervalles disjoints, pas de double comptage).
++# ---------------------------------------------------------------------------
++async def _sum_avl16_km(db, *, tenant_id: str, vehicle_id: str,
++                        start_utc: datetime, end_utc: datetime) -> tuple[Optional[float], int]:
++    """Somme des private_km des sessions CLOSED rattachées à [start,end] par private_ended_at.
++    Retourne (somme|None, count). None seulement si AUCUNE session exploitable."""
++    coll = db[COLLECTION]
++    q = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "state": S_CLOSED,
++         "private_ended_at": {"$gte": start_utc.isoformat(), "$lte": end_utc.isoformat()}}
++    total = None
++    n = 0
++    async for s in coll.find(q, {"_id": 0, "private_km": 1}):
++        n += 1
++        km = s.get("private_km")
++        if isinstance(km, (int, float)):
++            total = (total or 0.0) + float(km)
++    return (round(total, 1) if total is not None else (0.0 if n > 0 else None)), n
++
++
++async def aggregate_private_km(
++    db, *, tenant_id: str, vehicle_id: str,
++    start_utc: datetime, end_utc: datetime,
++    gps_fallback_km: Callable[[datetime, datetime], Awaitable[Optional[float]]],
++) -> dict:
++    """Km privés d'une période [start_utc, end_utc] (UTC aware).
++
++    - Flag OFF  -> GPS legacy sur toute la plage (aucun changement de comportement).
++    - Flag ON   -> découpage par CUTOVER (intervalles DISJOINTS) :
++        * partie AVANT cutover  -> GPS legacy  (gps_fallback_km sur [start, min(end,cutover)])
++        * partie APRÈS cutover  -> sessions AVL16 (rattachées par private_ended_at)
++      Provenance : AVL16 | GPS_FALLBACK | MIXED_TRANSITION | UNAVAILABLE.
++      Post-cutover SANS session AVL16 -> UNAVAILABLE (null), jamais un GPS silencieux.
++    null != 0. Retourne {private_km, private_km_source, session_count, avl16_km, gps_km}.
++    """
++    # Flag OFF -> comportement legacy strict (GPS).
++    if not enabled():
++        gps = await gps_fallback_km(start_utc, end_utc)
++        return {"private_km": gps, "private_km_source": SRC_GPS_FALLBACK,
++                "session_count": 0, "avl16_km": None, "gps_km": gps}
++
++    cut = cutover_at()
++
++    # Pas de cutover défini -> AVL16 s'applique à toute la plage (post-cutover partout).
++    if cut is None:
++        avl, n = await _sum_avl16_km(db, tenant_id=tenant_id, vehicle_id=vehicle_id,
++                                     start_utc=start_utc, end_utc=end_utc)
++        if n > 0:
++            return {"private_km": avl, "private_km_source": SRC_AVL16,
++                    "session_count": n, "avl16_km": avl, "gps_km": None}
++        return {"private_km": None, "private_km_source": SRC_UNAVAILABLE,
++                "session_count": 0, "avl16_km": None, "gps_km": None}
++
++    # Cas 1 : période ENTIÈREMENT pré-cutover -> GPS legacy.
++    if end_utc <= cut:
++        gps = await gps_fallback_km(start_utc, end_utc)
++        return {"private_km": gps, "private_km_source": SRC_GPS_FALLBACK,
++                "session_count": 0, "avl16_km": None, "gps_km": gps}
++
++    # Cas 2 : période ENTIÈREMENT post-cutover -> AVL16 (ou UNAVAILABLE, jamais GPS).
++    if start_utc >= cut:
++        avl, n = await _sum_avl16_km(db, tenant_id=tenant_id, vehicle_id=vehicle_id,
++                                     start_utc=start_utc, end_utc=end_utc)
++        if n > 0:
++            return {"private_km": avl, "private_km_source": SRC_AVL16,
++                    "session_count": n, "avl16_km": avl, "gps_km": None}
++        return {"private_km": None, "private_km_source": SRC_UNAVAILABLE,
++                "session_count": 0, "avl16_km": None, "gps_km": None}
++
++    # Cas 3 : période TRAVERSANT le cutover -> MIXED (intervalles disjoints).
++    gps = await gps_fallback_km(start_utc, cut)          # [start, cutover)
++    avl, n = await _sum_avl16_km(db, tenant_id=tenant_id, vehicle_id=vehicle_id,
++                                 start_utc=cut, end_utc=end_utc)  # [cutover, end]
++    gps_val = gps if isinstance(gps, (int, float)) else 0.0
++    avl_val = avl if isinstance(avl, (int, float)) else 0.0
++    total = round(gps_val + avl_val, 1)
++    return {"private_km": total, "private_km_source": SRC_MIXED,
++            "session_count": n, "avl16_km": avl, "gps_km": gps}
+diff --git a/backend/app/private_mode_engine.py b/backend/app/private_mode_engine.py
+index 8480e2f..61a60b1 100644
+--- a/backend/app/private_mode_engine.py
++++ b/backend/app/private_mode_engine.py
+@@ -856,6 +856,29 @@ async def request_mode(
+     cmd = _CMD[target_mode]
+     cmd_res = await send_command(int(tracker_id), cmd)
+ 
++    # --- Session kilométrique PRIVÉE (AVL16) — Q4b : START à la commande ACCEPTÉE/ENVOYÉE ---
++    # Symétrie : END candidat à l'envoi accepté du BUSINESS. Feature-flag OFF -> no-op total.
++    # On ne dépend PAS de la confirmation pour préserver les km (le device peut passer en
++    # privé sans confirmation backend fiable — prouvé terrain).
++    _cmd_effective = cmd_res.get("mode") == "REAL" or simulate_confirm_enabled()
++    try:
++        from app import private_mileage as _pm
++        if _cmd_effective and target_mode == PRIVATE:
++            await _pm.open_session(
++                db, tenant_id=tid, driver_id=driver_id, vehicle_id=vehicle_id,
++                tracker_id=tracker_id, odo_start=base.get("private_start_odometer_km"),
++                start_source=("AVL16" if base.get("odometer_snapshot_status") == "OK" else "UNAVAILABLE"),
++                start_sample_at=base.get("private_start_time"), command_sent_at=_now())
++        elif _cmd_effective and target_mode == BUSINESS:
++            odo_cand, cand_status = await _read_odometer_snapshot(
++                db, tid, vehicle_id, tracker_id, read_odo_km)
++            await _pm.capture_end_candidate(
++                db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
++                odo_end_candidate=odo_cand, end_candidate_sample_at=_now(),
++                business_command_sent_at=_now())
++    except Exception:  # jamais bloquer la bascule pour un souci d'historique km
++        logger.warning("private_mileage: hook envoi ignoré (non bloquant)", exc_info=False)
++
+     # --- Confirmation IMMÉDIATE (jamais optimiste) ---
+     confirmed_state, confirm_source = await confirm(int(tracker_id), target_mode)
+ 
+@@ -914,6 +937,15 @@ async def request_mode(
+         result["private_distance_km"] = dist
+         if dist is None:
+             result["distance_status"] = "UNAVAILABLE"  # jamais inventée
++        # Historise/ferme la session AVL16 (idempotent ; flag OFF -> no-op).
++        try:
++            from app import private_mileage as _pm
++            await _pm.close_session(
++                db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
++                odo_end=odo_end, end_source="AVL16",
++                confirmation_source=confirm_source, degraded=False)
++        except Exception:
++            logger.warning("private_mileage: fermeture (confirm immédiat) ignorée", exc_info=False)
+ 
+     await _save_mode_state(db, new_doc)
+     await _audit(db, {**base, "requested_mode": target_mode, "resulting_state": target_mode,
+@@ -996,6 +1028,18 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
+             new_doc["private_end_odometer_km"] = odo_end
+             new_doc["private_distance_km"] = _private_distance(
+                 st.get("private_start_odometer_km"), odo_end)
++        # Historise/ferme la session AVL16 au retour Business confirmé ASYNC (idempotent).
++        if requested == BUSINESS:
++            try:
++                from app import private_mileage as _pm
++                odo_end_c, _c = await _read_odometer_snapshot(
++                    db, tid, vehicle_id, tracker_id, read_odo_km)
++                await _pm.close_session(
++                    db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
++                    odo_end=odo_end_c, end_source="AVL16",
++                    confirmation_source=source, degraded=False)
++            except Exception:
++                logger.warning("private_mileage: fermeture (confirm async) ignorée", exc_info=False)
+         # Nettoyage des coordonnées d'ancre (usage interne de confirmation uniquement).
+         if requested == BUSINESS:
+             new_doc.pop("private_gps_anchor_lat", None)
+diff --git a/backend/app/routes/identification.py b/backend/app/routes/identification.py
+index ec117ba..61a6c08 100644
+--- a/backend/app/routes/identification.py
++++ b/backend/app/routes/identification.py
+@@ -514,19 +514,36 @@ async def driver_km_summary(
+         start_local = base - timedelta(days=now_local.weekday())  # lundi 00:00 local
+     else:  # month
+         start_local = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+-    start_iso = start_local.astimezone(timezone.utc).isoformat()
++    start_utc = start_local.astimezone(timezone.utc)
++    end_utc = datetime.now(timezone.utc)
++    start_iso = start_utc.isoformat()
++
++    # Km PRO = trajets professionnels réels (inchangé).
++    q_pro = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
++    trips_pro = await db.trips.find(
++        q_pro, {"_id": 0, "distance_km": 1, "classification": 1}).limit(20000).to_list(20000)
++    pro = round(sum((t.get("distance_km") or 0) for t in trips_pro
++                    if t.get("classification") == "professional"), 1)
+ 
+-    # Trajets du VÉHICULE ACTIF, tenant scopé, sur la période.
+-    q = {"tenant_id": tenant_id, "vehicle_id": vehicle_id, "start_time": {"$gte": start_iso}}
+-    trips = await db.trips.find(
+-        q, {"_id": 0, "distance_km": 1, "classification": 1}).limit(20000).to_list(20000)
++    # Km PRIVÉ = source AVL16 (sessions) avec CUTOVER + fallback GPS legacy (intervalles
++    # disjoints, jamais de double comptage). Provenance explicite. Voir app.private_mileage.
++    from app import private_mileage as _pm
++
++    async def _gps_personal_km(s_utc, e_utc):
++        """Fallback legacy : somme des trajets 'personal' (distance GPS) sur [s_utc, e_utc]."""
++        qq = {"tenant_id": tenant_id, "vehicle_id": vehicle_id,
++              "classification": "personal",
++              "start_time": {"$gte": s_utc.isoformat(), "$lt": e_utc.isoformat()}}
++        docs = await db.trips.find(qq, {"_id": 0, "distance_km": 1}).limit(20000).to_list(20000)
++        return round(sum((d.get("distance_km") or 0) for d in docs), 1)
++
++    agg = await _pm.aggregate_private_km(
++        db, tenant_id=tenant_id, vehicle_id=vehicle_id,
++        start_utc=start_utc, end_utc=end_utc, gps_fallback_km=_gps_personal_km)
+ 
+-    pro = round(sum((t.get("distance_km") or 0) for t in trips
+-                    if t.get("classification") == "professional"), 1)
+-    priv = round(sum((t.get("distance_km") or 0) for t in trips
+-                     if t.get("classification") == "personal"), 1)
+     return {"period": period, "period_label": period_label, "vehicle_id": vehicle_id,
+-            "pro_km": pro, "private_km": priv, "available": True}
++            "pro_km": pro, "private_km": agg["private_km"],
++            "private_km_source": agg["private_km_source"], "available": True}
+ 
+ 
+ 
+diff --git a/backend/server.py b/backend/server.py
+index e0c27e0..69fb309 100644
+--- a/backend/server.py
++++ b/backend/server.py
+@@ -103,6 +103,13 @@ async def on_startup():
+     await raw.vehicle_documents.create_index([("tenant_id", 1), ("id", 1)], unique=True)
+     await raw.vehicle_inspections.create_index([("tenant_id", 1), ("vehicle_id", 1), ("created_at", -1)])
+     await raw.vehicle_inspections.create_index([("tenant_id", 1), ("id", 1)], unique=True)
++    # Sessions kilométriques privées AVL16 (index dont l'UNIQUE PARTIEL {state:OPEN}
++    # garantit l'idempotence d'ouverture même sous concurrence).
++    try:
++        from app.private_mileage import ensure_indexes as _ensure_pm_indexes
++        await _ensure_pm_indexes(raw)
++    except Exception as _e:
++        logger.warning("private_mileage indexes non créés au démarrage: %s", _e)
+     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
+         await seed_mock_data(force=False)
+     await apply_rules_to_all(db)
+diff --git a/backend/tests/test_private_mileage.py b/backend/tests/test_private_mileage.py
+new file mode 100644
+index 0000000..70677ee
+--- /dev/null
++++ b/backend/tests/test_private_mileage.py
+@@ -0,0 +1,196 @@
++"""Tests unitaires — agrégateur Km Privé AVL16 avec CUTOVER (app.private_mileage).
++
++Couvre : flag OFF (legacy GPS), cutover pré/post/traversant, absence de session
++post-cutover -> UNAVAILABLE (jamais GPS silencieux), delta négatif, null != 0.
++Fake DB async minimal. Aucun réseau, aucune commande device.
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++from datetime import datetime, timezone
++
++from app import private_mileage as pm
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++# ---- Fake async collection (juste ce dont l'agrégateur a besoin) ----
++class _Cursor:
++    def __init__(self, docs):
++        self._docs = docs
++
++    def __aiter__(self):
++        self._it = iter(self._docs)
++        return self
++
++    async def __anext__(self):
++        try:
++            return next(self._it)
++        except StopIteration:
++            raise StopAsyncIteration
++
++
++class _Coll:
++    def __init__(self):
++        self.docs = []
++
++    def find(self, q, proj=None):
++        out = []
++        for d in self.docs:
++            ok = True
++            for k, v in q.items():
++                if isinstance(v, dict) and ("$gte" in v or "$lte" in v):
++                    val = d.get(k)
++                    if "$gte" in v and not (val is not None and val >= v["$gte"]):
++                        ok = False
++                    if "$lte" in v and not (val is not None and val <= v["$lte"]):
++                        ok = False
++                elif d.get(k) != v:
++                    ok = False
++            if ok:
++                out.append(dict(d))
++        return _Cursor(out)
++
++
++class _DB:
++    def __init__(self):
++        self._c = _Coll()
++
++    def __getitem__(self, name):
++        return self._c
++
++
++def setup_module(_m):
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++    _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def teardown_module(_m):
++    _os.environ.pop("PRIVATE_KM_SOURCE_AVL16", None)
++    _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def _dt(s):
++    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
++
++
++def _closed(vehicle_id, ended_iso, km):
++    return {"tenant_id": "default", "vehicle_id": vehicle_id, "state": pm.S_CLOSED,
++            "private_ended_at": ended_iso, "private_km": km}
++
++
++async def _gps_zero(s, e):
++    return 0.0
++
++
++def test_flag_off_uses_gps_legacy():
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "0"
++    try:
++        db = _DB()
++
++        async def gps(s, e):
++            return 350.0
++        r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
++                 start_utc=_dt("2026-09-01T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
++                 gps_fallback_km=gps))
++        assert r["private_km"] == 350.0
++        assert r["private_km_source"] == pm.SRC_GPS_FALLBACK
++    finally:
++        _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++
++
++def test_no_cutover_uses_avl16_when_sessions_exist():
++    db = _DB()
++    db["x"].docs.append(_closed("vA", "2026-09-20T10:00:00+00:00", 12.4))
++    r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
++             start_utc=_dt("2026-09-01T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
++             gps_fallback_km=_gps_zero))
++    assert r["private_km"] == 12.4
++    assert r["private_km_source"] == pm.SRC_AVL16
++    assert r["session_count"] == 1
++
++
++def test_period_entirely_pre_cutover_is_gps():
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-09-15T00:00:00Z"
++    try:
++        db = _DB()
++
++        async def gps(s, e):
++            return 350.0
++        r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
++                 start_utc=_dt("2026-09-01T00:00:00"), end_utc=_dt("2026-09-14T23:59:59"),
++                 gps_fallback_km=gps))
++        assert r["private_km"] == 350.0
++        assert r["private_km_source"] == pm.SRC_GPS_FALLBACK
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def test_period_entirely_post_cutover_avl16_or_unavailable():
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-09-15T00:00:00Z"
++    try:
++        # avec session -> AVL16
++        db = _DB()
++        db["x"].docs.append(_closed("vA", "2026-09-20T10:00:00+00:00", 20.0))
++        r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
++                 start_utc=_dt("2026-09-16T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
++                 gps_fallback_km=_gps_zero))
++        assert r["private_km"] == 20.0 and r["private_km_source"] == pm.SRC_AVL16
++
++        # sans session post-cutover -> UNAVAILABLE (null), JAMAIS GPS silencieux
++        db2 = _DB()
++
++        async def gps(s, e):
++            return 999.0  # ne doit PAS être utilisé post-cutover
++        r2 = _run(pm.aggregate_private_km(db2, tenant_id="default", vehicle_id="vA",
++                  start_utc=_dt("2026-09-16T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
++                  gps_fallback_km=gps))
++        assert r2["private_km"] is None
++        assert r2["private_km_source"] == pm.SRC_UNAVAILABLE
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def test_period_crossing_cutover_is_mixed_disjoint():
++    _os.environ["PRIVATE_KM_AVL16_CUTOVER_AT"] = "2026-09-15T00:00:00Z"
++    try:
++        db = _DB()
++        db["x"].docs.append(_closed("vA", "2026-09-20T10:00:00+00:00", 220.0))  # après cutover
++
++        async def gps(s, e):
++            # doit être appelé sur [start, cutover] -> 350 km legacy
++            assert e == _dt("2026-09-15T00:00:00")
++            return 350.0
++        r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
++                 start_utc=_dt("2026-09-01T00:00:00"), end_utc=_dt("2026-09-30T23:59:59"),
++                 gps_fallback_km=gps))
++        assert r["private_km"] == 570.0            # 350 (GPS avant) + 220 (AVL16 après)
++        assert r["private_km_source"] == pm.SRC_MIXED
++        assert r["gps_km"] == 350.0 and r["avl16_km"] == 220.0
++    finally:
++        _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++
++def test_private_distance_helpers():
++    assert pm.private_distance(10000.0, 10012.4) == 12.4
++    assert pm.private_distance(10012.4, 10000.0) is None   # delta négatif -> None
++    assert pm.private_distance(None, 10.0) is None
++    assert pm.private_distance(10.0, None) is None
++
++
++def test_finalize_fields_fail_closed():
++    # odo manquant -> UNAVAILABLE
++    f = pm._finalize_fields(None, 10.0, "AVL16", "X", False)
++    assert f["private_km"] is None and f["quality"] == pm.Q_UNAVAILABLE
++    # delta négatif -> UNAVAILABLE + NEGATIVE_DELTA
++    f2 = pm._finalize_fields(20.0, 10.0, "AVL16", "X", False)
++    assert f2["private_km"] is None and f2["reason"] == "NEGATIVE_DELTA"
++    # ok -> OK
++    f3 = pm._finalize_fields(100.0, 112.4, "AVL16", "X", False)
++    assert f3["private_km"] == 12.4 and f3["quality"] == pm.Q_OK
++    # degraded flag -> DEGRADED
++    f4 = pm._finalize_fields(100.0, 112.4, "AVL16", "X", True)
++    assert f4["private_km"] == 12.4 and f4["quality"] == pm.Q_DEGRADED
+diff --git a/backend/tests/test_private_mileage_integration.py b/backend/tests/test_private_mileage_integration.py
+new file mode 100644
+index 0000000..56b1e6b
+--- /dev/null
++++ b/backend/tests/test_private_mileage_integration.py
+@@ -0,0 +1,216 @@
++"""Test d'intégration — request_mode() crée/ferme une session AVL16 (Q4b + END symétrique).
++
++Vérifie le câblage réel dans private_mode_engine.request_mode :
++- PRIVATE accepté (REAL) -> session OPEN avec odometer_start (Q4b, à l'envoi accepté) ;
++- BUSINESS confirmé      -> session CLOSED avec private_km = end - start.
++Hooks device MOCKÉS. Flag PRIVATE_KM_SOURCE_AVL16=1. Aucun réseau/commande réelle.
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++
++from app import private_mode_engine as pm
++from app import private_mileage as pmil
++from app import private_mode_gate as _gate
++from app import integrations as _integrations
++from app.odometer_capability import (
++    VehicleOdometerCapability, SOURCE_TELTONIKA_TOTAL_ODOMETER, AVL_TOTAL_ODOMETER, SCALE_VERIFIED,
++)
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++# --- Fake DB avec collection private_mileage_session (index OPEN unique simulé) ---
++class _Cursor:
++    def __init__(self, docs):
++        self._docs = list(docs)
++
++    def __aiter__(self):
++        self._it = iter(self._docs)
++        return self
++
++    async def __anext__(self):
++        try:
++            return next(self._it)
++        except StopIteration:
++            raise StopAsyncIteration
++
++
++class _Coll:
++    def __init__(self):
++        self.docs = []
++
++    def _match(self, d, q):
++        for k, v in q.items():
++            if isinstance(v, dict):
++                if "$ne" in v and d.get(k) == v["$ne"]:
++                    return False
++                if "$gte" in v and not (d.get(k) is not None and d.get(k) >= v["$gte"]):
++                    return False
++                if "$lte" in v and not (d.get(k) is not None and d.get(k) <= v["$lte"]):
++                    return False
++            elif d.get(k) != v:
++                return False
++        return True
++
++    async def find_one(self, q, proj=None):
++        for d in self.docs:
++            if self._match(d, q):
++                return dict(d)
++        return None
++
++    async def insert_one(self, d):
++        self.docs.append(dict(d))
++
++    async def insert_many(self, ds):
++        self.docs.extend(dict(d) for d in ds)
++
++    async def update_one(self, q, upd, upsert=False):
++        for d in self.docs:
++            if self._match(d, q):
++                d.update(upd.get("$set", {}))
++                return
++        if upsert:
++            nd = dict(q)
++            nd.update(upd.get("$set", {}))
++            self.docs.append(nd)
++
++    async def update_many(self, q, upd):
++        for d in self.docs:
++            if self._match(d, q):
++                d.update(upd.get("$set", {}))
++
++    def find(self, q, proj=None):
++        return _Cursor([dict(d) for d in self.docs if self._match(d, q)])
++
++
++class _DB:
++    def __init__(self):
++        self._named = {}
++        self.vehicles = _Coll()
++        self.private_mode_state = _Coll()
++        self.vehicle_private_capabilities = _Coll()
++        self.audit_log = _Coll()
++        self.feature_flags = _Coll()
++        self.tenants = _Coll()
++
++    def __getitem__(self, name):
++        return self._named.setdefault(name, _Coll())
++
++
++_ORIG = _integrations.get_integration_credential
++
++
++def setup_module(_m):
++    _os.environ["PRIVATE_MODE_ENABLED"] = "1"
++    _os.environ["PRIVATE_MODE_PILOT_TENANTS"] = "default"
++    _os.environ["PRIVATE_MODE_PILOT_TRACKERS"] = "781479"
++    _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "1"
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++    _os.environ.pop("PRIVATE_KM_AVL16_CUTOVER_AT", None)
++
++    def _stub(tenant_id=None, provider="NAVIXY"):
++        if tenant_id == "default" and provider == "NAVIXY":
++            return {"credential": "STUB", "source": "TENANT", "api_url": None}
++        return None
++    _integrations.get_integration_credential = _stub
++    _gate.get_integration_credential = _stub
++
++
++def teardown_module(_m):
++    for k in ("PRIVATE_MODE_ENABLED", "PRIVATE_MODE_PILOT_TENANTS", "PRIVATE_MODE_PILOT_TRACKERS",
++              "PRIVATE_MODE_DEVICE_WRITE", "PRIVATE_KM_SOURCE_AVL16"):
++        _os.environ.pop(k, None)
++    _integrations.get_integration_credential = _ORIG
++
++
++_VC = VehicleOdometerCapability(
++    vehicle_id="vA", tracker_id=781479, device_model="FMC130",
++    private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
++    navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
++    private_confirmation_strategy=pm.CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
++    runtime_verified=True, cumulative_verified=True,
++    private_increment_verified=True, field_validated=True)
++
++
++def _db():
++    db = _DB()
++    _run(db.vehicles.update_one({"id": "vA"},
++         {"$set": {"id": "vA", "tenant_id": "default", "model": "telfmu130_fmc130",
++                   "navixy_tracker_id": 781479, "plate": "GE-AUDI",
++                   "private_mode_pilot": True}}, upsert=True))
++    _run(pm.upsert_vehicle_capability(db, _VC))
++    return db
++
++
++async def _session_ok(db, driver_id):
++    return {"vehicle_id": "vA", "driver_id": driver_id}
++
++
++def _real_cmd():
++    async def _c(tid, cmd):
++        return {"applied": True, "mode": "REAL", "command": cmd, "navixy_command_id": 1}
++    return _c
++
++
++def _confirm(state):
++    async def _cf(tid, expected):
++        return (expected if state == "ok" else None), pm.SRC_TELEMETRY
++    return _cf
++
++
++def _odo(seq):
++    it = iter(seq)
++
++    async def _r(tid):
++        try:
++            return next(it)
++        except StopIteration:
++            return seq[-1]
++    return _r
++
++
++def test_private_then_business_creates_and_closes_session_1024():
++    db = _db()
++    coll = db["private_mileage_session"]
++
++    # 1) PRIVATE confirmé immédiat -> odo_start=10000.0 -> session OPEN créée (Q4b, à l'envoi).
++    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++         send_command=_real_cmd(), confirm=_confirm("ok"), read_odo_km=_odo([10000.0]),
++         tenant_id="default"))
++    opens = [d for d in coll.docs if d["state"] == pmil.S_OPEN]
++    assert len(opens) == 1
++    assert opens[0]["odometer_start_km"] == 10000.0
++    assert opens[0]["tracker_id"] == 781479
++
++    # 2) BUSINESS confirmé -> odo_end=10012.4 -> session CLOSED, private_km=12.4
++    _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
++         send_command=_real_cmd(), confirm=_confirm("ok"), read_odo_km=_odo([10012.4]),
++         tenant_id="default"))
++    closed = [d for d in coll.docs if d["state"] == pmil.S_CLOSED]
++    assert len(closed) == 1
++    assert closed[0]["private_km"] == 12.4
++    assert closed[0]["quality"] == pmil.Q_OK
++
++
++def test_private_command_refused_creates_no_session():
++    """DEVICE_WRITE=0 -> commande refusée avant envoi -> AUCUNE session (Q4b)."""
++    _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "0"
++    try:
++        db = _db()
++        coll = db["private_mileage_session"]
++
++        def _forbid():
++            async def _c(tid, cmd):
++                raise AssertionError("aucune commande avec DEVICE_WRITE=0")
++            return _c
++        res = _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
++                   send_command=_forbid(), confirm=_confirm("ok"), read_odo_km=_odo([10000.0]),
++                   tenant_id="default"))
++        assert res["ok"] is False
++        assert coll.docs == []   # aucune session ouverte
++    finally:
++        _os.environ["PRIVATE_MODE_DEVICE_WRITE"] = "1"
+diff --git a/backend/tests/test_private_mileage_sessions.py b/backend/tests/test_private_mileage_sessions.py
+new file mode 100644
+index 0000000..3fa5b1a
+--- /dev/null
++++ b/backend/tests/test_private_mileage_sessions.py
+@@ -0,0 +1,222 @@
++"""Tests — cycle de vie des sessions kilométriques privées AVL16 (app.private_mileage).
++
++Couvre : ouverture Q4b, END candidat, fermeture idempotente, delta négatif, stale/null,
++double OPEN (idempotence garantie par contrainte base simulée), double CLOSE, changement
++de tracker (abandon), fermeture depuis candidat (DEGRADED). Aucun réseau/commande device.
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++
++from app import private_mileage as pm
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++class _DuplicateKeyError(Exception):
++    pass
++
++
++class _Cursor:
++    def __init__(self, docs):
++        self._docs = list(docs)
++
++    def __aiter__(self):
++        self._it = iter(self._docs)
++        return self
++
++    async def __anext__(self):
++        try:
++            return next(self._it)
++        except StopIteration:
++            raise StopAsyncIteration
++
++
++class _Coll:
++    """Fake collection qui SIMULE l'index unique partiel {state:OPEN} sur
++    (tenant_id, vehicle_id, tracker_id) : insert d'une 2e OPEN -> DuplicateKeyError."""
++    def __init__(self):
++        self.docs = []
++
++    def _match(self, d, q):
++        for k, v in q.items():
++            if isinstance(v, dict):
++                if "$ne" in v and d.get(k) == v["$ne"]:
++                    return False
++                if "$gte" in v and not (d.get(k) is not None and d.get(k) >= v["$gte"]):
++                    return False
++                if "$lte" in v and not (d.get(k) is not None and d.get(k) <= v["$lte"]):
++                    return False
++            elif d.get(k) != v:
++                return False
++        return True
++
++    async def insert_one(self, doc):
++        if doc.get("state") == pm.S_OPEN:
++            for d in self.docs:
++                if (d.get("state") == pm.S_OPEN and d.get("tenant_id") == doc.get("tenant_id")
++                        and d.get("vehicle_id") == doc.get("vehicle_id")
++                        and d.get("tracker_id") == doc.get("tracker_id")):
++                    raise _DuplicateKeyError("dup OPEN")
++        self.docs.append(dict(doc))
++
++    async def find_one(self, q, proj=None):
++        for d in self.docs:
++            if self._match(d, q):
++                return dict(d)
++        return None
++
++    async def update_one(self, q, upd, upsert=False):
++        for d in self.docs:
++            if self._match(d, q):
++                d.update(upd.get("$set", {}))
++                return
++        if upsert:
++            nd = dict(q)
++            nd.update(upd.get("$set", {}))
++            self.docs.append(nd)
++
++    async def update_many(self, q, upd):
++        for d in self.docs:
++            if self._match(d, q):
++                d.update(upd.get("$set", {}))
++
++    def find(self, q, proj=None):
++        return _Cursor([dict(d) for d in self.docs if self._match(d, q)])
++
++
++class _DB:
++    def __init__(self):
++        self._c = _Coll()
++
++    def __getitem__(self, name):
++        return self._c
++
++
++# Nommer l'exception attendue par le module (il teste e.__class__.__name__ == "DuplicateKeyError").
++_DuplicateKeyError.__name__ = "DuplicateKeyError"
++
++
++def setup_module(_m):
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++
++
++def teardown_module(_m):
++    _os.environ.pop("PRIVATE_KM_SOURCE_AVL16", None)
++
++
++def _open(db, tracker=781479, odo=10000.0, src="AVL16"):
++    return _run(pm.open_session(
++        db, tenant_id="default", driver_id="d1", vehicle_id="vA", tracker_id=tracker,
++        odo_start=odo, start_source=src, start_sample_at="2026-09-20T09:00:00Z",
++        command_sent_at="2026-09-20T09:00:00Z"))
++
++
++def test_open_then_close_computes_distance():
++    db = _DB()
++    sid = _open(db, odo=10000.0)
++    assert sid is not None
++    cid = _run(pm.close_session(db, tenant_id="default", vehicle_id="vA", tracker_id=781479,
++               odo_end=10012.4, end_source="AVL16", confirmation_source="TELEMETRY_CONFIRMED"))
++    assert cid == sid
++    s = db._c.docs[0]
++    assert s["state"] == pm.S_CLOSED
++    assert s["private_km"] == 12.4
++    assert s["quality"] == pm.Q_OK
++
++
++def test_double_open_is_idempotent_single_session():
++    db = _DB()
++    a = _open(db)
++    b = _open(db)  # 2e OPEN -> DuplicateKeyError capturé -> None
++    assert a is not None and b is None
++    opens = [d for d in db._c.docs if d["state"] == pm.S_OPEN]
++    assert len(opens) == 1
++
++
++def test_double_close_only_once():
++    db = _DB()
++    _open(db, odo=10000.0)
++    c1 = _run(pm.close_session(db, tenant_id="default", vehicle_id="vA", tracker_id=781479,
++              odo_end=10010.0, end_source="AVL16", confirmation_source="X"))
++    c2 = _run(pm.close_session(db, tenant_id="default", vehicle_id="vA", tracker_id=781479,
++              odo_end=10020.0, end_source="AVL16", confirmation_source="X"))
++    assert c1 is not None and c2 is None       # 2e fermeture = no-op
++    closed = [d for d in db._c.docs if d["state"] == pm.S_CLOSED]
++    assert len(closed) == 1 and closed[0]["private_km"] == 10.0  # pas de 2e distance
++
++
++def test_negative_delta_refused():
++    db = _DB()
++    _open(db, odo=10020.0)
++    _run(pm.close_session(db, tenant_id="default", vehicle_id="vA", tracker_id=781479,
++         odo_end=10000.0, end_source="AVL16", confirmation_source="X"))
++    s = db._c.docs[0]
++    assert s["private_km"] is None and s["reason"] == "NEGATIVE_DELTA"
++
++
++def test_end_missing_unavailable():
++    db = _DB()
++    _open(db, odo=10000.0)
++    _run(pm.close_session(db, tenant_id="default", vehicle_id="vA", tracker_id=781479,
++         odo_end=None, end_source="UNAVAILABLE", confirmation_source="X"))
++    s = db._c.docs[0]
++    assert s["private_km"] is None and s["quality"] == pm.Q_UNAVAILABLE
++
++
++def test_tracker_change_abandons_previous_open():
++    db = _DB()
++    _open(db, tracker=781479, odo=10000.0)
++    # ouvrir sur un AUTRE tracker -> l'ancienne OPEN doit passer ABANDONED
++    sid2 = _open(db, tracker=999999, odo=5000.0)
++    assert sid2 is not None
++    states = {d["tracker_id"]: d["state"] for d in db._c.docs}
++    assert states[781479] == pm.S_ABANDONED
++    assert states[999999] == pm.S_OPEN
++
++
++def test_end_candidate_then_close_from_candidate_degraded():
++    db = _DB()
++    _open(db, odo=10000.0)
++    _run(pm.capture_end_candidate(db, tenant_id="default", vehicle_id="vA", tracker_id=781479,
++         odo_end_candidate=10008.0, end_candidate_sample_at="2026-09-20T10:00:00Z",
++         business_command_sent_at="2026-09-20T10:00:00Z"))
++    cid = _run(pm.close_from_candidate(db, tenant_id="default", vehicle_id="vA",
++               tracker_id=781479, confirmation_source="LATE_PROOF"))
++    assert cid is not None
++    s = db._c.docs[0]
++    assert s["state"] == pm.S_CLOSED and s["private_km"] == 8.0
++    assert s["quality"] == pm.Q_DEGRADED
++
++
++def test_flag_off_no_session_created():
++    _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "0"
++    try:
++        db = _DB()
++        sid = _open(db)
++        assert sid is None
++        assert db._c.docs == []
++    finally:
++        _os.environ["PRIVATE_KM_SOURCE_AVL16"] = "1"
++
++
++def test_unfinished_session_stays_open_not_counted():
++    """PRIVATE accepté mais jamais de BUSINESS confirmé -> session reste OPEN, non comptée."""
++    db = _DB()
++    _open(db, odo=10000.0)
++    # aucune fermeture : la session reste OPEN
++    opens = [d for d in db._c.docs if d["state"] == pm.S_OPEN]
++    assert len(opens) == 1
++    # l'agrégat ne compte QUE les CLOSED -> None (pas de session close)
++
++    async def _gps(s, e):
++        return None
++    from datetime import datetime, timezone
++    r = _run(pm.aggregate_private_km(db, tenant_id="default", vehicle_id="vA",
++             start_utc=datetime(2026, 9, 1, tzinfo=timezone.utc),
++             end_utc=datetime(2026, 9, 30, tzinfo=timezone.utc), gps_fallback_km=_gps))
++    # pas de cutover, pas de session CLOSED -> UNAVAILABLE
++    assert r["private_km_source"] == pm.SRC_UNAVAILABLE and r["private_km"] is None
+-- 
+2.39.5
+

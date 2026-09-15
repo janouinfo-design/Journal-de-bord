@@ -12,11 +12,14 @@ backend:
   - task: "PRIVATE km AVL16 odometer source - software-only feature (Q4b sessions + CUTOVER)"
     implemented: true
     working: true
-    file: "backend/app/private_mileage.py, backend/app/private_mode_engine.py, backend/app/routes/identification.py, backend/server.py"
+    file: "backend/app/private_mileage.py, backend/app/private_mode_engine.py, backend/app/routes/identification.py, backend/app/routes/reports.py, backend/server.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
+      - working: true
+        agent: "testing"
+        comment: "PRIVATE KM AVL16 REPORTS ALIGNMENT VERIFIED (LOT 2) - All 123 tests PASSED (5 new report tests + 118 regression). CONTEXT: Second lot of AVL16 PRIVATE-km feature - align REPORTS with the same canonical private-km aggregator used by km-summary (previously reports read GPS 'personal' trips → incoherent with Conduite screen). Software-only, feature-flag PRIVATE_KM_SOURCE_AVL16 default '0' (OFF). No device commands, no real Navixy, no .env prod changes. All hooks mocked in tests. WHAT CHANGED (this lot): (1) backend/app/private_mileage.py: added aggregate_private_km_for_scope(db, tenant_id, vehicle_ids, start_utc, end_utc, gps_fallback_km_for_vehicle) (lines 357-404) — a MULTI-VEHICLE aggregator that reuses the SAME per-vehicle aggregate_private_km (no 2nd AVL16 logic). Fleet source = AVL16 | GPS_FALLBACK | MIXED_TRANSITION | UNAVAILABLE; null != 0 (no invented 0). (2) backend/app/routes/reports.py (/reports/tax-swiss, Swiss fiscal/monthly, lines 130-180): private km (perso_km, and derived pct_perso/pct_pro/total_km) now come from aggregate_private_km_for_scope over the vehicles present in the scoped trips; pro_km unchanged. Internal private_km_source kept in stats for audit (PDF only reads fixed keys, so safe). KEY SAFETY: with flag OFF (default), the aggregator returns GPS legacy numbers → identical to previous report behavior (no change in prod). TEST RESULTS: (1) NEW REPORT-ALIGNMENT SUITE (test_reports_private_km_avl16.py): 5/5 PASSED in 0.10s - test_flag_off_scope_equals_gps_legacy_sum: flag OFF -> scope sum == GPS legacy (350+120=470), source GPS_FALLBACK (numbers unchanged vs before) ✓, test_scope_post_cutover_all_avl16: all-post-cutover with sessions -> AVL16 (255), session_count 2 ✓, test_scope_post_cutover_no_session_is_unavailable_not_gps: post-cutover WITHOUT session -> private_km None + UNAVAILABLE (NOT GPS silently), null != 0 ✓, test_scope_crossing_cutover_is_mixed_no_double_count: crossing cutover -> MIXED_TRANSITION = GPS(before cutover, bounded at cutover) + AVL16(after); no double count (e.g. 690.0) ✓, test_pct_perso_uses_aggregated_private_km: pct_perso uses aggregated AVL16 private km (250) not GPS (350) => 25.0% ✓. (2) NON-REGRESSION SUITE: 118/118 PASSED in 9.82s - test_private_mileage.py (7 tests) ✓, test_private_mileage_sessions.py (9 tests) ✓, test_private_mileage_integration.py (2 tests) ✓, test_reports_private_redaction.py (6 tests) ✓, test_private_mode_phase2.py (26 tests) ✓, test_fmc130_prive_pro_ux.py (8 tests) ✓, test_fmc130_business_recovery.py (7 tests) ✓, test_fmc130_lkp_fixes.py (11 tests) ✓, test_fmc130_resolve_pending.py (7 tests) ✓, test_fmc130_confirmation_fix.py (17 tests) ✓, test_fmc130_lkp_no_samples.py (5 tests) ✓, test_private_mode_gate.py (14 tests) ✓. All BUSINESS recovery + private-mode redaction still pass. (3) BACKEND SERVICE: RUNNING (supervisor, pid 3971, uptime 0:01:28, no errors). VERIFICATION CONSTRAINTS: NO code modifications (verification only) ✓, ignored unrelated tests failing with HTTP 401 login (out of scope) ✓, deterministic pytest only (no live HTTP; no pilot/AVL telemetry seedable) ✓. TOTAL: 123/123 PASSED (100%). NO ISSUES FOUND."
       - working: true
         agent: "testing"
         comment: "PRIVATE KM AVL16 FEATURE VERIFIED - All 112 tests PASSED (18 new + 94 regression). NEW FEATURE: Private km computed from hardware AVL16 odometer (not GPS), because in PRIVATE mode FMC130 masks GPS but AVL16 keeps increasing. Software-only, NO device commands, NO real Navixy calls, NO .env prod changes. Feature-flag PRIVATE_KM_SOURCE_AVL16 (default '0' = OFF). All device/odometer hooks MOCKED in tests. NEW MODULE (backend/app/private_mileage.py): collection private_mileage_session (append-only history), states OPEN/CLOSED/ABANDONED. open_session (Q4b: START captured when PRIVATE command accepted/sent), capture_end_candidate (END candidate at BUSINESS send), close_session (idempotent), close_from_candidate (DEGRADED), abandon on tracker change. private_distance() fail-closed (negative delta -> None), null != 0. aggregate_private_km() with CUTOVER logic: flag OFF -> legacy GPS; flag ON -> disjoint intervals: GPS before cutover + AVL16 after cutover; source enum AVL16 | GPS_FALLBACK | MIXED_TRANSITION | UNAVAILABLE; post-cutover with no AVL16 session -> UNAVAILABLE (null), never silent GPS. ensure_indexes(): UNIQUE PARTIAL index {state:'OPEN'} on (tenant_id,vehicle_id,tracker_id) => DB-level idempotency (two concurrent PRIVATE -> 1 OPEN). CHANGES: private_mode_engine.py: request_mode() opens session on PRIVATE accepted (REAL/simulate) and captures END candidate + closes on BUSINESS confirmed; resolve_pending_confirmation() closes session on async BUSINESS confirm. All wrapped so flag OFF = no-op and exceptions never block mode switch. routes/identification.py: GET /driver/km-summary now computes private_km via aggregate_private_km (with GPS-fallback closure) and returns private_km_source. pro_km unchanged. Periods already in Europe/Zurich; added 'week' earlier. server.py: calls ensure_indexes at startup. TEST RESULTS: (1) NEW AVL16 UNIT + INTEGRATION SUITES: 18/18 PASSED in 0.60s - test_private_mileage.py (7 tests): flag OFF -> GPS_FALLBACK ✓, no-cutover+sessions -> AVL16 ✓, entirely pre-cutover -> GPS_FALLBACK ✓, entirely post-cutover with session -> AVL16, WITHOUT session -> UNAVAILABLE (private_km None, NOT GPS) ✓, crossing cutover -> MIXED_TRANSITION = GPS(before)+AVL16(after) disjoint (e.g. 350+220=570) ✓, private_distance: 10000.0->10012.4 = 12.4; negative delta -> None; None inputs -> None ✓, finalize_fields fail-closed ✓. test_private_mileage_sessions.py (9 tests): open->close computes 12.4 ✓, DOUBLE OPEN idempotent (exactly 1 OPEN, 2nd returns None via simulated DuplicateKeyError) ✓, DOUBLE CLOSE only once (no 2nd private_km) ✓, negative delta -> None + reason NEGATIVE_DELTA ✓, end missing -> UNAVAILABLE ✓, tracker change abandons previous OPEN ✓, close_from_candidate -> DEGRADED ✓, flag OFF -> no session created ✓, unfinished session stays OPEN and is NOT counted ✓. test_private_mileage_integration.py (2 tests): PRIVATE accepted (REAL) opens session with odometer_start=10000.0; BUSINESS confirmed closes it with private_km=12.4, quality OK ✓, PRIVATE with DEVICE_WRITE=0 (refused before send) creates NO session ✓. (2) NON-REGRESSION SUITE: 94/94 PASSED in 9.00s - test_private_mode_phase2.py (26 tests) ✓, test_fmc130_prive_pro_ux.py (8 tests) ✓, test_fmc130_business_recovery.py (7 tests) ✓, test_fmc130_lkp_fixes.py (11 tests) ✓, test_fmc130_resolve_pending.py (7 tests) ✓, test_fmc130_confirmation_fix.py (17 tests) ✓, test_fmc130_lkp_no_samples.py (5 tests) ✓, test_private_mode_gate.py (14 tests) ✓. All BUSINESS recovery fix tests still pass, no PRIVATE/BUSINESS regression. (3) BACKEND SERVICE: RUNNING (supervisor, uptime 0:01:10, no errors in logs). VERIFICATION CONSTRAINTS: NO code modifications (verification only) ✓, ignored unrelated integration tests with HTTP 401 login (out of scope) ✓. TOTAL: 112/112 PASSED (100%). NO ISSUES FOUND."
@@ -302,6 +305,118 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      PRIVATE KM AVL16 REPORTS ALIGNMENT VERIFICATION COMPLETE (LOT 2) — 2026-01-XX
+      
+      CONTEXT: Verified SECOND LOT of AVL16 PRIVATE-km feature — align REPORTS with the same canonical private-km aggregator used by km-summary. Previously reports read GPS 'personal' trips → incoherent with Conduite screen. Software-only, feature-flag PRIVATE_KM_SOURCE_AVL16 default "0" (OFF). No device commands, no real Navixy, no .env prod changes. All hooks mocked in tests.
+      
+      WHAT CHANGED (this lot):
+      - backend/app/private_mileage.py: added aggregate_private_km_for_scope(db, tenant_id, vehicle_ids, start_utc, end_utc, gps_fallback_km_for_vehicle) (lines 357-404)
+          * MULTI-VEHICLE aggregator that reuses the SAME per-vehicle aggregate_private_km (no 2nd AVL16 logic)
+          * Fleet source = AVL16 | GPS_FALLBACK | MIXED_TRANSITION | UNAVAILABLE
+          * null != 0 (no invented 0)
+      - backend/app/routes/reports.py (/reports/tax-swiss, Swiss fiscal/monthly, lines 130-180):
+          * private km (perso_km, and derived pct_perso/pct_pro/total_km) now come from aggregate_private_km_for_scope over the vehicles present in the scoped trips
+          * pro_km unchanged
+          * Internal private_km_source kept in stats for audit (PDF only reads fixed keys, so safe)
+      
+      KEY SAFETY: with flag OFF (default), the aggregator returns GPS legacy numbers → identical to previous report behavior (no change in prod).
+      
+      TEST RESULTS (pytest 9.0.3, working dir /app/backend, venv /root/.venv):
+      ✅ (1) NEW REPORT-ALIGNMENT SUITE (test_reports_private_km_avl16.py): 5/5 PASSED in 0.10s
+      
+      ✅ test_flag_off_scope_equals_gps_legacy_sum
+         - flag OFF -> scope sum == GPS legacy (350+120=470), source GPS_FALLBACK
+         - Numbers unchanged vs before (no behavior change)
+      
+      ✅ test_scope_post_cutover_all_avl16
+         - All post-cutover with sessions -> AVL16 (255), session_count 2
+      
+      ✅ test_scope_post_cutover_no_session_is_unavailable_not_gps
+         - Post-cutover WITHOUT session -> private_km None + UNAVAILABLE (NOT GPS silently)
+         - null != 0 (no invented 0)
+      
+      ✅ test_scope_crossing_cutover_is_mixed_no_double_count
+         - Crossing cutover -> MIXED_TRANSITION = GPS(before cutover, bounded at cutover) + AVL16(after)
+         - No double count (e.g. 690.0 = 350+120 GPS before + 220 AVL16 after)
+         - GPS fallback closure receives end_utc == cutover (bounded correctly)
+      
+      ✅ test_pct_perso_uses_aggregated_private_km
+         - pct_perso uses aggregated AVL16 private km (250) not GPS (350) => 25.0%
+         - Demonstrates report coherence with Conduite screen
+      
+      ✅ (2) NON-REGRESSION SUITE: 118/118 PASSED in 9.82s
+      
+      test_private_mileage.py: 7 PASSED ✓
+      test_private_mileage_sessions.py: 9 PASSED ✓
+      test_private_mileage_integration.py: 2 PASSED ✓
+      test_reports_private_redaction.py: 6 PASSED ✓
+      test_private_mode_phase2.py: 26 PASSED ✓
+      test_fmc130_prive_pro_ux.py: 8 PASSED ✓
+      test_fmc130_business_recovery.py: 7 PASSED ✓ (BUSINESS recovery fix tests still pass)
+      test_fmc130_lkp_fixes.py: 11 PASSED ✓
+      test_fmc130_resolve_pending.py: 7 PASSED ✓
+      test_fmc130_confirmation_fix.py: 17 PASSED ✓
+      test_fmc130_lkp_no_samples.py: 5 PASSED ✓
+      test_private_mode_gate.py: 14 PASSED ✓
+      
+      ✅ (3) BACKEND SERVICE: RUNNING (supervisor, pid 3971, uptime 0:01:28, no errors)
+      
+      PASS/FAIL TABLE:
+      | Test Suite                              | Expected | Actual | Status |
+      |-----------------------------------------|----------|--------|--------|
+      | test_reports_private_km_avl16.py        | 5        | 5      | ✅ PASS |
+      | **NEW REPORT-ALIGNMENT TOTAL**          | **5**    | **5**  | ✅ PASS |
+      | test_private_mileage.py                 | 7        | 7      | ✅ PASS |
+      | test_private_mileage_sessions.py        | 9        | 9      | ✅ PASS |
+      | test_private_mileage_integration.py     | 2        | 2      | ✅ PASS |
+      | test_reports_private_redaction.py       | 6        | 6      | ✅ PASS |
+      | test_private_mode_phase2.py             | 26       | 26     | ✅ PASS |
+      | test_fmc130_prive_pro_ux.py             | 8        | 8      | ✅ PASS |
+      | test_fmc130_business_recovery.py        | 7        | 7      | ✅ PASS |
+      | test_fmc130_lkp_fixes.py                | 11       | 11     | ✅ PASS |
+      | test_fmc130_resolve_pending.py          | 7        | 7      | ✅ PASS |
+      | test_fmc130_confirmation_fix.py         | 17       | 17     | ✅ PASS |
+      | test_fmc130_lkp_no_samples.py           | 5        | 5      | ✅ PASS |
+      | test_private_mode_gate.py               | 14       | 14     | ✅ PASS |
+      | **NON-REGRESSION TOTAL**                | **118**  | **118**| ✅ PASS |
+      | **GRAND TOTAL (LOT 2)**                 | **123**  | **123**| ✅ PASS |
+      
+      CODE VERIFICATION:
+      
+      ✅ NEW MULTI-VEHICLE AGGREGATOR (backend/app/private_mileage.py, lines 357-404):
+         - aggregate_private_km_for_scope(): iterates over vehicle_ids, calls aggregate_private_km for each
+         - Reuses SAME per-vehicle logic (no 2nd AVL16 implementation)
+         - Sums numeric contributions: total = (total or 0.0) + float(km)
+         - Fleet source logic: saw_mixed or (saw_avl and saw_gps) -> MIXED; saw_avl -> AVL16; saw_gps -> GPS_FALLBACK; else -> UNAVAILABLE
+         - null != 0: if total is None and no numeric contributions -> UNAVAILABLE
+         - Returns: {"private_km": round(total, 1) if total is not None else None, "private_km_source": source, "session_count": n_sessions}
+      
+      ✅ REPORT INTEGRATION (backend/app/routes/reports.py, lines 130-180):
+         - /reports/tax-swiss (Swiss fiscal report)
+         - Lines 136: scope_vids = sorted({t.get("vehicle_id") for t in trips if t.get("vehicle_id")})
+         - Lines 138-143: _gps_personal_for_vehicle() closure for GPS fallback (sums GPS 'personal' trips per vehicle)
+         - Lines 145-148: priv_agg = await aggregate_private_km_for_scope(db, tenant_id, vehicle_ids=scope_vids, start_utc, end_utc, gps_fallback_km_for_vehicle=_gps_personal_for_vehicle)
+         - Line 149: perso_km = priv_agg["private_km"] if priv_agg["private_km"] is not None else 0.0
+         - Line 150: private_km_source = priv_agg["private_km_source"]
+         - Lines 155-165: stats dict includes perso_km, pct_perso, pct_pro, total_km, private_km_source (for audit)
+         - pro_km unchanged (line 156)
+      
+      VERIFICATION CONSTRAINTS:
+      ✅ Deterministic pytest only (no live HTTP; no pilot/AVL telemetry seedable)
+      ✅ Working dir /app/backend, project venv, python -m pytest
+      ✅ NO code modifications (verification only)
+      ✅ Ignored unrelated tests failing with HTTP 401 login (out of scope)
+      ✅ All device/odometer hooks MOCKED in tests
+      ✅ NO real Navixy calls
+      ✅ NO device commands sent
+      ✅ NO .env prod changes
+      ✅ Feature flag default OFF (no behavior change)
+      
+      CONCLUSION:
+      The PRIVATE km AVL16 REPORTS ALIGNMENT (LOT 2) is correctly implemented and fully verified. All 5 NEW report-alignment tests passed, covering: flag OFF -> GPS legacy sum (numbers unchanged), all-post-cutover with sessions -> AVL16, post-cutover without sessions -> UNAVAILABLE (null, not GPS), crossing cutover -> MIXED (no double count), pct_perso uses AVL16 (not GPS). All 118 NON-REGRESSION tests passed (including LOT 1 tests + BUSINESS recovery + private-mode redaction). Backend service running cleanly. Reports now use the SAME canonical aggregator as km-summary → coherent private km across Conduite screen and fiscal reports. NO ISSUES FOUND.
+
   - agent: "testing"
     message: |
       PRIVATE KM AVL16 ODOMETER SOURCE VERIFICATION COMPLETE (2026-01-XX)
