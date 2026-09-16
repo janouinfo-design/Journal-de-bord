@@ -142,8 +142,19 @@ async def resolve_vehicle_capability(db, tracker_id: Optional[int],
         except TypeError:
             logger.warning("capability doc invalide pour tracker %s", tracker_id)
             return None
-    # Fallback : registre pilote (non destructif — sert de preuve/seed).
-    return get_pilot_capability(tracker_id)
+    # Fallback 1 : registre pilote historique (preuve par tracker).
+    pilot = get_pilot_capability(tracker_id)
+    if pilot:
+        return pilot
+
+    # Fallback 2 : profil PAR MODÈLE uniquement quand le nouveau rollout
+    # compte+modèle est explicitement activé. Aucun document Mongo n'est créé ici.
+    from app import private_mode_gate as _gate
+    if _gate.account_model_gate_enabled():
+        from app.odometer_capability import get_model_private_mode_capability
+        return get_model_private_mode_capability(device_model, tracker_id=tracker_id)
+
+    return None
 
 
 async def upsert_vehicle_capability(db, vc: VehicleOdometerCapability) -> None:
@@ -805,7 +816,7 @@ async def request_mode(
     vc = await resolve_vehicle_capability(db, tracker_id, model)
     decision = await gate.can_use_private_mode(
         db, tenant_id=tid, tenant_doc=get_tenant_doc(tid),
-        vehicle_doc=vehicle, capability=vc,
+        vehicle_doc=vehicle, capability=vc, driver_id=driver_id,
     )
     allowed = decision["allowed"]
     if not allowed:

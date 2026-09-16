@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -15,7 +16,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import ImpersonateDialog from "@/components/livre/ImpersonateDialog";
 
 const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", lecture_seule: "Lecture seule" };
-const EMPTY = { email: "", name: "", password: "", role: "driver" };
+const EMPTY = {
+  email: "", name: "", password: "", role: "driver", private_mode_enabled: false,
+};
 
 export default function TeamUsersPage() {
   const { user: me } = useAuth();
@@ -41,6 +44,20 @@ export default function TeamUsersPage() {
       toast.success(`${u.email} → ${ROLE_LABEL[role] || role}`);
       load();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  }
+
+  async function changePrivateMode(u, enabled) {
+    try {
+      await api.patch(`/livre/team/users/${u.id}`, { private_mode_enabled: enabled });
+      toast.success(
+        enabled
+          ? `Privé / Pro activé pour ${u.email}`
+          : `Privé / Pro désactivé pour ${u.email}`
+      );
+      load();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+    }
   }
 
   async function removeUser(u) {
@@ -91,6 +108,7 @@ export default function TeamUsersPage() {
               <th className="px-4 py-3">Nom</th>
               <th className="px-4 py-3">Rôle</th>
               <th className="px-4 py-3">Chauffeur lié</th>
+              <th className="px-4 py-3">Privé / Pro</th>
               <th className="px-4 py-3">Origine</th>
               <th className="px-4 py-3">Créé le</th>
               <th className="px-4 py-3 text-right">Actions</th>
@@ -120,6 +138,23 @@ export default function TeamUsersPage() {
                       <IdCard className="w-3.5 h-3.5" /> {u.linked_driver.name}
                     </span>
                   ) : "—"}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      data-testid={`team-user-private-mode-${u.email}`}
+                      checked={u.private_mode_enabled === true}
+                      disabled={u.role !== "driver"}
+                      onCheckedChange={(checked) => changePrivateMode(u, checked)}
+                    />
+                    <span className="text-xs text-slate-500">
+                      {u.role !== "driver"
+                        ? "—"
+                        : u.private_mode_enabled
+                          ? "Activé"
+                          : "Désactivé"}
+                    </span>
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-xs text-slate-500">
                   {u.auth_origin === "navixy" ? "SSO Navixy" : "Local"}
@@ -169,7 +204,14 @@ export default function TeamUsersPage() {
               </div>
               <div className="space-y-1.5">
                 <Label>Rôle</Label>
-                <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+                <Select
+                  value={form.role}
+                  onValueChange={(v) => setForm({
+                    ...form,
+                    role: v,
+                    private_mode_enabled: v === "driver" ? form.private_mode_enabled : false,
+                  })}
+                >
                   <SelectTrigger data-testid="team-user-form-role"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">Admin</SelectItem>
@@ -180,6 +222,25 @@ export default function TeamUsersPage() {
                 </Select>
               </div>
             </div>
+
+            {form.role === "driver" && (
+              <div className="flex items-center justify-between rounded-lg border p-3">
+                <div>
+                  <Label htmlFor="private-mode-enabled">Mode Privé / Professionnel</Label>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Autorise ce chauffeur à utiliser Privé / Pro avec un FMC003 ou FMC130 compatible.
+                  </p>
+                </div>
+                <Switch
+                  id="private-mode-enabled"
+                  data-testid="team-user-form-private-mode"
+                  checked={form.private_mode_enabled === true}
+                  onCheckedChange={(checked) =>
+                    setForm({ ...form, private_mode_enabled: checked })
+                  }
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>Annuler</Button>

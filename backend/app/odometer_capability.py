@@ -330,6 +330,9 @@ class VehicleOdometerCapability:
     cumulative_verified: bool = False            # augmente avec la distance (delta>0 en roulant)
     private_increment_verified: bool = False     # continue quand GPS masqué (D3-B)
     field_validated: bool = False                # D3 terrain PASS complet
+    # TRACKER = preuve spécifique au boîtier ; MODEL = profil généralisé validé
+    # par famille après preuves terrain de référence.
+    validation_scope: str = "TRACKER"
     capability: str = CAP_NOT_TESTED             # CAP_* (statut lisible)
     # Stratégie de confirmation télémétrique du Mode Privé (par tracker field-validated).
     # None = pas de confirmation télémétrique dédiée (fallback profil modèle, ex FMC003).
@@ -350,6 +353,81 @@ def _model_supports_avl16_strategy(model: Optional[str]) -> bool:
     return bool(cap and cap.strategy == STRATEGY_TELTONIKA_TOTAL_ODOMETER
                 and cap.primary_source == SOURCE_TELTONIKA_TOTAL_ODOMETER
                 and cap.status != STATUS_DEPRECATED)
+
+
+
+# ---------------------------------------------------------------------------
+# Profil généralisé Privé/Pro PAR MODÈLE.
+#
+# Activé uniquement par PRIVATE_MODE_ACCOUNT_MODEL_GATE côté gate centrale.
+# Il ne change donc PAS la sécurité legacy tant que le rollout reste OFF.
+#
+# Décision produit après validation terrain :
+#   FMC003 -> FROZEN_POSITION
+#   FMC130 -> LAST_KNOWN_POSITION
+# Les autres modèles restent fail-closed.
+# ---------------------------------------------------------------------------
+GENERALIZED_PRIVATE_MODE_MODELS = frozenset({"FMC003", "FMC130"})
+
+
+def _logical_private_mode_model(device_model: Optional[str]) -> Optional[str]:
+    if not device_model:
+        return None
+    return resolve_model(device_model) or str(device_model).upper()
+
+
+def model_private_mode_supported(device_model: Optional[str]) -> bool:
+    """True uniquement pour les familles généralisées FMC003/FMC130."""
+    return _logical_private_mode_model(device_model) in GENERALIZED_PRIVATE_MODE_MODELS
+
+
+def get_model_private_mode_capability(
+    device_model: Optional[str],
+    tracker_id: Optional[int] = None,
+) -> Optional[VehicleOdometerCapability]:
+    """Construit le profil métier validé PAR MODÈLE.
+
+    Ce profil sert au moteur de confirmation après activation explicite du
+    rollout compte+modèle. Il ne persiste rien et ne modifie aucune capability
+    tracker existante.
+    """
+    model = _logical_private_mode_model(device_model)
+    if model not in GENERALIZED_PRIVATE_MODE_MODELS:
+        return None
+
+    strategy = (
+        CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+        if model == "FMC130"
+        else CONFIRM_STRATEGY_FROZEN_POSITION
+    )
+
+    return VehicleOdometerCapability(
+        vehicle_id=f"model-profile-{model.lower()}",
+        tracker_id=int(tracker_id) if tracker_id is not None else None,
+        device_model=model,
+        private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER,
+        raw_avl_id=AVL_TOTAL_ODOMETER,
+        navixy_input="avl_io_16",
+        raw_unit="m",
+        normalized_unit="km",
+        multiplier=1.0,
+        divider=1000.0,
+        scale_status=SCALE_VERIFIED,
+        runtime_verified=True,
+        cumulative_verified=True,
+        private_increment_verified=True,
+        field_validated=True,
+        validation_scope="MODEL",
+        capability=CAP_FIELD_VALIDATED,
+        private_confirmation_strategy=strategy,
+        source_type=SOURCE_TELTONIKA_TOTAL_ODOMETER,
+        unit="km",
+        notes=(
+            "Profil généralisé par modèle après preuves terrain de référence. "
+            "Rollout contrôlé par PRIVATE_MODE_ACCOUNT_MODEL_GATE ; "
+            "aucune activation automatique d'un compte chauffeur."
+        ),
+    )
 
 
 def vehicle_private_mode_allowed(model: Optional[str],

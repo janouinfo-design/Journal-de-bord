@@ -239,7 +239,7 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     vc = await pm.resolve_vehicle_capability(db, tracker_id, model)
     decision = await gate.can_use_private_mode(
         db, tenant_id=tenant_id, tenant_doc=get_tenant_doc(tenant_id),
-        vehicle_doc=vehicle, capability=vc,
+        vehicle_doc=vehicle, capability=vc, driver_id=driver_id,
     )
     st = await pm.get_mode_state(db, vehicle_id)
     # Si une bascule est en attente de confirmation, tenter de la résoudre (télémétrie, READ-ONLY).
