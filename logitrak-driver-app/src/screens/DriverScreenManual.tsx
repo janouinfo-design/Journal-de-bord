@@ -163,9 +163,20 @@ export default function DriverScreenManual() {
   const st = privateMode.status.state;
   const isPrivate = st === 'PRIVATE';
   const isBusiness = st === 'BUSINESS';
-  const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
+  const isPending =
+    st === 'PENDING_CONFIRMATION' ||
+    st === 'PRIVATE_REQUESTED' ||
+    st === 'BUSINESS_REQUESTED';
+
+  const pendingBusiness = isPending && privateMode.pendingTarget === 'BUSINESS';
+  const pendingPrivate = isPending && privateMode.pendingTarget === 'PRIVATE';
+
   const hasVehicle = !!vehicle?.id;
-  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
+  const canToggle =
+    hasVehicle &&
+    privateMode.status.allowed &&
+    privateMode.status.can_switch !== false &&
+    !privateMode.busy;
 
   // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
   const proKm = km.proKm;
@@ -242,8 +253,8 @@ export default function DriverScreenManual() {
           <ModeCard
             label="Professionnel"
             active={isBusiness}
-            disabled={!canToggle || isBusiness}
-            loading={isPending && !isPrivate}
+            disabled={!canToggle || isBusiness || pendingBusiness}
+            loading={pendingBusiness}
             color={colors.pro}
             onPress={() => privateMode.requestMode('BUSINESS')}
             testID="manual-mode-pro"
@@ -251,8 +262,8 @@ export default function DriverScreenManual() {
           <ModeCard
             label="Privé"
             active={isPrivate}
-            disabled={!canToggle || isPrivate}
-            loading={isPending && !isBusiness}
+            disabled={!canToggle || isPrivate || pendingPrivate}
+            loading={pendingPrivate}
             color={colors.perso}
             onPress={() => privateMode.requestMode('PRIVATE')}
             testID="manual-mode-private"

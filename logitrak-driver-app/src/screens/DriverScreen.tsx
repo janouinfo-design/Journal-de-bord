@@ -191,6 +191,22 @@ function DriverScreenBle() {
   }, [nav]);
 
   const activeMode = session?.mobile_override;
+
+  const privacyState = privateMode.status.state;
+  const privacyPending =
+    privacyState === 'PENDING_CONFIRMATION' ||
+    privacyState === 'PRIVATE_REQUESTED' ||
+    privacyState === 'BUSINESS_REQUESTED';
+
+  const privacyPendingBusiness =
+    privacyPending && privateMode.pendingTarget === 'BUSINESS';
+  const privacyPendingPrivate =
+    privacyPending && privateMode.pendingTarget === 'PRIVATE';
+
+  const privacyCanToggle =
+    privateMode.status.allowed &&
+    privateMode.status.can_switch !== false &&
+    !privateMode.busy;
   // Le backend (get_current_session) ne renvoie QUE des sessions ouvertes (OPEN_STATUSES) ;
   // il est la source de vérité. On affiche donc dès qu'une session non fermée existe,
   // qu'elle soit "open" (BLE en cours), "automatic", "confirmed", "manual" ou "pending".
@@ -405,9 +421,9 @@ function DriverScreenBle() {
                 label="Professionnel"
                 sub="Position visible"
                 color={colors.primary}
-                active={privateMode.status.state === 'BUSINESS'}
-                disabled={privateMode.busy || privateMode.status.state === 'BUSINESS'}
-                loading={privateMode.status.state === 'BUSINESS_REQUESTED'}
+                active={privacyState === 'BUSINESS'}
+                disabled={!privacyCanToggle || privacyState === 'BUSINESS' || privacyPendingBusiness}
+                loading={privacyPendingBusiness}
                 onPress={() => privateMode.requestMode('BUSINESS')}
                 testID="private-mode-business"
               />
@@ -415,9 +431,9 @@ function DriverScreenBle() {
                 label="Privé"
                 sub="Position masquée"
                 color={colors.perso}
-                active={privateMode.status.state === 'PRIVATE'}
-                disabled={privateMode.busy || privateMode.status.state === 'PRIVATE'}
-                loading={privateMode.status.state === 'PRIVATE_REQUESTED'}
+                active={privacyState === 'PRIVATE'}
+                disabled={!privacyCanToggle || privacyState === 'PRIVATE' || privacyPendingPrivate}
+                loading={privacyPendingPrivate}
                 onPress={() => privateMode.requestMode('PRIVATE')}
                 testID="private-mode-private"
               />
