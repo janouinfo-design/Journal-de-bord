@@ -29,6 +29,18 @@ export function usePrivateMode(pollMs = 15000) {
   const inFlight = useRef(false);
   const lastVehicleId = useRef<string | null | undefined>(undefined);
 
+  // Cible réellement en attente. Elle permet de bloquer uniquement
+  // le bouton déjà demandé, jamais le bouton opposé.
+  const pendingTarget: 'PRIVATE' | 'BUSINESS' | null =
+    status.state === 'PRIVATE_REQUESTED'
+      ? 'PRIVATE'
+      : status.state === 'BUSINESS_REQUESTED'
+      ? 'BUSINESS'
+      : status.state === 'PENDING_CONFIRMATION' &&
+        (status.requested_target === 'PRIVATE' || status.requested_target === 'BUSINESS')
+      ? status.requested_target
+      : null;
+
   const refresh = useCallback(async () => {
     try {
       const s = await getPrivateMode();
@@ -48,7 +60,18 @@ export function usePrivateMode(pollMs = 15000) {
 
   const requestMode = useCallback(
     async (mode: 'PRIVATE' | 'BUSINESS') => {
-      if (inFlight.current) return; // anti double-tap / concurrence
+      if (inFlight.current) return;
+
+      // Même cible déjà envoyée : aucune seconde intention.
+      if (pendingTarget === mode) {
+        setError(null);
+        setSentMessage(
+          status.pending_message ??
+            `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`,
+        );
+        return;
+      }
+
       if (!status.allowed) {
         setError(reasonToMessage(status.reason));
         return;
@@ -61,14 +84,26 @@ export function usePrivateMode(pollMs = 15000) {
       setStatus((prev) => ({
         ...prev,
         state: mode === 'PRIVATE' ? 'PRIVATE_REQUESTED' : 'BUSINESS_REQUESTED',
+        requested_target: mode,
+        pending: false,
+        transition_result: null,
       }));
       try {
         const res = await setPrivateMode(mode);
         if (res.ok && res.state === 'PENDING_CONFIRMATION') {
-          // Commande envoyée, confirmation device en cours (télémétrie async).
-          // PAS un succès "actif" : on affiche « Commande X envoyée » et on continue à relire.
-          setStatus((prev) => ({ ...prev, state: 'PENDING_CONFIRMATION' }));
-          setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
+          // Commande envoyée : on rend immédiatement la main au chauffeur.
+          // La confirmation continuera par polling, sans bloquer le bouton opposé.
+          setStatus((prev) => ({
+            ...prev,
+            state: 'PENDING_CONFIRMATION',
+            pending: true,
+            requested_target: mode,
+          }));
+          setSentMessage(
+            res.message ??
+              `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`,
+          );
+          return;
         } else if (res.ok) {
           setStatus((prev) => ({ ...prev, state: res.state }));
           setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
@@ -90,7 +125,7 @@ export function usePrivateMode(pollMs = 15000) {
         inFlight.current = false;
       }
     },
-    [refresh, status.allowed, status.reason],
+    [refresh, status.allowed, status.reason, status.pending_message, pendingTarget],
   );
 
   // Montage + polling léger.
@@ -117,6 +152,7 @@ export function usePrivateMode(pollMs = 15000) {
     sentMessage,
     lastDistanceKm,
     pending: status.state === 'PENDING_CONFIRMATION',
+    pendingTarget,
     // Timeout de confirmation : commande envoyée mais état device NON prouvé.
     // L'UI doit réactiver les boutons et afficher un message honnête (jamais un faux PRO/PRIVÉ).
     timedOut: status.transition_result === 'TIMEOUT',
