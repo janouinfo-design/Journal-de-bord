@@ -1,0 +1,419 @@
+From b778a44ef703407646fe44515e01982378784b84 Mon Sep 17 00:00:00 2001
+From: emergent-agent-e1 <github@emergent.sh>
+Date: Wed, 16 Sep 2026 06:41:13 +0000
+Subject: [PATCH] fix(fmc130): confirm PRIVATE/BUSINESS via hardware-command
+ ACK (fail-closed)
+
+Root cause: Teltonika replies 'Privatemode ON/OFF' (Air Console) but backend stayed
+PENDING->UNKNOWN. Per Navixy history schema, HARDWARE (raw) commands carry
+extra.command.response.success ONLY (body null); only HTTP commands carry body.
+
+Matcher (_command_response_matches), FAIL-CLOSED strict:
+- TEXT path uses ONLY response.body / extra.full_message / entry.message (NOT cmd.name/param).
+- HARDWARE-ACK path uses cmd.name+param and requires response.success is True (never None)
+  + no explicit error; strict normalized match of privatemode on/off | privatemode:1/0.
+- Explicit failure (success False / error) => never confirmed. Anti-stale unchanged.
+
++12 tests. Confirmation 28/28, full regression 142/142 PASS. DEVICE_WRITE stays 0; no
+device command (all mocked). Adds READ-ONLY diagnostic navixy_device_response_diag_781479.py.
+---
+ backend/app/private_mode_engine.py            |  64 +++++--
+ backend/tests/test_fmc130_confirmation_fix.py | 114 +++++++++++
+ .../navixy_device_response_diag_781479.py     | 178 ++++++++++++++++++
+ 3 files changed, 345 insertions(+), 11 deletions(-)
+ create mode 100644 diagnostics/navixy_device_response_diag_781479.py
+
+diff --git a/backend/app/private_mode_engine.py b/backend/app/private_mode_engine.py
+index c00c731..6f92efb 100644
+--- a/backend/app/private_mode_engine.py
++++ b/backend/app/private_mode_engine.py
+@@ -422,24 +422,66 @@ def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
+ # Anti-faux-positif : une absence/erreur/history vide ne confirme JAMAIS.
+ # ---------------------------------------------------------------------------
+ def _command_response_matches(entry: dict, target_mode: str) -> bool:
+-    """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?"""
++    """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?
++
++    Deux formes documentées (Navixy history `extra.command.response`) :
++      * commande HTTP     : la PREUVE est le TEXTE renvoyé par le device
++        (response.body / extra.full_message / entry.message).
++      * commande HARDWARE (Teltonika raw) : response ne porte QUE `success`.
++        La PREUVE = cmd.name/param désignant EXACTEMENT la commande privatemode du
++        mode visé ET response.success is True.
++
++    FAIL-CLOSED strict :
++      - échec explicite (success is False / error non vide) -> jamais confirmé ;
++      - le TEXTE n'utilise JAMAIS cmd.name/param (sinon un name='privatemode ON' avec
++        success=None serait faussement confirmé) ;
++      - l'ACK HARDWARE exige success is True (pas None) + match de commande STRICT.
++    """
+     extra = entry.get("extra") or {}
+     cmd = extra.get("command") or {}
+     resp = cmd.get("response") or {}
+-    # Corps de réponse device + nom/param de commande — on recherche 'privatemode on/off'.
+-    hay = " ".join(str(x) for x in (
+-        resp.get("body"), cmd.get("name"), cmd.get("param"),
+-        extra.get("full_message"), entry.get("message"),
+-    ) if x is not None).lower()
+-    # Le statut/success ne doit pas être un échec explicite.
++
++    # Échec explicite -> jamais une preuve.
+     if resp.get("success") is False:
+         return False
+     if isinstance(resp.get("error"), str) and resp.get("error").strip():
+         return False
+-    if target_mode == PRIVATE:
+-        return ("privatemode on" in hay) or ("privatemode:1" in hay) or ("private mode on" in hay)
+-    if target_mode == BUSINESS:
+-        return ("privatemode off" in hay) or ("privatemode:0" in hay) or ("private mode off" in hay)
++
++    def _norm(*parts) -> str:
++        """minuscule + espaces normalisés (aucun cmd.name/param ici pour le TEXTE)."""
++        return " ".join(" ".join(str(p).split()) for p in parts if p is not None).lower()
++
++    # ---- (1) Preuve TEXTUELLE (réponse HTTP du device) : body / full_message / message ----
++    # On N'INCLUT PAS cmd.name/param : le nom de commande n'est pas une réponse device.
++    text = _norm(resp.get("body"), extra.get("full_message"), entry.get("message"))
++    if text:
++        if target_mode == PRIVATE and (("privatemode on" in text) or ("privatemode:1" in text)
++                                       or ("private mode on" in text)):
++            return True
++        if target_mode == BUSINESS and (("privatemode off" in text) or ("privatemode:0" in text)
++                                        or ("private mode off" in text)):
++            return True
++
++    # ---- (2) Preuve ACK HARDWARE : name/param STRICT + success is True (jamais None) ----
++    if resp.get("success") is True:
++        name_param = _norm(cmd.get("name"), cmd.get("param"))
++        # match STRICT par token (évite un substring permissif type 'privatemode online') :
++        tokens = set(name_param.replace(":", " : ").split())  # sépare aussi 'privatemode:1'
++        joined = name_param
++        if target_mode == PRIVATE:
++            want_forms = ("privatemode on", "privatemode:1")
++        else:
++            want_forms = ("privatemode off", "privatemode:0")
++        for w in want_forms:
++            # accepte la forme exacte contiguë OU la présence stricte des 2 tokens attendus
++            if joined == w or joined.startswith(w + " ") or joined.endswith(" " + w) \
++                    or (" " + w + " ") in (" " + joined + " "):
++                return True
++            # forme 'privatemode:1' éclatée en tokens {'privatemode',':','1'}
++            if ":" in w:
++                base, val = w.split(":", 1)
++                if base in tokens and val in tokens and ":" in tokens:
++                    return True
+     return False
+ 
+ 
+diff --git a/backend/tests/test_fmc130_confirmation_fix.py b/backend/tests/test_fmc130_confirmation_fix.py
+index 90563ad..1e77b34 100644
+--- a/backend/tests/test_fmc130_confirmation_fix.py
++++ b/backend/tests/test_fmc130_confirmation_fix.py
+@@ -318,6 +318,120 @@ def test_command_response_matches_helper():
+     assert pm._command_response_matches(off, pm.BUSINESS) is True
+ 
+ 
++# ---------------------------------------------------------------------------
++# ACK HARDWARE (Teltonika raw command) : la réponse ne porte QUE `success`
++# (body=None). La preuve = name/param désignant la commande privatemode du bon
++# mode + success True. Root cause du PENDING : le body-only matcher ratait ce cas.
++# ---------------------------------------------------------------------------
++def _hw_ack(time_iso, cmd_name, success=True):
++    return {"time": time_iso, "event": "command_sent", "message": None,
++            "extra": {"command": {"name": cmd_name, "param": None,
++                                  "response": {"status": None, "body": None,
++                                               "error": None, "success": success}}}}
++
++
++def test_hardware_ack_confirms_private_without_body():
++    """ACK hardware 'privatemode ON' (success True, body None) -> PRIVATE / DEVICE_RESPONSE."""
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON")
++    assert pm._command_response_matches(e, pm.PRIVATE) is True
++    assert pm._command_response_matches(e, pm.BUSINESS) is False
++
++
++def test_hardware_ack_confirms_business_without_body():
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF")
++    assert pm._command_response_matches(e, pm.BUSINESS) is True
++    assert pm._command_response_matches(e, pm.PRIVATE) is False
++
++
++def test_hardware_ack_failure_success_false_not_confirmed():
++    """ACK hardware avec success False -> jamais confirmé (fail-closed)."""
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON", success=False)
++    assert pm._command_response_matches(e, pm.PRIVATE) is False
++
++
++def test_hardware_ack_unrelated_command_not_confirmed():
++    """Une commande hardware SANS rapport (success True) ne confirme pas le mode."""
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "get_gps_position")
++    assert pm._command_response_matches(e, pm.PRIVATE) is False
++    assert pm._command_response_matches(e, pm.BUSINESS) is False
++
++
++def test_hardware_ack_success_none_not_confirmed_private():
++    """FAIL-CLOSED : name='privatemode ON' mais success=None (body vide) -> JAMAIS confirmé.
++    (Le chemin TEXTE ne doit PAS utiliser cmd.name/param.)"""
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON", success=None)
++    assert pm._command_response_matches(e, pm.PRIVATE) is False
++
++
++def test_hardware_ack_success_none_not_confirmed_business():
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF", success=None)
++    assert pm._command_response_matches(e, pm.BUSINESS) is False
++
++
++def test_hardware_ack_colon_forms_confirm_with_success_true():
++    """Formes 'privatemode:1' / 'privatemode:0' avec success True -> confirmées."""
++    on = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
++    on["extra"]["command"]["param"] = "privatemode:1"
++    off = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
++    off["extra"]["command"]["param"] = "privatemode:0"
++    assert pm._command_response_matches(on, pm.PRIVATE) is True
++    assert pm._command_response_matches(on, pm.BUSINESS) is False
++    assert pm._command_response_matches(off, pm.BUSINESS) is True
++    assert pm._command_response_matches(off, pm.PRIVATE) is False
++
++
++def test_hardware_ack_colon_forms_success_none_not_confirmed():
++    """Formes 'privatemode:1/0' mais success=None -> jamais confirmées (fail-closed)."""
++    on = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=None)
++    on["extra"]["command"]["param"] = "privatemode:1"
++    assert pm._command_response_matches(on, pm.PRIVATE) is False
++
++
++def test_text_path_ignores_command_name_param():
++    """Le chemin TEXTE ne se base QUE sur body/full_message/message : un name/param
++    'privatemode ON' sans body et sans success True ne doit pas confirmer."""
++    e = {"time": "2026-09-10T12:00:20+00:00", "message": None,
++         "extra": {"command": {"name": "privatemode ON", "param": None,
++                               "response": {"status": None, "body": None,
++                                            "error": None, "success": None}}}}
++    assert pm._command_response_matches(e, pm.PRIVATE) is False
++
++
++def test_text_path_body_confirms_regardless_of_success_none():
++    """Le device renvoie le TEXTE dans body (commande HTTP) : confirmé même si success
++    n'est pas explicitement True (le body EST la preuve), tant qu'aucun échec explicite."""
++    e = {"time": "2026-09-10T12:00:20+00:00", "message": None,
++         "extra": {"full_message": None,
++                   "command": {"name": "custom", "param": None,
++                               "response": {"status": "executed", "body": "Privatemode ON",
++                                            "error": None, "success": None}}}}
++    assert pm._command_response_matches(e, pm.PRIVATE) is True
++
++
++def test_hardware_ack_end_to_end_confirms_private_via_telemetry_confirm():
++    """Chaîne complète : ACK hardware postérieur -> telemetry_confirm -> PRIVATE/DEVICE_RESPONSE
++    (sans aucun GPS ni sample ; c'est la preuve qui manquait et laissait l'app en PENDING)."""
++    sent = "2026-09-10T12:00:00+00:00"
++
++    async def _resp(tenant_id, tracker_id, since_iso):
++        return [_hw_ack("2026-09-10T12:00:15+00:00", "privatemode ON")]
++    state, src = _run(pm.telemetry_confirm(
++        "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
++    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
++
++
++def test_hardware_ack_stale_before_command_ignored():
++    """ACK hardware ANTÉRIEUR à la commande -> ignoré (anti-stale, même cycle exigé)."""
++    sent = "2026-09-10T12:00:00+00:00"
++
++    async def _resp(tenant_id, tracker_id, since_iso):
++        return [_hw_ack("2026-09-10T11:59:00+00:00", "privatemode ON")]  # avant sent
++    state, src = _run(pm.telemetry_confirm(
++        "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
++    assert state != pm.PRIVATE
++    assert src == pm.SRC_UNCONFIRMED
++
++
+ # ===========================================================================
+ # TIMEZONE — la réponse device est comparée en instants UTC (offset explicite),
+ # quel que soit le fuseau d'affichage du compte Navixy. Root cause corrigée.
+diff --git a/diagnostics/navixy_device_response_diag_781479.py b/diagnostics/navixy_device_response_diag_781479.py
+new file mode 100644
+index 0000000..e3c7d3f
+--- /dev/null
++++ b/diagnostics/navixy_device_response_diag_781479.py
+@@ -0,0 +1,178 @@
++#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++"""
++LOGITRAK — DIAGNOSTIC READ-ONLY : réponse device 'Privatemode ON/OFF' (FMC130 781479)
++======================================================================================
++But : PROUVER ce que `history/tracker/list` renvoie réellement autour des commandes
++PRIVATE/BUSINESS du pilote, afin de savoir si la réponse device (visible dans la
++console Teltonika) est récupérable par le backend — et sous quelle forme
++(response.body texte, ou ACK hardware response.success only, ou événement dédié).
++
++Contexte pilote (à ajuster si besoin) :
++  tracker_id = 781479
++  PRIVATE ~ 2026-09-15 16:54:08 UTC
++  BUSINESS ~ 2026-09-15 16:59:03 UTC
++  Fenêtre analysée : 16:49 -> 17:04 UTC (T-5 / T+5 autour des deux commandes).
++
++STRICTEMENT READ-ONLY :
++  - Seul endpoint appelé : history/tracker/list (lecture).
++  - AUCUN envoi de commande, AUCUN write, AUCUN restart, AUCUNE modif .env.
++  - Le credential (hash/api_key) N'EST JAMAIS affiché.
++
++Credentials : os.getenv uniquement (NAVIXY_API_KEY puis NAVIXY_HASH), NAVIXY_API_URL.
++Exécution (dans le conteneur backend PROD/Preview, ex. journal_backend) :
++    docker exec -i journal_backend python - < navixy_device_response_diag_781479.py
++Collez toute la sortie ici (aucun secret n'y figure).
++"""
++import os
++import sys
++import json
++from datetime import datetime, timezone, timedelta
++
++try:
++    import httpx
++except ImportError:  # pragma: no cover
++    print("ERREUR: httpx introuvable — exécuter dans le conteneur backend.")
++    sys.exit(2)
++
++TRACKER_ID = 781479
++# Fenêtre autour des deux commandes du pilote (UTC). Ajuster si vos timestamps diffèrent.
++WIN_FROM = datetime(2026, 9, 15, 16, 49, 0, tzinfo=timezone.utc)
++WIN_TO = datetime(2026, 9, 15, 17, 4, 0, tzinfo=timezone.utc)
++T_PRIVATE = datetime(2026, 9, 15, 16, 54, 8, tzinfo=timezone.utc)
++T_BUSINESS = datetime(2026, 9, 15, 16, 59, 3, tzinfo=timezone.utc)
++
++
++def _cred():
++    k = (os.getenv("NAVIXY_API_KEY") or "").strip()
++    if k:
++        return k, "NAVIXY_API_KEY"
++    lg = (os.getenv("NAVIXY_HASH") or "").strip()
++    if lg:
++        return lg, "NAVIXY_HASH"
++    return None, None
++
++
++def _iso_z(d):
++    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++
++
++def _fmt(d):
++    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if d else None
++
++
++def _parse(v):
++    if not v:
++        return None
++    s = str(v).strip().replace("Z", "+00:00")
++    try:
++        d = datetime.fromisoformat(s)
++        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
++    except ValueError:
++        return None
++
++
++def main():
++    cred, src = _cred()
++    base = (os.getenv("NAVIXY_API_URL") or "https://api.navixy.com/v2").rstrip("/")
++    print("=" * 78)
++    print("DIAGNOSTIC RÉPONSE DEVICE — history/tracker/list (READ-ONLY) — tracker 781479")
++    print("=" * 78)
++    print("Base URL     :", base)
++    print("Credential   :", src or "AUCUN", "(valeur jamais affichée)")
++    print("Fenêtre UTC  :", _iso_z(WIN_FROM), "->", _iso_z(WIN_TO))
++    print("T_PRIVATE    :", _iso_z(T_PRIVATE), "| T_BUSINESS :", _iso_z(T_BUSINESS))
++    if not cred:
++        print("\nSTOP — aucun credential Navixy dans le runtime. Aucun appel effectué.")
++        sys.exit(3)
++
++    body = {"hash": cred, "trackers": [TRACKER_ID],
++            "from": _iso_z(WIN_FROM), "to": _iso_z(WIN_TO),
++            "iso_datetime": True, "ascending": True, "limit": 500}
++    try:
++        with httpx.Client(timeout=30) as c:
++            r = c.post(f"{base}/history/tracker/list", json=body)
++            data = r.json() or {}
++    except Exception as e:  # noqa: BLE001
++        print("\nAPPEL ÉCHOUÉ:", type(e).__name__)
++        sys.exit(4)
++    if not data.get("success", False):
++        print("\nRÉPONSE NON-SUCCESS:", json.dumps(data.get("status"), ensure_ascii=False))
++        sys.exit(5)
++
++    rows = [e for e in (data.get("list") or []) if isinstance(e, dict)]
++    print(f"\nEntrées reçues : {len(rows)}")
++    print("-" * 78)
++
++    # Comptages utiles pour le diagnostic.
++    with_command = 0
++    body_hits = 0
++    ack_success_hits = 0
++    event_types = {}
++
++    for e in rows:
++        ts = _parse(e.get("time") or e.get("get_time"))
++        ev = e.get("event") or e.get("type")
++        event_types[ev] = event_types.get(ev, 0) + 1
++        extra = e.get("extra") or {}
++        cmd = extra.get("command") or {}
++        resp = cmd.get("response") or {}
++        has_cmd = bool(cmd)
++        if has_cmd:
++            with_command += 1
++        # Détails ligne (aucun secret).
++        line = {
++            "time": _fmt(ts),
++            "event": ev,
++            "message": e.get("message"),
++            "cmd_name": cmd.get("name"),
++            "cmd_param": cmd.get("param"),
++            "resp_status": resp.get("status"),
++            "resp_body": resp.get("body"),
++            "resp_error": resp.get("error"),
++            "resp_success": resp.get("success"),
++            "full_message": extra.get("full_message"),
++        }
++        # Marqueurs : texte 'privatemode on/off' présent ?
++        hay = " ".join(str(x) for x in (
++            resp.get("body"), cmd.get("name"), cmd.get("param"),
++            extra.get("full_message"), e.get("message")) if x is not None).lower()
++        if ("privatemode on" in hay) or ("privatemode off" in hay) \
++                or ("privatemode:1" in hay) or ("privatemode:0" in hay):
++            body_hits += 1
++            line["MATCH_TEXT"] = True
++        if has_cmd and resp.get("success") is True and resp.get("body") is None:
++            ack_success_hits += 1
++            line["ACK_HARDWARE_SUCCESS_ONLY"] = True
++        # N'imprimer en détail que les lignes intéressantes (commande ou marqueur).
++        if has_cmd or line.get("MATCH_TEXT"):
++            print(json.dumps(line, ensure_ascii=False, default=str))
++
++    print("-" * 78)
++    print("SYNTHÈSE :")
++    print("  event types (comptage)          :", json.dumps(event_types, ensure_ascii=False))
++    print("  entrées avec extra.command      :", with_command)
++    print("  correspondances TEXTE ON/OFF    :", body_hits,
++          "  <- si >0 : response.body/message exploitable")
++    print("  ACK hardware (success only)     :", ack_success_hits,
++          "  <- si >0 : preuve = name/param + success True")
++    print()
++    print("INTERPRÉTATION :")
++    if body_hits > 0:
++        print("  -> La réponse 'Privatemode ON/OFF' EST récupérable via history (texte).")
++        print("     Le matcher texte du backend doit alors la confirmer. Vérifier fenêtre/anti-stale.")
++    elif ack_success_hits > 0:
++        print("  -> La réponse hardware apparaît en ACK (success only, body vide).")
++        print("     Le NOUVEAU matcher ACK (name/param + success True) doit la confirmer.")
++    elif with_command > 0:
++        print("  -> Des entrées commande existent mais sans texte ni ACK exploitable :")
++        print("     inspecter les champs ci-dessus (peut-être un autre champ porte la preuve).")
++    else:
++        print("  -> AUCUNE entrée commande dans history sur la fenêtre. La preuve device N'EST")
++        print("     PAS disponible via history/tracker/list -> s'appuyer sur la télémétrie FMC130")
++        print("     (LKP privé / position fraîche post-OFF business). Ne PAS fabriquer DEVICE_RESPONSE.")
++    print("\nFIN — collez toute cette sortie dans le chat (aucun secret présent).")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.39.5
+
