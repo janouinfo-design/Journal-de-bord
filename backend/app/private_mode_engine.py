@@ -422,24 +422,66 @@ def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
 # Anti-faux-positif : une absence/erreur/history vide ne confirme JAMAIS.
 # ---------------------------------------------------------------------------
 def _command_response_matches(entry: dict, target_mode: str) -> bool:
-    """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?"""
+    """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?
+
+    Deux formes documentées (Navixy history `extra.command.response`) :
+      * commande HTTP     : la PREUVE est le TEXTE renvoyé par le device
+        (response.body / extra.full_message / entry.message).
+      * commande HARDWARE (Teltonika raw) : response ne porte QUE `success`.
+        La PREUVE = cmd.name/param désignant EXACTEMENT la commande privatemode du
+        mode visé ET response.success is True.
+
+    FAIL-CLOSED strict :
+      - échec explicite (success is False / error non vide) -> jamais confirmé ;
+      - le TEXTE n'utilise JAMAIS cmd.name/param (sinon un name='privatemode ON' avec
+        success=None serait faussement confirmé) ;
+      - l'ACK HARDWARE exige success is True (pas None) + match de commande STRICT.
+    """
     extra = entry.get("extra") or {}
     cmd = extra.get("command") or {}
     resp = cmd.get("response") or {}
-    # Corps de réponse device + nom/param de commande — on recherche 'privatemode on/off'.
-    hay = " ".join(str(x) for x in (
-        resp.get("body"), cmd.get("name"), cmd.get("param"),
-        extra.get("full_message"), entry.get("message"),
-    ) if x is not None).lower()
-    # Le statut/success ne doit pas être un échec explicite.
+
+    # Échec explicite -> jamais une preuve.
     if resp.get("success") is False:
         return False
     if isinstance(resp.get("error"), str) and resp.get("error").strip():
         return False
-    if target_mode == PRIVATE:
-        return ("privatemode on" in hay) or ("privatemode:1" in hay) or ("private mode on" in hay)
-    if target_mode == BUSINESS:
-        return ("privatemode off" in hay) or ("privatemode:0" in hay) or ("private mode off" in hay)
+
+    def _norm(*parts) -> str:
+        """minuscule + espaces normalisés (aucun cmd.name/param ici pour le TEXTE)."""
+        return " ".join(" ".join(str(p).split()) for p in parts if p is not None).lower()
+
+    # ---- (1) Preuve TEXTUELLE (réponse HTTP du device) : body / full_message / message ----
+    # On N'INCLUT PAS cmd.name/param : le nom de commande n'est pas une réponse device.
+    text = _norm(resp.get("body"), extra.get("full_message"), entry.get("message"))
+    if text:
+        if target_mode == PRIVATE and (("privatemode on" in text) or ("privatemode:1" in text)
+                                       or ("private mode on" in text)):
+            return True
+        if target_mode == BUSINESS and (("privatemode off" in text) or ("privatemode:0" in text)
+                                        or ("private mode off" in text)):
+            return True
+
+    # ---- (2) Preuve ACK HARDWARE : name/param STRICT + success is True (jamais None) ----
+    if resp.get("success") is True:
+        name_param = _norm(cmd.get("name"), cmd.get("param"))
+        # match STRICT par token (évite un substring permissif type 'privatemode online') :
+        tokens = set(name_param.replace(":", " : ").split())  # sépare aussi 'privatemode:1'
+        joined = name_param
+        if target_mode == PRIVATE:
+            want_forms = ("privatemode on", "privatemode:1")
+        else:
+            want_forms = ("privatemode off", "privatemode:0")
+        for w in want_forms:
+            # accepte la forme exacte contiguë OU la présence stricte des 2 tokens attendus
+            if joined == w or joined.startswith(w + " ") or joined.endswith(" " + w) \
+                    or (" " + w + " ") in (" " + joined + " "):
+                return True
+            # forme 'privatemode:1' éclatée en tokens {'privatemode',':','1'}
+            if ":" in w:
+                base, val = w.split(":", 1)
+                if base in tokens and val in tokens and ":" in tokens:
+                    return True
     return False
 
 
