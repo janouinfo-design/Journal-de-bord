@@ -333,6 +333,11 @@ class VehicleOdometerCapability:
     # TRACKER = preuve spécifique au boîtier ; MODEL = profil généralisé validé
     # par famille après preuves terrain de référence.
     validation_scope: str = "TRACKER"
+    # Attestation technique de provisioning pour CE tracker.
+    # Jamais déduite du seul modèle FMC003/FMC130.
+    profile_ready: bool = False
+    profile_ready_source: Optional[str] = None
+    profile_ready_at: Optional[str] = None
     capability: str = CAP_NOT_TESTED             # CAP_* (statut lisible)
     # Stratégie de confirmation télémétrique du Mode Privé (par tracker field-validated).
     # None = pas de confirmation télémétrique dédiée (fallback profil modèle, ex FMC003).
@@ -357,15 +362,12 @@ def _model_supports_avl16_strategy(model: Optional[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Profil généralisé Privé/Pro PAR MODÈLE.
+# Modèles supportés par le produit.
 #
-# Activé uniquement par PRIVATE_MODE_ACCOUNT_MODEL_GATE côté gate centrale.
-# Il ne change donc PAS la sécurité legacy tant que le rollout reste OFF.
-#
-# Décision produit après validation terrain :
-#   FMC003 -> FROZEN_POSITION
-#   FMC130 -> LAST_KNOWN_POSITION
-# Les autres modèles restent fail-closed.
+# IMPORTANT :
+# le modèle seul n'autorise JAMAIS le Mode Privé.
+# L'autorisation généralisée exige en plus un profil technique persistant,
+# propre au tracker, vérifié par `vehicle_private_profile_ready`.
 # ---------------------------------------------------------------------------
 GENERALIZED_PRIVATE_MODE_MODELS = frozenset({"FMC003", "FMC130"})
 
@@ -377,57 +379,94 @@ def _logical_private_mode_model(device_model: Optional[str]) -> Optional[str]:
 
 
 def model_private_mode_supported(device_model: Optional[str]) -> bool:
-    """True uniquement pour les familles généralisées FMC003/FMC130."""
+    """Familles produit supportées. Ce booléen seul n'est PAS une autorisation."""
     return _logical_private_mode_model(device_model) in GENERALIZED_PRIVATE_MODE_MODELS
 
 
-def get_model_private_mode_capability(
+def vehicle_private_profile_ready(
     device_model: Optional[str],
+    vc: Optional[VehicleOdometerCapability],
+    *,
     tracker_id: Optional[int] = None,
-) -> Optional[VehicleOdometerCapability]:
-    """Construit le profil métier validé PAR MODÈLE.
+) -> bool:
+    """Profil technique Privé/Pro prêt pour CE tracker.
 
-    Ce profil sert au moteur de confirmation après activation explicite du
-    rollout compte+modèle. Il ne persiste rien et ne modifie aucune capability
-    tracker existante.
+    Fail-closed. Exige :
+      - modèle FMC003 ou FMC130 ;
+      - capability propre au tracker demandé ;
+      - AVL16 réellement mappé via un sensor Navixy ;
+      - scale vérifié ;
+      - AVL16 reçu, cumulatif et continuant en privé ;
+      - attestation de provisioning `profile_ready=True` avec source,
+        OU ancienne preuve terrain complète `field_validated=True` ;
+      - stratégie de confirmation compatible avec le modèle.
+
+    Le modèle seul ne peut donc jamais rendre un tracker éligible.
     """
+    if not vc:
+        return False
+
     model = _logical_private_mode_model(device_model)
+    cap_model = _logical_private_mode_model(vc.device_model)
+
     if model not in GENERALIZED_PRIVATE_MODE_MODELS:
-        return None
+        return False
+    if cap_model != model:
+        return False
 
-    strategy = (
-        CONFIRM_STRATEGY_LAST_KNOWN_POSITION
-        if model == "FMC130"
-        else CONFIRM_STRATEGY_FROZEN_POSITION
-    )
+    if tracker_id is not None:
+        if vc.tracker_id is None:
+            return False
+        try:
+            if int(vc.tracker_id) != int(tracker_id):
+                return False
+        except (TypeError, ValueError):
+            return False
 
-    return VehicleOdometerCapability(
-        vehicle_id=f"model-profile-{model.lower()}",
-        tracker_id=int(tracker_id) if tracker_id is not None else None,
-        device_model=model,
-        private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER,
-        raw_avl_id=AVL_TOTAL_ODOMETER,
-        navixy_input="avl_io_16",
-        raw_unit="m",
-        normalized_unit="km",
-        multiplier=1.0,
-        divider=1000.0,
-        scale_status=SCALE_VERIFIED,
-        runtime_verified=True,
-        cumulative_verified=True,
-        private_increment_verified=True,
-        field_validated=True,
-        validation_scope="MODEL",
-        capability=CAP_FIELD_VALIDATED,
-        private_confirmation_strategy=strategy,
-        source_type=SOURCE_TELTONIKA_TOTAL_ODOMETER,
-        unit="km",
-        notes=(
-            "Profil généralisé par modèle après preuves terrain de référence. "
-            "Rollout contrôlé par PRIVATE_MODE_ACCOUNT_MODEL_GATE ; "
-            "aucune activation automatique d'un compte chauffeur."
-        ),
+    if vc.private_distance_source != SOURCE_TELTONIKA_TOTAL_ODOMETER:
+        return False
+    if vc.raw_avl_id != AVL_TOTAL_ODOMETER:
+        return False
+    if vc.navixy_input != "avl_io_16":
+        return False
+    if vc.navixy_sensor_id is None:
+        return False
+    if vc.scale_status != SCALE_VERIFIED:
+        return False
+
+    if not (
+        vc.runtime_verified
+        and vc.cumulative_verified
+        and vc.private_increment_verified
+    ):
+        return False
+
+    # Preuve historique D3 terrain, OU attestation explicite de provisioning.
+    attested = bool(
+        vc.field_validated
+        or (
+            vc.profile_ready is True
+            and bool(str(vc.profile_ready_source or "").strip())
+        )
     )
+    if not attested:
+        return False
+
+    strategy = vc.private_confirmation_strategy
+
+    if model == "FMC130":
+        # FMC130 : jamais de fallback implicite.
+        return strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+
+    if model == "FMC003":
+        # Compat historique : le D3 FMC003 antérieur utilisait None
+        # avec fallback FROZEN_POSITION. Tout nouveau profile_ready doit
+        # toutefois porter explicitement FROZEN_POSITION.
+        if vc.field_validated and strategy is None:
+            return True
+        return strategy == CONFIRM_STRATEGY_FROZEN_POSITION
+
+    return False
 
 
 def vehicle_private_mode_allowed(model: Optional[str],

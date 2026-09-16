@@ -41,6 +41,7 @@ R_DEVICE_WRITE_DISABLED = "PRIVATE_MODE_DEVICE_WRITE_DISABLED"
 R_TRANSITION_IN_PROGRESS = "PRIVATE_MODE_TRANSITION_IN_PROGRESS"
 R_DRIVER_ACCOUNT_NOT_LINKED = "PRIVATE_MODE_DRIVER_ACCOUNT_NOT_LINKED"
 R_ACCOUNT_NOT_ENABLED = "PRIVATE_MODE_ACCOUNT_NOT_ENABLED"
+R_PROFILE_NOT_READY = "PRIVATE_MODE_PROFILE_NOT_READY"
 
 # Codes HTTP recommandés par raison (pour les endpoints).
 HTTP_BY_REASON = {
@@ -56,6 +57,7 @@ HTTP_BY_REASON = {
     R_TRANSITION_IN_PROGRESS: 409,
     R_DRIVER_ACCOUNT_NOT_LINKED: 403,
     R_ACCOUNT_NOT_ENABLED: 403,
+    R_PROFILE_NOT_READY: 409,
 }
 
 
@@ -253,6 +255,7 @@ async def can_use_private_mode(
         resolve_model,
         vehicle_private_mode_allowed,
         model_private_mode_supported,
+        vehicle_private_profile_ready,
     )
     model = resolve_model(vehicle_doc.get("model"))
 
@@ -267,6 +270,13 @@ async def can_use_private_mode(
         # B. Famille matérielle autorisée : uniquement FMC003 / FMC130.
         if not model_private_mode_supported(model):
             return deny(R_NOT_SUPPORTED, "hardware_model")
+
+        # C. Profil technique PERSISTANT propre à CE tracker.
+        # Le modèle seul ne suffit jamais.
+        if not vehicle_private_profile_ready(
+            model, capability, tracker_id=tracker_id
+        ):
+            return deny(R_PROFILE_NOT_READY, "hardware_profile")
     else:
         # Ancienne gate pilote conservée telle quelle pendant le rollout.
         if not vehicle_is_pilot(vehicle_doc):
