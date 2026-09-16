@@ -37,6 +37,7 @@ class TeamUserIn(BaseModel):
     password: str
     name: str
     role: str = "driver"
+    private_mode_enabled: bool = False
 
 
 class TeamUserUpdate(BaseModel):
@@ -44,6 +45,7 @@ class TeamUserUpdate(BaseModel):
     role: Optional[str] = None
     password: Optional[str] = None
     active: Optional[bool] = None
+    private_mode_enabled: Optional[bool] = None
 
 
 @router.get("/users")
@@ -67,6 +69,10 @@ async def team_create_user(payload: TeamUserIn, current=Depends(require_roles("a
     tid = _tenant_or_400()
     if payload.role not in TEAM_ROLES:
         raise HTTPException(400, f"Rôle invalide ({', '.join(TEAM_ROLES)})")
+    if payload.private_mode_enabled and payload.role != "driver":
+        raise HTTPException(
+            400, "Le Mode Privé / Professionnel est réservé aux comptes Chauffeur"
+        )
     raw = get_raw_db()
     email = payload.email.lower()
     if await raw.users.find_one({"email": email}):
@@ -74,6 +80,7 @@ async def team_create_user(payload: TeamUserIn, current=Depends(require_roles("a
     user = {
         "id": str(uuid.uuid4()), "email": email, "name": payload.name,
         "role": payload.role, "tenant_id": tid,
+        "private_mode_enabled": bool(payload.private_mode_enabled),
         "password_hash": hash_password(payload.password),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -92,16 +99,31 @@ async def team_update_user(user_id: str, payload: TeamUserUpdate,
     if not target:
         raise HTTPException(404, "Utilisateur introuvable")
     updates: dict = {}
+    effective_role = payload.role if payload.role is not None else target.get("role")
+
     if payload.name is not None:
         updates["name"] = payload.name
+
     if payload.role is not None:
         if payload.role not in TEAM_ROLES:
             raise HTTPException(400, f"Rôle invalide ({', '.join(TEAM_ROLES)})")
         if target["id"] == current["id"] and payload.role != "admin":
             raise HTTPException(400, "Vous ne pouvez pas rétrograder votre propre compte")
         updates["role"] = payload.role
+        # Un compte qui cesse d'être chauffeur perd automatiquement ce droit.
+        if payload.role != "driver":
+            updates["private_mode_enabled"] = False
+
+    if payload.private_mode_enabled is not None:
+        if payload.private_mode_enabled and effective_role != "driver":
+            raise HTTPException(
+                400, "Le Mode Privé / Professionnel est réservé aux comptes Chauffeur"
+            )
+        updates["private_mode_enabled"] = bool(payload.private_mode_enabled)
+
     if payload.password:
         updates["password_hash"] = hash_password(payload.password)
+
     if payload.active is not None:
         if target["id"] == current["id"] and payload.active is False:
             raise HTTPException(400, "Vous ne pouvez pas désactiver votre propre compte")

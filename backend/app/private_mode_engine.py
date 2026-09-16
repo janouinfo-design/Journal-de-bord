@@ -142,7 +142,13 @@ async def resolve_vehicle_capability(db, tracker_id: Optional[int],
         except TypeError:
             logger.warning("capability doc invalide pour tracker %s", tracker_id)
             return None
-    # Fallback : registre pilote (non destructif — sert de preuve/seed).
+    # En rollout compte+modèle, aucune capability n'est inventée depuis le
+    # seul modèle. Le profil technique doit être PERSISTÉ pour ce tracker.
+    from app import private_mode_gate as _gate
+    if _gate.account_model_gate_enabled():
+        return None
+
+    # Legacy uniquement : registre pilote historique par tracker.
     return get_pilot_capability(tracker_id)
 
 
@@ -213,21 +219,35 @@ async def _default_confirm(tracker_id: int, expected_state: str) -> tuple[Option
 # (gps.updated progresse à nouveau après l'envoi de la commande OFF).
 # ---------------------------------------------------------------------------
 def _model_supports_telemetry_confirm(capability) -> bool:
-    """La confirmation télémétrique n'est autorisée que pour un profil FIELD_VALIDATED.
-    Deux cas (jamais généralisé automatiquement) :
-      - FMC003 prouvé terrain (comportement existant, gel de position) ;
-      - tout tracker field_validated avec stratégie explicite LAST_KNOWN_POSITION (ex FMC130 781479).
+    """Autorise la confirmation télémétrique uniquement pour un profil fiable.
+
+    Deux preuves acceptées :
+      - `field_validated=True` : ancienne validation terrain complète ;
+      - `profile_ready=True` : provisioning technique vérifié et persistant.
+
+    La stratégie doit rester compatible avec la famille matérielle.
     """
     if not capability:
         return False
-    if not getattr(capability, "field_validated", False):
+
+    proven = bool(
+        getattr(capability, "field_validated", False)
+        or getattr(capability, "profile_ready", False)
+    )
+    if not proven:
         return False
+
     model = str(getattr(capability, "device_model", "") or "").upper()
     strategy = getattr(capability, "private_confirmation_strategy", None)
+
     if model == "FMC003":
-        return True                                   # comportement existant INCHANGÉ
-    if strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION:
-        return True                                   # profil explicite (jamais tous les FMC130)
+        # Compat historique D3 : stratégie None => FROZEN_POSITION.
+        return strategy in (None, CONFIRM_STRATEGY_FROZEN_POSITION)
+
+    if model == "FMC130":
+        # Aucun fallback générique FMC130.
+        return strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+
     return False
 
 
@@ -805,7 +825,7 @@ async def request_mode(
     vc = await resolve_vehicle_capability(db, tracker_id, model)
     decision = await gate.can_use_private_mode(
         db, tenant_id=tid, tenant_doc=get_tenant_doc(tid),
-        vehicle_doc=vehicle, capability=vc,
+        vehicle_doc=vehicle, capability=vc, driver_id=driver_id,
     )
     allowed = decision["allowed"]
     if not allowed:

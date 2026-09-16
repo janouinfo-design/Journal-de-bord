@@ -330,6 +330,14 @@ class VehicleOdometerCapability:
     cumulative_verified: bool = False            # augmente avec la distance (delta>0 en roulant)
     private_increment_verified: bool = False     # continue quand GPS masqué (D3-B)
     field_validated: bool = False                # D3 terrain PASS complet
+    # TRACKER = preuve spécifique au boîtier ; MODEL = profil généralisé validé
+    # par famille après preuves terrain de référence.
+    validation_scope: str = "TRACKER"
+    # Attestation technique de provisioning pour CE tracker.
+    # Jamais déduite du seul modèle FMC003/FMC130.
+    profile_ready: bool = False
+    profile_ready_source: Optional[str] = None
+    profile_ready_at: Optional[str] = None
     capability: str = CAP_NOT_TESTED             # CAP_* (statut lisible)
     # Stratégie de confirmation télémétrique du Mode Privé (par tracker field-validated).
     # None = pas de confirmation télémétrique dédiée (fallback profil modèle, ex FMC003).
@@ -350,6 +358,115 @@ def _model_supports_avl16_strategy(model: Optional[str]) -> bool:
     return bool(cap and cap.strategy == STRATEGY_TELTONIKA_TOTAL_ODOMETER
                 and cap.primary_source == SOURCE_TELTONIKA_TOTAL_ODOMETER
                 and cap.status != STATUS_DEPRECATED)
+
+
+
+# ---------------------------------------------------------------------------
+# Modèles supportés par le produit.
+#
+# IMPORTANT :
+# le modèle seul n'autorise JAMAIS le Mode Privé.
+# L'autorisation généralisée exige en plus un profil technique persistant,
+# propre au tracker, vérifié par `vehicle_private_profile_ready`.
+# ---------------------------------------------------------------------------
+GENERALIZED_PRIVATE_MODE_MODELS = frozenset({"FMC003", "FMC130"})
+
+
+def _logical_private_mode_model(device_model: Optional[str]) -> Optional[str]:
+    if not device_model:
+        return None
+    return resolve_model(device_model) or str(device_model).upper()
+
+
+def model_private_mode_supported(device_model: Optional[str]) -> bool:
+    """Familles produit supportées. Ce booléen seul n'est PAS une autorisation."""
+    return _logical_private_mode_model(device_model) in GENERALIZED_PRIVATE_MODE_MODELS
+
+
+def vehicle_private_profile_ready(
+    device_model: Optional[str],
+    vc: Optional[VehicleOdometerCapability],
+    *,
+    tracker_id: Optional[int] = None,
+) -> bool:
+    """Profil technique Privé/Pro prêt pour CE tracker.
+
+    Fail-closed. Exige :
+      - modèle FMC003 ou FMC130 ;
+      - capability propre au tracker demandé ;
+      - AVL16 réellement mappé via un sensor Navixy ;
+      - scale vérifié ;
+      - AVL16 reçu, cumulatif et continuant en privé ;
+      - attestation de provisioning `profile_ready=True` avec source,
+        OU ancienne preuve terrain complète `field_validated=True` ;
+      - stratégie de confirmation compatible avec le modèle.
+
+    Le modèle seul ne peut donc jamais rendre un tracker éligible.
+    """
+    if not vc:
+        return False
+
+    model = _logical_private_mode_model(device_model)
+    cap_model = _logical_private_mode_model(vc.device_model)
+
+    if model not in GENERALIZED_PRIVATE_MODE_MODELS:
+        return False
+    if cap_model != model:
+        return False
+
+    if tracker_id is not None:
+        if vc.tracker_id is None:
+            return False
+        try:
+            if int(vc.tracker_id) != int(tracker_id):
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    if vc.private_distance_source != SOURCE_TELTONIKA_TOTAL_ODOMETER:
+        return False
+    if vc.raw_avl_id != AVL_TOTAL_ODOMETER:
+        return False
+    if vc.navixy_input != "avl_io_16":
+        return False
+    if vc.navixy_sensor_id is None:
+        return False
+    if vc.scale_status != SCALE_VERIFIED:
+        return False
+
+    if not (
+        vc.runtime_verified
+        and vc.cumulative_verified
+        and vc.private_increment_verified
+    ):
+        return False
+
+    # Preuve historique D3 terrain, OU attestation explicite de provisioning.
+    attested = bool(
+        vc.field_validated
+        or (
+            vc.profile_ready is True
+            and bool(str(vc.profile_ready_source or "").strip())
+        )
+    )
+    if not attested:
+        return False
+
+    strategy = vc.private_confirmation_strategy
+
+    if model == "FMC130":
+        # FMC130 : jamais de fallback implicite.
+        return strategy == CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+
+    if model == "FMC003":
+        # Compat historique : le D3 FMC003 antérieur utilisait None
+        # avec fallback FROZEN_POSITION. Tout nouveau profile_ready doit
+        # toutefois porter explicitement FROZEN_POSITION.
+        if vc.field_validated and strategy is None:
+            return True
+        return strategy == CONFIRM_STRATEGY_FROZEN_POSITION
+
+    return False
 
 
 def vehicle_private_mode_allowed(model: Optional[str],

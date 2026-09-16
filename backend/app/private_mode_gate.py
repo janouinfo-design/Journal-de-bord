@@ -39,6 +39,9 @@ R_NO_VEHICLE = "PRIVATE_MODE_NO_VEHICLE"
 # verrou de CAPACITÉ D'ACTION (can_switch=False). Distinct de allowed.
 R_DEVICE_WRITE_DISABLED = "PRIVATE_MODE_DEVICE_WRITE_DISABLED"
 R_TRANSITION_IN_PROGRESS = "PRIVATE_MODE_TRANSITION_IN_PROGRESS"
+R_DRIVER_ACCOUNT_NOT_LINKED = "PRIVATE_MODE_DRIVER_ACCOUNT_NOT_LINKED"
+R_ACCOUNT_NOT_ENABLED = "PRIVATE_MODE_ACCOUNT_NOT_ENABLED"
+R_PROFILE_NOT_READY = "PRIVATE_MODE_PROFILE_NOT_READY"
 
 # Codes HTTP recommandés par raison (pour les endpoints).
 HTTP_BY_REASON = {
@@ -52,11 +55,23 @@ HTTP_BY_REASON = {
     R_NO_VEHICLE: 409,
     R_DEVICE_WRITE_DISABLED: 503,   # service indisponible (écriture device coupée)
     R_TRANSITION_IN_PROGRESS: 409,
+    R_DRIVER_ACCOUNT_NOT_LINKED: 403,
+    R_ACCOUNT_NOT_ENABLED: 403,
+    R_PROFILE_NOT_READY: 409,
 }
 
 
 def _truthy(v: str) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def account_model_gate_enabled() -> bool:
+    """Rollout de la gate compte+modèle.
+
+    Défaut FALSE : tant que le rollout n'est pas explicitement activé,
+    l'ancienne gate pilote tracker-par-tracker reste strictement inchangée.
+    """
+    return _truthy(os.environ.get("PRIVATE_MODE_ACCOUNT_MODEL_GATE", "false"))
 
 
 # ---------------------------------------------------------------------------
@@ -136,15 +151,78 @@ def vehicle_is_pilot(vehicle_doc: Optional[dict]) -> bool:
 # ---------------------------------------------------------------------------
 # Décision CENTRALE : can_use_private_mode(...)
 # ---------------------------------------------------------------------------
-async def can_use_private_mode(db, *, tenant_id: Optional[str], tenant_doc: Optional[dict],
-                               vehicle_doc: Optional[dict], capability=None) -> dict:
-    """Décision unique et fail-closed. Retour :
-       {allowed: bool, reason: str|None, http: int, level: str}
-    Ne lit aucun secret, n'envoie aucune commande. `capability` = VehicleOdometerCapability|None.
+# ---------------------------------------------------------------------------
+# Droit compte chauffeur — mode généralisé compte + modèle
+# ---------------------------------------------------------------------------
+async def driver_account_private_mode_enabled(
+    db, tenant_id: Optional[str], driver_id: Optional[str]
+) -> tuple[bool, Optional[str]]:
+    """Vérifie le droit Privé/Pro porté par le COMPTE du chauffeur.
+
+    Fail-closed :
+    - chauffeur existant, actif et dans le tenant ;
+    - compte utilisateur lié par user_id (fallback email historique) ;
+    - compte actif, rôle driver ;
+    - private_mode_enabled == True explicitement.
+    """
+    if not tenant_id or not driver_id:
+        return False, R_DRIVER_ACCOUNT_NOT_LINKED
+
+    driver = await db.drivers.find_one(
+        {"id": driver_id, "tenant_id": tenant_id},
+        {"_id": 0, "user_id": 1, "email": 1, "active": 1},
+    )
+    if not driver or driver.get("active") is False:
+        return False, R_DRIVER_ACCOUNT_NOT_LINKED
+
+    user = None
+    if driver.get("user_id"):
+        user = await db.users.find_one(
+            {"id": driver["user_id"], "tenant_id": tenant_id},
+            {"_id": 0, "role": 1, "active": 1, "private_mode_enabled": 1},
+        )
+    elif driver.get("email"):
+        user = await db.users.find_one(
+            {"email": str(driver["email"]).lower(), "tenant_id": tenant_id},
+            {"_id": 0, "role": 1, "active": 1, "private_mode_enabled": 1},
+        )
+
+    if not user or user.get("active") is False or user.get("role") != "driver":
+        return False, R_DRIVER_ACCOUNT_NOT_LINKED
+
+    if user.get("private_mode_enabled") is not True:
+        return False, R_ACCOUNT_NOT_ENABLED
+
+    return True, None
+
+
+# ---------------------------------------------------------------------------
+# Décision CENTRALE : can_use_private_mode(...)
+# ---------------------------------------------------------------------------
+async def can_use_private_mode(
+    db, *,
+    tenant_id: Optional[str],
+    tenant_doc: Optional[dict],
+    vehicle_doc: Optional[dict],
+    capability=None,
+    driver_id: Optional[str] = None,
+) -> dict:
+    """Décision unique, fail-closed.
+
+    Deux chemins de rollout :
+      LEGACY (défaut) : tenant + tracker pilote + capability par tracker.
+      ACCOUNT_MODEL   : droit explicite du compte chauffeur + modèle FMC003/FMC130.
+
+    Les protections globales, le kill switch, la présence du tracker et
+    l'intégration Navixy restent obligatoires dans les deux chemins.
     """
     def deny(reason, level):
-        return {"allowed": False, "reason": reason,
-                "http": HTTP_BY_REASON.get(reason, 403), "level": level}
+        return {
+            "allowed": False,
+            "reason": reason,
+            "http": HTTP_BY_REASON.get(reason, 403),
+            "level": level,
+        }
 
     # 1. Feature globale
     if not feature_enabled():
@@ -154,33 +232,68 @@ async def can_use_private_mode(db, *, tenant_id: Optional[str], tenant_doc: Opti
     if await kill_switch_active(db):
         return deny(R_KILL_SWITCH, "kill_switch")
 
-    # 3. Tenant
-    if not tenant_allowed(tenant_doc, tenant_id):
+    generalized = account_model_gate_enabled()
+
+    # 3. En mode legacy : allowlist tenant inchangée.
+    # En mode compte+modèle : le tenant est dérivé du compte authentifié ;
+    # son intégration Navixy reste contrôlée plus bas.
+    if not generalized and not tenant_allowed(tenant_doc, tenant_id):
+        return deny(R_TENANT_NOT_ALLOWED, "tenant")
+    if generalized and not tenant_id:
         return deny(R_TENANT_NOT_ALLOWED, "tenant")
 
     # 4. Véhicule présent
     if not vehicle_doc:
         return deny(R_NO_VEHICLE, "vehicle")
 
-    # 4b. Véhicule pilote (allowlist)
-    if not vehicle_is_pilot(vehicle_doc):
-        return deny(R_VEHICLE_NOT_PILOT, "vehicle_pilot")
-
     # 5. Tracker présent
     tracker_id = vehicle_doc.get("navixy_tracker_id")
     if not tracker_id:
         return deny(R_NO_TRACKER, "tracker")
 
-    # 6. Hardware capability field_validated (ne JAMAIS inventer)
-    from app.odometer_capability import resolve_model, vehicle_private_mode_allowed
+    from app.odometer_capability import (
+        resolve_model,
+        vehicle_private_mode_allowed,
+        model_private_mode_supported,
+        vehicle_private_profile_ready,
+    )
     model = resolve_model(vehicle_doc.get("model"))
-    if not vehicle_private_mode_allowed(model, capability):
-        return deny(R_NOT_SUPPORTED, "hardware")
 
-    # 7. Intégration Navixy disponible POUR CE TENANT (fail-closed, jamais cross-tenant)
+    if generalized:
+        # A. Droit métier porté par le compte chauffeur.
+        account_ok, account_reason = await driver_account_private_mode_enabled(
+            db, tenant_id, driver_id
+        )
+        if not account_ok:
+            return deny(account_reason, "driver_account")
+
+        # B. Famille matérielle autorisée : uniquement FMC003 / FMC130.
+        if not model_private_mode_supported(model):
+            return deny(R_NOT_SUPPORTED, "hardware_model")
+
+        # C. Profil technique PERSISTANT propre à CE tracker.
+        # Le modèle seul ne suffit jamais.
+        if not vehicle_private_profile_ready(
+            model, capability, tracker_id=tracker_id
+        ):
+            return deny(R_PROFILE_NOT_READY, "hardware_profile")
+    else:
+        # Ancienne gate pilote conservée telle quelle pendant le rollout.
+        if not vehicle_is_pilot(vehicle_doc):
+            return deny(R_VEHICLE_NOT_PILOT, "vehicle_pilot")
+
+        if not vehicle_private_mode_allowed(model, capability):
+            return deny(R_NOT_SUPPORTED, "hardware")
+
+    # 6. Intégration Navixy du tenant obligatoire dans tous les cas.
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
         return deny(R_INTEGRATION_UNAVAILABLE, "integration")
 
-    return {"allowed": True, "reason": REASON_OK, "http": 200, "level": "ok"}
+    return {
+        "allowed": True,
+        "reason": REASON_OK,
+        "http": 200,
+        "level": "account_model" if generalized else "ok",
+    }
