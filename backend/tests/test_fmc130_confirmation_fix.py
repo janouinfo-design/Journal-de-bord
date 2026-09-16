@@ -318,6 +318,120 @@ def test_command_response_matches_helper():
     assert pm._command_response_matches(off, pm.BUSINESS) is True
 
 
+# ---------------------------------------------------------------------------
+# ACK HARDWARE (Teltonika raw command) : la réponse ne porte QUE `success`
+# (body=None). La preuve = name/param désignant la commande privatemode du bon
+# mode + success True. Root cause du PENDING : le body-only matcher ratait ce cas.
+# ---------------------------------------------------------------------------
+def _hw_ack(time_iso, cmd_name, success=True):
+    return {"time": time_iso, "event": "command_sent", "message": None,
+            "extra": {"command": {"name": cmd_name, "param": None,
+                                  "response": {"status": None, "body": None,
+                                               "error": None, "success": success}}}}
+
+
+def test_hardware_ack_confirms_private_without_body():
+    """ACK hardware 'privatemode ON' (success True, body None) -> PRIVATE / DEVICE_RESPONSE."""
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON")
+    assert pm._command_response_matches(e, pm.PRIVATE) is True
+    assert pm._command_response_matches(e, pm.BUSINESS) is False
+
+
+def test_hardware_ack_confirms_business_without_body():
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF")
+    assert pm._command_response_matches(e, pm.BUSINESS) is True
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
+
+
+def test_hardware_ack_failure_success_false_not_confirmed():
+    """ACK hardware avec success False -> jamais confirmé (fail-closed)."""
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON", success=False)
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
+
+
+def test_hardware_ack_unrelated_command_not_confirmed():
+    """Une commande hardware SANS rapport (success True) ne confirme pas le mode."""
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "get_gps_position")
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
+    assert pm._command_response_matches(e, pm.BUSINESS) is False
+
+
+def test_hardware_ack_success_none_not_confirmed_private():
+    """FAIL-CLOSED : name='privatemode ON' mais success=None (body vide) -> JAMAIS confirmé.
+    (Le chemin TEXTE ne doit PAS utiliser cmd.name/param.)"""
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON", success=None)
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
+
+
+def test_hardware_ack_success_none_not_confirmed_business():
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF", success=None)
+    assert pm._command_response_matches(e, pm.BUSINESS) is False
+
+
+def test_hardware_ack_colon_forms_confirm_with_success_true():
+    """Formes 'privatemode:1' / 'privatemode:0' avec success True -> confirmées."""
+    on = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
+    on["extra"]["command"]["param"] = "privatemode:1"
+    off = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
+    off["extra"]["command"]["param"] = "privatemode:0"
+    assert pm._command_response_matches(on, pm.PRIVATE) is True
+    assert pm._command_response_matches(on, pm.BUSINESS) is False
+    assert pm._command_response_matches(off, pm.BUSINESS) is True
+    assert pm._command_response_matches(off, pm.PRIVATE) is False
+
+
+def test_hardware_ack_colon_forms_success_none_not_confirmed():
+    """Formes 'privatemode:1/0' mais success=None -> jamais confirmées (fail-closed)."""
+    on = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=None)
+    on["extra"]["command"]["param"] = "privatemode:1"
+    assert pm._command_response_matches(on, pm.PRIVATE) is False
+
+
+def test_text_path_ignores_command_name_param():
+    """Le chemin TEXTE ne se base QUE sur body/full_message/message : un name/param
+    'privatemode ON' sans body et sans success True ne doit pas confirmer."""
+    e = {"time": "2026-09-10T12:00:20+00:00", "message": None,
+         "extra": {"command": {"name": "privatemode ON", "param": None,
+                               "response": {"status": None, "body": None,
+                                            "error": None, "success": None}}}}
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
+
+
+def test_text_path_body_confirms_regardless_of_success_none():
+    """Le device renvoie le TEXTE dans body (commande HTTP) : confirmé même si success
+    n'est pas explicitement True (le body EST la preuve), tant qu'aucun échec explicite."""
+    e = {"time": "2026-09-10T12:00:20+00:00", "message": None,
+         "extra": {"full_message": None,
+                   "command": {"name": "custom", "param": None,
+                               "response": {"status": "executed", "body": "Privatemode ON",
+                                            "error": None, "success": None}}}}
+    assert pm._command_response_matches(e, pm.PRIVATE) is True
+
+
+def test_hardware_ack_end_to_end_confirms_private_via_telemetry_confirm():
+    """Chaîne complète : ACK hardware postérieur -> telemetry_confirm -> PRIVATE/DEVICE_RESPONSE
+    (sans aucun GPS ni sample ; c'est la preuve qui manquait et laissait l'app en PENDING)."""
+    sent = "2026-09-10T12:00:00+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_hw_ack("2026-09-10T12:00:15+00:00", "privatemode ON")]
+    state, src = _run(pm.telemetry_confirm(
+        "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
+    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+
+
+def test_hardware_ack_stale_before_command_ignored():
+    """ACK hardware ANTÉRIEUR à la commande -> ignoré (anti-stale, même cycle exigé)."""
+    sent = "2026-09-10T12:00:00+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_hw_ack("2026-09-10T11:59:00+00:00", "privatemode ON")]  # avant sent
+    state, src = _run(pm.telemetry_confirm(
+        "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
+    assert state != pm.PRIVATE
+    assert src == pm.SRC_UNCONFIRMED
+
+
 # ===========================================================================
 # TIMEZONE — la réponse device est comparée en instants UTC (offset explicite),
 # quel que soit le fuseau d'affichage du compte Navixy. Root cause corrigée.
