@@ -25,6 +25,34 @@ from app.vehicle_access import (get_authorized_vehicles_for_driver,
 router = APIRouter(tags=["identification"])
 
 
+def _private_odometer_supported(
+    model,
+    capability,
+    tracker_id,
+    *,
+    generalized: bool,
+) -> bool:
+    """Disponibilité du compteur privé exposée à l'app chauffeur.
+
+    Legacy : comportement historique inchangé (`field_validated`).
+    Rollout compte+modèle : réutilise la validation technique centrale,
+    fail-closed et propre au tracker.
+    """
+    if generalized:
+        from app.odometer_capability import vehicle_private_profile_ready
+
+        return vehicle_private_profile_ready(
+            model,
+            capability,
+            tracker_id=tracker_id,
+        )
+
+    return bool(
+        capability
+        and getattr(capability, "field_validated", False)
+    )
+
+
 @router.get("/driver/vehicles")
 async def driver_vehicles(user=Depends(get_current_user)):
     """Véhicules que le chauffeur connecté a le DROIT d'utiliser.
@@ -245,8 +273,16 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     # Si une bascule est en attente de confirmation, tenter de la résoudre (télémétrie, READ-ONLY).
     if st.get("state") == pm.PENDING_CONFIRMATION:
         st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
-    # capacité odomètre privé : field_validated -> km privés garantis (jamais inventés)
-    private_odo_ok = bool(vc and getattr(vc, "field_validated", False))
+    # Capacité odomètre privé :
+    # - legacy : preuve terrain historique `field_validated`;
+    # - rollout compte+modèle : profil technique complet et propre au tracker.
+    # Même source de vérité que la gate généralisée, jamais le modèle seul.
+    private_odo_ok = _private_odometer_supported(
+        model,
+        vc,
+        tracker_id,
+        generalized=gate.account_model_gate_enabled(),
+    )
 
     # --- can_switch : capacité d'ACTION (distincte de l'éligibilité `allowed`) ---
     # allowed  = chauffeur/véhicule éligible au pilote (gate fail-closed).
