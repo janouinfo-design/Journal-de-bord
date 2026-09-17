@@ -302,3 +302,50 @@ def test_legacy_pilot_registry_still_available_when_rollout_off():
     assert cap is not None
     assert cap.tracker_id == 3657864
     assert cap.field_validated is True
+
+
+def test_private_odometer_supported_accepts_profile_ready_in_generalized_mode():
+    from app.routes.identification import _private_odometer_supported
+
+    cap = _ready_cap(
+        "FMC130",
+        999001,
+        profile_ready=True,
+        field_validated=False,
+    )
+
+    assert _private_odometer_supported(
+        "FMC130",
+        cap,
+        999001,
+        generalized=True,
+    ) is True
+
+
+def test_private_odometer_supported_model_only_stays_false():
+    from app.routes.identification import _private_odometer_supported
+
+    assert _private_odometer_supported(
+        "FMC130",
+        None,
+        999001,
+        generalized=True,
+    ) is False
+
+
+def test_private_odometer_supported_preserves_legacy_field_validated():
+    from app.routes.identification import _private_odometer_supported
+
+    cap = _ready_cap(
+        "FMC130",
+        999001,
+        profile_ready=False,
+        field_validated=True,
+    )
+
+    assert _private_odometer_supported(
+        "FMC130",
+        cap,
+        999001,
+        generalized=False,
+    ) is True
