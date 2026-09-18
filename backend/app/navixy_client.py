@@ -165,10 +165,10 @@ async def list_tracker_history(tracker_id: int, date_from: str, date_to: str,
                                limit: int = 100, iso_datetime: bool = False) -> list[dict]:
     """READ-ONLY. Event history of a tracker over a period (`history/tracker/list`).
 
-    Officially documented endpoint (User API). Each entry may carry, in `extra.command`,
-    the DEVICE RESPONSE to a sent command:
-      extra.command = {name, param, response: {status, body, error, success}}
-    where `response.body` is the raw device answer (e.g. "Privatemode ON").
+    The public User API documents this endpoint as tracker EVENT history.
+    Some Navixy installations/command types additionally expose command metadata
+    under `extra.command` (including response fields); callers MUST treat those
+    fields as optional/best-effort, never as a guaranteed device-response channel.
 
     Date format:
       - `iso_datetime=False` (default): 'YYYY-MM-DD HH:MM:SS' interpreted in the ACCOUNT timezone.
