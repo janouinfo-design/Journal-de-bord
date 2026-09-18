@@ -931,7 +931,13 @@ async def request_mode(
             "navixy_command_id": None, "confirmation_source": None,
             # Les bornes/résultats de FIN appartiennent au cycle courant uniquement.
             "private_end_time": None, "private_end_odometer_km": None,
-            "private_distance_km": None}
+            "private_distance_km": None,
+            # Candidat capturé exactement au moment du OFF. Il devient la borne
+            # autoritative de fin pour l'état métier aussi (pas seulement pour
+            # private_mileage), afin de ne jamais inclure des km PRO accumulés
+            # pendant une confirmation asynchrone/tardive.
+            "private_end_candidate_odometer_km": None,
+            "private_end_candidate_sample_at": None}
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
@@ -978,10 +984,17 @@ async def request_mode(
         elif _cmd_effective and target_mode == BUSINESS:
             odo_cand, cand_status = await _read_odometer_snapshot(
                 db, tid, vehicle_id, tracker_id, read_odo_km)
+            candidate_at = _now()
+            # Conserve la même borne OFF dans private_mode_state. Cette valeur
+            # est ensuite utilisée par la confirmation immédiate, asynchrone ou
+            # tardive ; on ne relit pas un odomètre plus récent pour calculer
+            # les km privés.
+            base["private_end_candidate_odometer_km"] = odo_cand
+            base["private_end_candidate_sample_at"] = candidate_at
             await _pm.capture_end_candidate(
                 db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
-                odo_end_candidate=odo_cand, end_candidate_sample_at=_now(),
-                business_command_sent_at=_now())
+                odo_end_candidate=odo_cand, end_candidate_sample_at=candidate_at,
+                business_command_sent_at=candidate_at)
     except Exception:  # jamais bloquer la bascule pour un souci d'historique km
         logger.warning("private_mileage: hook envoi ignoré (non bloquant)", exc_info=False)
 
@@ -1032,11 +1045,19 @@ async def request_mode(
                "confirmation_source": confirm_source}
 
     # --- Snapshot odomètre à la SORTIE (retour Business) + distance privée ---
-    if target_mode == BUSINESS and cur_state in (PRIVATE, PRIVATE_REQUESTED):
-        odo_end, _ = await _read_odometer_snapshot(
-            db, tid, vehicle_id, tracker_id, read_odo_km)
+    if target_mode == BUSINESS and cur_state in (
+        PRIVATE, PRIVATE_REQUESTED, PENDING_CONFIRMATION, UNKNOWN
+    ):
+        # La borne OFF capturée au moment de la commande prime. Relecture live
+        # uniquement en repli si ce candidat n'a pas pu être obtenu.
+        odo_end = base.get("private_end_candidate_odometer_km")
+        if odo_end is None:
+            odo_end, _ = await _read_odometer_snapshot(
+                db, tid, vehicle_id, tracker_id, read_odo_km)
         odo_start = cur.get("private_start_odometer_km")
-        new_doc["private_end_time"] = _now()
+        new_doc["private_end_time"] = (
+            base.get("private_end_candidate_sample_at") or _now()
+        )
         new_doc["private_end_odometer_km"] = odo_end
         dist = _private_distance(odo_start, odo_end)
         new_doc["private_distance_km"] = dist
@@ -1170,11 +1191,18 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         else:
             new_doc["recovered_from_timeout_at"] = None
         new_doc.pop("requested_target", None)
-        # distance privée au retour Business (jamais inventée)
+        # Distance privée au retour Business : la borne OFF capturée au moment
+        # de la commande est autoritative. Une confirmation tardive peut arriver
+        # après plusieurs km professionnels ; relire l'AVL16 à ce moment-là
+        # contaminerait la distance privée.
         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
-            odo_end, _ = await _read_odometer_snapshot(
-                db, tid, vehicle_id, tracker_id, read_odo_km)
-            new_doc["private_end_time"] = _now()
+            odo_end = st.get("private_end_candidate_odometer_km")
+            if odo_end is None:
+                odo_end, _ = await _read_odometer_snapshot(
+                    db, tid, vehicle_id, tracker_id, read_odo_km)
+            new_doc["private_end_time"] = (
+                st.get("private_end_candidate_sample_at") or _now()
+            )
             new_doc["private_end_odometer_km"] = odo_end
             new_doc["private_distance_km"] = _private_distance(
                 st.get("private_start_odometer_km"), odo_end)
