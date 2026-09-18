@@ -301,6 +301,20 @@ LKP_NOSAMPLE_MAX_RADIUS_M = float(
 ANTI_STALE_SKEW_S = int(os.environ.get("PRIVATE_DEVICE_RESP_SKEW_S", "5"))
 
 
+def _entry_time(entry: dict):
+    """Instant d'une entree history/tracker/list, timezone-aware (UTC), robuste au
+    champ reellement renvoye par Navixy (time | get_time | timestamp | event_time).
+    ROOT CAUSE terrain 18.09.2026 : l'anti-stale ne lisait QUE `time` -> si absent,
+    _parse(None)=None -> vraie reponse rejetee. Fail-closed conserve."""
+    if not isinstance(entry, dict):
+        return None
+    for k in ("time", "get_time", "timestamp", "event_time"):
+        dt = _parse(entry.get(k))
+        if dt is not None:
+            return dt
+    return None
+
+
 def _dominant_position(samples) -> tuple[Optional[float], int, int]:
     """Cherche la POSITION DOMINANTE d'une liste de samples [{lat,lng},...].
 
@@ -565,7 +579,7 @@ async def _device_response_confirm(tenant_id: str, tracker_id: int, requested_st
     sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
     threshold = (sent - timedelta(seconds=ANTI_STALE_SKEW_S)) if sent is not None else None
     for e in entries:
-        et = _parse(e.get("time"))   # timezone-aware (offset explicite avec iso_datetime=true)
+        et = _entry_time(e)   # robuste : time | get_time | timestamp | event_time (UTC aware)
         # Anti-stale : la réponse doit être POSTÉRIEURE à la commande (à la marge de skew près).
         if threshold is not None and (et is None or et < threshold):
             continue
@@ -896,6 +910,20 @@ async def request_mode(
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
+        # PHASE C — purge des champs de FIN/RESULTAT d'un cycle precedent
+        base["private_end_time"] = None
+        base["private_end_odometer_km"] = None
+        base["private_distance_km"] = None
+        base["odometer_end_candidate_km"] = None
+        base["end_candidate_sample_at"] = None
+        base["business_command_sent_at"] = None
+        base["confirmation_source"] = None
+        base["requested_target"] = None
+        base["last_command"] = None
+        base["command_sent_at"] = None
+        base["navixy_command_id"] = None
+        base["private_gps_anchor_lat"] = None
+        base["private_gps_anchor_lng"] = None
         odo_start, snap_status = await _read_odometer_snapshot(
             db, tid, vehicle_id, tracker_id, read_odo_km)
         base["private_start_time"] = _now()
