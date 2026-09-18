@@ -1,0 +1,83 @@
+From 2fbcc4ea20602eb14307c076644726dc3516fa4a Mon Sep 17 00:00:00 2001
+From: emergent-agent-e1 <github@emergent.sh>
+Date: Fri, 18 Sep 2026 13:18:06 +0000
+Subject: [PATCH] test(private-mode): fake DB drivers+users for account-model
+ gate (fix 16 PROD failures)
+
+On PROD, PRIVATE_MODE_ACCOUNT_MODEL_GATE=1 -> can_use_private_mode() takes the generalized
+path and calls driver_account_private_mode_enabled(db, tenant_id, driver_id) which reads
+db.drivers + db.users. The fake _DB in test_private_mode_phase2.py and
+test_fmc130_confirmation_fix.py had no such collections -> AttributeError -> 16 tests failed
+under the account-model gate (they were written for the LEGACY gate).
+
+Fix (TEST INFRA ONLY, no application code): add drivers+users collections to the fake _DB and
+seed an authorized account (driver d1 -> user u1, active, role=driver, private_mode_enabled=True),
+mirroring test_private_mode_account_model_gate.py. Tests now pass under BOTH gate regimes.
+Verified: account gate returns (True,None) for d1; 63/63 + 165/165 PASS (testing_agent).
+No production module changed. DEVICE_WRITE stays 0; all mocked.
+---
+ backend/tests/test_fmc130_confirmation_fix.py | 10 ++++++++++
+ backend/tests/test_private_mode_phase2.py     | 12 ++++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/backend/tests/test_fmc130_confirmation_fix.py b/backend/tests/test_fmc130_confirmation_fix.py
+index 6a2b7bc..597c99d 100644
+--- a/backend/tests/test_fmc130_confirmation_fix.py
++++ b/backend/tests/test_fmc130_confirmation_fix.py
+@@ -54,6 +54,9 @@ class _DB:
+         self.audit_log = _Coll()
+         self.feature_flags = _Coll()
+         self.tenants = _Coll()
++        # Compte chauffeur — requis par la gate account-model PROD.
++        self.drivers = _Coll()
++        self.users = _Coll()
+ 
+ 
+ def _run(coro):
+@@ -66,6 +69,13 @@ def _db_fmc130():
+          {"$set": {"id": "vA", "tenant_id": "default", "model": "telfmb130_fmc130",
+                    "navixy_tracker_id": 781479, "plate": "LOGITRAK AUDI",
+                    "private_mode_pilot": True}}, upsert=True))
++    # Compte chauffeur autorisé (gate account-model PROD ; ignoré en LEGACY).
++    _run(db.drivers.update_one({"id": "d1"},
++         {"$set": {"id": "d1", "tenant_id": "default", "user_id": "u1",
++                   "email": "d1@x", "active": True}}, upsert=True))
++    _run(db.users.update_one({"id": "u1"},
++         {"$set": {"id": "u1", "tenant_id": "default", "email": "d1@x",
++                   "role": "driver", "active": True, "private_mode_enabled": True}}, upsert=True))
+     vc = VehicleOdometerCapability(
+         vehicle_id="vA", tracker_id=781479, device_model="FMC130",
+         private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
+diff --git a/backend/tests/test_private_mode_phase2.py b/backend/tests/test_private_mode_phase2.py
+index e71803c..d34b944 100644
+--- a/backend/tests/test_private_mode_phase2.py
++++ b/backend/tests/test_private_mode_phase2.py
+@@ -49,6 +49,11 @@ class _DB:
+         self.audit_log = _Coll()
+         self.feature_flags = _Coll()
+         self.tenants = _Coll()
++        # Compte chauffeur — requis par la gate account-model PROD
++        # (driver_account_private_mode_enabled lit db.drivers + db.users).
++        # Compatible LEGACY (ignoré) et ACCOUNT_MODEL (autorise le compte d1/u1).
++        self.drivers = _Coll()
++        self.users = _Coll()
+ 
+ 
+ def _run(coro):
+@@ -104,6 +109,13 @@ def _db_with_vehicle(tracker_id=3657864, model="telfmb003_fmc003", capability=No
+          {"$set": {"id": "vA", "tenant_id": "default", "model": model,
+                    "navixy_tracker_id": tracker_id, "plate": "GE-TEST",
+                    "private_mode_pilot": True}}, upsert=True))
++    # Compte chauffeur autorisé (pour la gate account-model PROD ; ignoré en LEGACY).
++    _run(db.drivers.update_one({"id": "d1"},
++         {"$set": {"id": "d1", "tenant_id": "default", "user_id": "u1",
++                   "email": "d1@x", "active": True}}, upsert=True))
++    _run(db.users.update_one({"id": "u1"},
++         {"$set": {"id": "u1", "tenant_id": "default", "email": "d1@x",
++                   "role": "driver", "active": True, "private_mode_enabled": True}}, upsert=True))
+     if capability is not None:
+         _run(pm.upsert_vehicle_capability(db, capability))
+     return db
+-- 
+2.39.5
+
