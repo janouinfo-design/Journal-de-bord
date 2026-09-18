@@ -351,9 +351,16 @@ async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     start = _parse(since_iso) or (now - timedelta(minutes=30))
-    fmt = "%Y-%m-%d %H:%M:%S"
+    # Navixy interprets the legacy "YYYY-MM-DD HH:MM:SS" form in the ACCOUNT
+    # timezone. command_sent_at is UTC, so using the legacy form can shift the
+    # requested window (e.g. by +02:00 in Europe/Zurich) and silently miss all
+    # post-command points. Use explicit ISO UTC for both request and response.
+    def _iso_z(d: datetime) -> str:
+        return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
-            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
+            "from": _iso_z(start), "to": _iso_z(now + timedelta(minutes=1)),
+            "iso_datetime": True,
             "simplify": False, "point_limit": 200}
     import httpx
     try:
@@ -383,7 +390,8 @@ async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
     try:
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.post(f"{base}/tracker/get_state",
-                             json={"hash": cred["credential"], "tracker_id": int(tracker_id)})
+                             json={"hash": cred["credential"], "tracker_id": int(tracker_id),
+                                   "iso_datetime": True})
             st = (r.json() or {}).get("state") or {}
     except Exception:
         return None
@@ -663,10 +671,12 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
             if odo_delta < LKP_NOSAMPLE_MIN_DELTA_KM:
                 return None, SRC_UNCONFIRMED
 
-            # La position courante doit avoir été actualisée après la commande.
-            if not (sent and gps_upd and gps_upd > sent):
-                return None, SRC_UNCONFIRMED
-
+            # LAST_KNOWN_POSITION peut précisément conserver l'horodatage GPS
+            # antérieur à la commande ON. Exiger gps.updated > sent rendrait donc
+            # le fallback NO-SAMPLES impossible sur un vrai masquage. La preuve
+            # reste fail-closed : AVL16 doit avoir progressé d'au moins le seuil,
+            # aucun point post-commande ne doit exister, et la position courante
+            # doit rester dans le rayon strict de l'ancre pré-PRIVATE.
             anchor_lat = sd.get("private_gps_anchor_lat")
             anchor_lng = sd.get("private_gps_anchor_lng")
 
@@ -892,7 +902,25 @@ async def request_mode(
     base = {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
             "driver_id": driver_id, "previous_state": cur_state,
             # ANTI-STALE : purge des champs d'un cycle de transition PRÉCÉDENT (jamais réutilisés).
-            "pending_timeout_at": None, "transition_result": None, "confirmed_at": None}
+            "pending_timeout_at": None, "transition_result": None, "confirmed_at": None,
+            "requested_target": None, "last_command": None, "command_sent_at": None,
+            "navixy_command_id": None, "confirmation_source": SRC_UNCONFIRMED}
+
+    # Un nouveau cycle PRIVATE ne doit JAMAIS exposer les résultats du cycle
+    # précédent (défaut observé terrain 2026-09-18 : ancien end/private_distance
+    # encore visibles pendant un nouveau PENDING).
+    if target_mode == PRIVATE:
+        base.update({
+            "private_end_time": None,
+            "private_end_odometer_km": None,
+            "private_distance_km": None,
+            "private_end_candidate_odometer_km": None,
+            "private_end_candidate_status": None,
+            "private_end_candidate_sample_at": None,
+            "business_command_sent_at": None,
+            "private_gps_anchor_lat": None,
+            "private_gps_anchor_lng": None,
+        })
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
@@ -935,10 +963,18 @@ async def request_mode(
         elif _cmd_effective and target_mode == BUSINESS:
             odo_cand, cand_status = await _read_odometer_snapshot(
                 db, tid, vehicle_id, tracker_id, read_odo_km)
+            cand_at = _now()
+            # Même borne END pour private_mode_state ET private_mileage_session.
+            # Cela évite qu'une confirmation tardive inclue des kilomètres PRO
+            # parcourus après l'envoi de OFF.
+            base["private_end_candidate_odometer_km"] = odo_cand
+            base["private_end_candidate_status"] = cand_status
+            base["private_end_candidate_sample_at"] = cand_at
+            base["business_command_sent_at"] = cand_at
             await _pm.capture_end_candidate(
                 db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
-                odo_end_candidate=odo_cand, end_candidate_sample_at=_now(),
-                business_command_sent_at=_now())
+                odo_end_candidate=odo_cand, end_candidate_sample_at=cand_at,
+                business_command_sent_at=cand_at)
     except Exception:  # jamais bloquer la bascule pour un souci d'historique km
         logger.warning("private_mileage: hook envoi ignoré (non bloquant)", exc_info=False)
 
@@ -990,8 +1026,10 @@ async def request_mode(
 
     # --- Snapshot odomètre à la SORTIE (retour Business) + distance privée ---
     if target_mode == BUSINESS and cur_state in (PRIVATE, PRIVATE_REQUESTED):
-        odo_end, _ = await _read_odometer_snapshot(
-            db, tid, vehicle_id, tracker_id, read_odo_km)
+        odo_end = base.get("private_end_candidate_odometer_km")
+        if odo_end is None:
+            odo_end, _ = await _read_odometer_snapshot(
+                db, tid, vehicle_id, tracker_id, read_odo_km)
         odo_start = cur.get("private_start_odometer_km")
         new_doc["private_end_time"] = _now()
         new_doc["private_end_odometer_km"] = odo_end
@@ -1085,9 +1123,15 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         new_doc.pop("requested_target", None)
         # distance privée au retour Business (jamais inventée)
         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
-            odo_end, _ = await _read_odometer_snapshot(
-                db, tid, vehicle_id, tracker_id, read_odo_km)
-            new_doc["private_end_time"] = _now()
+            odo_end = st.get("private_end_candidate_odometer_km")
+            if odo_end is None:
+                odo_end, _ = await _read_odometer_snapshot(
+                    db, tid, vehicle_id, tracker_id, read_odo_km)
+            new_doc["private_end_time"] = (
+                st.get("business_command_sent_at")
+                or st.get("private_end_candidate_sample_at")
+                or _now()
+            )
             new_doc["private_end_odometer_km"] = odo_end
             new_doc["private_distance_km"] = _private_distance(
                 st.get("private_start_odometer_km"), odo_end)

@@ -279,3 +279,246 @@ def test_production_simulation_impossible(monkeypatch):
     # restore dev for other tests
     monkeypatch.setenv("APP_ENV", "development")
     importlib.reload(pm)
+
+
+# ===========================================================================
+# Régression terrain 2026-09-18 — FMC130 LOGITRAK AUDI
+# ===========================================================================
+
+def test_field_regression_fmc130_private_no_samples_confirms(monkeypatch):
+    """FMC130 LAST_KNOWN_POSITION : AVL16 progresse, aucun point post-ON,
+    dernière position toujours à l'ancre (timestamp GPS possiblement pré-ON).
+    Le timestamp gelé est attendu et ne doit pas bloquer la confirmation."""
+    from app.odometer_capability import CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+
+    vc = VehicleOdometerCapability(
+        vehicle_id="vB", tracker_id=781479, device_model="FMC130",
+        private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER,
+        raw_avl_id=AVL_TOTAL_ODOMETER,
+        navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
+        runtime_verified=True, cumulative_verified=True,
+        private_increment_verified=True, field_validated=True,
+        private_confirmation_strategy=CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
+    )
+
+    sent = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    async def fake_state(tenant, tracker):
+        return {
+            "connection_status": "active",
+            "movement_status": "idle",
+            "ignition": False,
+            "gps_updated": _iso(sent - timedelta(seconds=5)),
+            "speed": 0,
+            "lat": 46.5,
+            "lng": 6.6,
+        }
+
+    async def no_samples(tenant, tracker, since):
+        return []
+
+    async def odo_now(tracker):
+        return 57309.29
+
+    monkeypatch.setattr(pm, "_fetch_gps_state", fake_state)
+
+    state, src = _run(pm.telemetry_confirm(
+        "default",
+        781479,
+        pm.PRIVATE,
+        _iso(sent),
+        vc,
+        state_doc={
+            "private_start_odometer_km": 57308.13,
+            "private_gps_anchor_lat": 46.5,
+            "private_gps_anchor_lng": 6.6,
+        },
+        read_odo_km=odo_now,
+        fetch_samples=no_samples,
+        fetch_command_responses=lambda *args, **kwargs: asyncio.sleep(0, result=[]),
+    ))
+
+    assert state == pm.PRIVATE
+    assert src == pm.SRC_TELEMETRY
+
+
+def test_new_private_cycle_clears_previous_result_fields(monkeypatch):
+    """Un nouveau PRIVATE ne réutilise jamais end/distance/timeout d'un ancien cycle."""
+    _full_pilot_env(monkeypatch)
+
+    async def no_gps_state(tenant, tracker):
+        return None
+
+    monkeypatch.setattr(pm, "_fetch_gps_state", no_gps_state)
+
+    db = _DB()
+    _run(db.vehicles.update_one(
+        {"id": "vA"},
+        {"$set": {
+            "id": "vA",
+            "tenant_id": "default",
+            "model": "telfmb003_fmc003",
+            "navixy_tracker_id": 3657864,
+            "private_mode_pilot": True,
+        }},
+        upsert=True,
+    ))
+    _run(pm.upsert_vehicle_capability(db, FMC003_VC))
+    _run(db.private_mode_state.update_one(
+        {"vehicle_id": "vA"},
+        {"$set": {
+            "vehicle_id": "vA",
+            "tenant_id": "default",
+            "tracker_id": 3657864,
+            "state": pm.UNKNOWN,
+            "requested_target": pm.BUSINESS,
+            "last_command": "privatemode OFF",
+            "command_sent_at": "2026-09-01T10:00:00+00:00",
+            "pending_timeout_at": "2026-09-01T10:05:00+00:00",
+            "transition_result": pm.TRANSITION_TIMEOUT,
+            "private_end_time": "2026-09-01T10:01:00+00:00",
+            "private_end_odometer_km": 57175.96,
+            "private_distance_km": 1.68,
+            "private_end_candidate_odometer_km": 57175.96,
+        }},
+        upsert=True,
+    ))
+
+    async def real_send(tracker, cmd):
+        return {
+            "applied": True,
+            "mode": "REAL",
+            "command": cmd,
+            "navixy_command_id": "new-cycle",
+        }
+
+    async def odo_start(tracker):
+        return 57308.13
+
+    res = _run(pm.request_mode(
+        db,
+        "d1",
+        pm.PRIVATE,
+        "d1@x",
+        resolve_session=_session_ok,
+        tenant_id="default",
+        send_command=real_send,
+        read_odo_km=odo_start,
+    ))
+
+    assert res["state"] == pm.PENDING_CONFIRMATION
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["requested_target"] == pm.PRIVATE
+    assert st["last_command"] == "privatemode ON"
+    assert st["pending_timeout_at"] is None
+    assert st["transition_result"] is None
+    assert st["private_end_time"] is None
+    assert st["private_end_odometer_km"] is None
+    assert st["private_distance_km"] is None
+    assert st["private_end_candidate_odometer_km"] is None
+
+
+def test_fetch_gps_samples_uses_explicit_iso_datetime(monkeypatch):
+    """track/read doit utiliser une fenêtre UTC non ambiguë."""
+    from app import integrations
+    import httpx
+
+    captured = {}
+
+    monkeypatch.setattr(
+        integrations,
+        "get_integration_credential",
+        lambda tenant_id=None, provider="NAVIXY": {
+            "credential": "X",
+            "source": "TENANT",
+            "api_url": "https://example.invalid/v2",
+        },
+    )
+
+    class _Resp:
+        def json(self):
+            return {"success": True, "list": []}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["json"] = dict(json)
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    out = _run(pm._fetch_gps_samples(
+        "default",
+        781479,
+        "2026-09-18T08:43:41+00:00",
+    ))
+
+    assert out == []
+    assert captured["json"]["iso_datetime"] is True
+    assert captured["json"]["from"].endswith("Z")
+    assert captured["json"]["to"].endswith("Z")
+    assert "T" in captured["json"]["from"]
+
+
+def test_fetch_gps_state_requests_iso_datetime(monkeypatch):
+    """tracker/get_state doit renvoyer gps.updated avec offset explicite."""
+    from app import integrations
+    import httpx
+
+    captured = {}
+
+    monkeypatch.setattr(
+        integrations,
+        "get_integration_credential",
+        lambda tenant_id=None, provider="NAVIXY": {
+            "credential": "X",
+            "source": "TENANT",
+            "api_url": "https://example.invalid/v2",
+        },
+    )
+
+    class _Resp:
+        def json(self):
+            return {
+                "success": True,
+                "state": {
+                    "connection_status": "active",
+                    "movement_status": "idle",
+                    "ignition": False,
+                    "gps": {
+                        "updated": "2026-09-18T09:07:00Z",
+                        "speed": 0,
+                        "location": {"lat": 46.5, "lng": 6.6},
+                    },
+                },
+            }
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json):
+            captured["json"] = dict(json)
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    st = _run(pm._fetch_gps_state("default", 781479))
+
+    assert captured["json"]["iso_datetime"] is True
+    assert st["gps_updated"] == "2026-09-18T09:07:00Z"
