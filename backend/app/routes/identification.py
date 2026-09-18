@@ -270,8 +270,11 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         vehicle_doc=vehicle, capability=vc, driver_id=driver_id,
     )
     st = await pm.get_mode_state(db, vehicle_id)
-    # Si une bascule est en attente de confirmation, tenter de la résoudre (télémétrie, READ-ONLY).
-    if st.get("state") == pm.PENDING_CONFIRMATION:
+    # Résolution READ-ONLY :
+    # - transition PENDING normale ;
+    # - récupération tardive d'un UNKNOWN/TIMEOUT récent si une preuve stricte
+    #   (device response réellement exposée / télémétrie) est arrivée après le timeout.
+    if pm.confirmation_resolution_needed(st):
         st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
     # Capacité odomètre privé :
     # - legacy : preuve terrain historique `field_validated`;
