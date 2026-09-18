@@ -440,13 +440,18 @@ def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# PREUVE AUTORITATIVE — RÉPONSE DEVICE via l'historique Navixy (READ-ONLY).
-# Endpoint documenté `history/tracker/list` : chaque entrée peut porter
-#   extra.command = {name, param, response: {status, body, error, success}}
-# où response.body est la réponse brute du device (ex: "Privatemode ON").
-# C'est une preuve DIRECTE d'exécution, indépendante du GPS (que le mode privé masque).
+# PREUVE OPTIONNELLE — réponse de commande si l'installation Navixy l'expose
+# dans l'historique tracker (READ-ONLY).
+#
+# IMPORTANT : l'API publique décrit history/tracker/list comme un historique
+# d'événements. Selon l'installation/type de commande, des métadonnées
+# extra.command/response peuvent être présentes, mais elles ne sont PAS une
+# garantie universelle. On les traite donc comme une preuve forte lorsqu'elles
+# existent et passent les contrôles stricts ci-dessous ; leur absence déclenche
+# simplement le fallback télémétrique, jamais un faux échec/succès.
+#
 # Anti-stale STRICT : l'entrée doit être POSTÉRIEURE à command_sent_at.
-# Anti-faux-positif : une absence/erreur/history vide ne confirme JAMAIS.
+# Anti-faux-positif : absence/erreur/history vide ne confirme JAMAIS.
 # ---------------------------------------------------------------------------
 def _command_response_matches(entry: dict, target_mode: str) -> bool:
     """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?
@@ -514,8 +519,10 @@ def _command_response_matches(entry: dict, target_mode: str) -> bool:
 
 async def _fetch_command_responses(tenant_id: str, tracker_id: int,
                                    since_iso: Optional[str]) -> list[dict]:
-    """Lit l'historique tracker (READ-ONLY) et renvoie les entrées de commande
-    POSTÉRIEURES à since_iso. [] si indisponible. Ne logge/expose jamais le credential."""
+    """Lit l'historique tracker (READ-ONLY) et renvoie les entrées disponibles
+    autour de la commande. Certaines installations exposent des métadonnées
+    extra.command/response, d'autres non. [] si indisponible/absent.
+    Ne logge/expose jamais le credential."""
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
@@ -591,9 +598,10 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
     """Tente de confirmer l'état RÉEL du device (READ-ONLY, profil field_validated).
 
     Ordre des preuves (fail-closed — l'absence n'est JAMAIS une preuve) :
-      0. RÉPONSE DEVICE (autoritative) : historique Navixy `history/tracker/list`,
-         entrée POSTÉRIEURE à l'envoi portant "Privatemode ON/OFF". Indépendant du GPS.
-      C. TÉLÉMÉTRIE (fallback) : gel/position dominante (FROZEN_POSITION / LAST_KNOWN_POSITION).
+      0. MÉTADONNÉE DE RÉPONSE, si réellement exposée par l'historique Navixy :
+         entrée postérieure à l'envoi confirmant strictement ON/OFF.
+      C. TÉLÉMÉTRIE (fallback principal FMC130) : AVL16 + position masquée/gelée
+         ou reprise GPS (FROZEN_POSITION / LAST_KNOWN_POSITION).
 
     Une simple absence de position ne confirme jamais PRIVATE (règle anti-faux-positif).
     Retour (confirmed_state|None, source)."""
@@ -1097,7 +1105,8 @@ def confirmation_resolution_needed(state_doc: dict) -> bool:
     if not sent:
         return False
     age = (datetime.now(timezone.utc) - sent).total_seconds()
-    return age <= (PENDING_TIMEOUT_S + LATE_CONFIRM_GRACE_S)
+    # Fail-closed aussi face à une horloge/valeur future incohérente.
+    return 0 <= age <= (PENDING_TIMEOUT_S + LATE_CONFIRM_GRACE_S)
 
 
 async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[str] = None,
@@ -1105,8 +1114,8 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
                                        fetch_samples=None, fetch_command_responses=None) -> dict:
     """Résout (best-effort, READ-ONLY) une transition en attente ou récemment timeoutée.
 
-    Preuves (fail-closed) : réponse device si cette métadonnée est réellement exposée
-    par Navixy, puis télémétrie stricte en fallback.
+    Preuves (fail-closed) : métadonnée de réponse si elle est réellement exposée
+    par Navixy, puis télémétrie stricte (preuve principale portable) en fallback.
     - PENDING + preuve -> PRIVATE/BUSINESS confirmé.
     - PENDING sans preuve au timeout -> UNKNOWN + transition_result=TIMEOUT.
     - UNKNOWN/TIMEOUT récent + preuve arrivée tardivement -> récupération confirmée.
