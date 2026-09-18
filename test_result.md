@@ -37,6 +37,17 @@ backend:
       - working: true
         agent: "testing"
         comment: "FMC130 BUSINESS CONFIRMATION BUG FIX VERIFIED - All 163 tests PASSED (7 primary + 156 regression). REPORTED BUG (PROD): device path worked (Air Console showed 'privatemode ON/OFF'), but APP never confirmed. After 'privatemode OFF', telemetry showed Location valid=yes, Speed=0 (standstill), Satellites=14 → state stayed PENDING until timeout→UNKNOWN. ROOT CAUSE: BUSINESS confirmation required MOVEMENT (displacement OR distance-from-anchor), impossible at standstill. FIX APPLIED (private_mode_engine.py lines 616-624, BUSINESS branch): BUSINESS now confirmed when real, FRESH, NON-masked GPS position re-emitted AFTER OFF command - even at standstill. GUARDS (fail-closed): (1) frame after command_sent_at (gps_upd > sent) ✓, (2) coords not 0,0 ✓, (3) position FRESH (_gps_state_is_fresh: gps.updated within PRIVATE_BUSINESS_GPS_FRESH_MAX_S=180s) ✓, (4) position NOT frozen on anchor (_position_is_anchor_frozen: within LKP_DOMINANT_RADIUS_M of anchor → refused) ✓. PRIVATE confirmation UNCHANGED (no false success). PRIMARY TESTS (test_fmc130_business_recovery.py): 7/7 PASSED - (1) test_business_confirmed_valid_fresh_position_at_standstill: valid fresh non-masked position at speed=0 → BUSINESS/TELEMETRY ✓, (2) test_business_refused_if_position_frozen_on_anchor: still frozen on private anchor → None (no false BUSINESS) ✓, (3) test_business_refused_if_position_stale: stale/older-than-command position → None ✓, (4) test_business_refused_if_zero_position: 0,0 → None ✓, (5) test_business_still_confirmed_by_movement: movement path still works (non-regression) ✓, (6) test_business_refused_if_frame_not_after_command: frame before OFF → None ✓, (7) test_private_unchanged_no_false_success: PRIVATE with GPS moving + no odo increase → None (no false PRIVATE) ✓. REGRESSION TESTS: 156/156 PASSED (test_fmc130_confirmation_fix.py, test_fmc130_lkp_fixes.py, test_fmc130_lkp_no_samples.py, test_fmc130_resolve_pending.py, test_private_mode_phase2.py, test_private_mode_gate.py, test_private_mode_confirmation.py, test_odometer_capability.py, test_odometer_calibration.py, test_reports_private_redaction.py). CODE VERIFICATION: telemetry_confirm BUSINESS branch adds fresh-non-masked-position path AFTER movement/anchor checks (lines 616-624), with fail-closed guards ✓. PRIVATE branch unchanged (lines 532-599) ✓. ENVIRONMENT: PRIVATE_MODE_DEVICE_WRITE=0 ✓, ODOMETER_CALIBRATION_DEVICE_WRITE=0 ✓. TEST ISOLATION: NO network calls (all mocked via monkeypatch) ✓, NO device commands ✓, NO secrets ✓, fake DB only ✓. Working dir /app/backend, venv /root/.venv, pytest 9.0.3. TOTAL: 163/163 PASSED (100%). NO ISSUES FOUND."
+  - task: "FMC130 field confirmation + state reset fix (get_time timestamp + cycle purge)"
+    implemented: true
+    working: true
+    file: "backend/app/private_mode_engine.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "FIELD CONFIRMATION + STATE RESET FIX VERIFIED - All 165 tests PASSED (35 confirmation + 130 non-regression). CONTEXT: Verified APPLICATION-CODE fix in backend/app/private_mode_engine.py for branch fix/private-mode-field-confirmation-state-reset. NO device commands, DEVICE_WRITE=0, all mocked. LEGACY private_mode_gate (no account-model function) as expected. ROOT CAUSE (18.09.2026, FMC130 781479): Navixy history carried timestamp in get_time field, but _device_response_confirm only read e.get('time') -> None -> anti-stale dropped every real 'Privatemode ON/OFF' response -> UNKNOWN/TIMEOUT. FIX 1 (_entry_time helper, lines 284-299): Reads timestamp from time | get_time | timestamp | event_time (timezone-aware, robust to Navixy field variations). _device_response_confirm now uses _entry_time(e) at line 566 instead of e.get('time'). Anti-stale stays strict; success False/error never confirms; wrong mode refused. FIX 2 (state reset, lines 898-916): On NEW PRIVATE cycle, request_mode explicitly purges previous cycle end/result fields (private_end_time, private_end_odometer_km, private_distance_km, odometer_end_candidate_km, end_candidate_sample_at, business_command_sent_at, confirmation_source, requested_target, last_command, command_sent_at, navixy_command_id, old GPS anchor) BEFORE writing new START. Start fields + fresh anchor preserved through PRIVATE->BUSINESS. private_mileage_session history untouched. TEST RESULTS (python -m pytest, working dir /app/backend): (1) CONFIRMATION SUITE (test_fmc130_confirmation_fix.py): 35/35 PASSED in 5.76s ✓ - Specifically verified get_time tests: test_entry_time_reads_get_time_when_time_absent ✓, test_field_private_confirmed_via_get_time_text_body ✓, test_field_business_confirmed_via_get_time_hardware_ack ✓, test_field_get_time_before_command_is_stale_refused ✓, test_field_no_usable_timestamp_refused ✓, test_field_wrong_mode_via_get_time_refused ✓, test_field_success_false_via_get_time_refused ✓, test_new_cycle_purges_stale_timeout_fields ✓. (2) STATE-RESET + FULL NON-REGRESSION (test_private_mode_phase2.py + test_private_mode_confirmation.py + test_private_mileage.py + test_private_mileage_integration.py + test_private_mileage_sessions.py + test_reports_private_km_avl16.py + test_reports_private_redaction.py + test_fmc130_business_recovery.py + test_fmc130_lkp_fixes.py + test_fmc130_resolve_pending.py + test_fmc130_lkp_no_samples.py + test_fmc130_prive_pro_ux.py + test_private_mode_gate.py): 130/130 PASSED in 10.65s ✓ - State-reset tests in test_private_mode_phase2.py: test_new_private_cycle_purges_previous_end_result_fields ✓, test_private_to_business_preserves_current_start_and_computes_new_cycle ✓. (3) BACKEND SERVICE: RUNNING (supervisor, pid 53, uptime 3:10:25) ✓. TOTAL: 165/165 PASSED (100%). NO ISSUES FOUND. _entry_time confirmation fix and state-reset verified green under LEGACY gate."
   - task: "Driver manual UX - GET /api/livre/driver/my-vehicles"
     implemented: true
     working: true
@@ -308,6 +319,48 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      FMC130 FIELD CONFIRMATION + STATE RESET FIX VERIFIED (branch fix/private-mode-field-confirmation-state-reset)
+      
+      CONTEXT: Verified APPLICATION-CODE fix in backend/app/private_mode_engine.py only. NO device commands, DEVICE_WRITE=0, all mocked. LEGACY private_mode_gate (no account-model function) as expected.
+      
+      THE FIX (already applied):
+      1. NEW HELPER _entry_time(entry) (lines 284-299): Reads history entry timestamp from time | get_time | timestamp | event_time (timezone-aware). _device_response_confirm now uses _entry_time(e) at line 566 instead of e.get("time").
+         ROOT CAUSE (18.09.2026, FMC130 781479): Navixy history carried timestamp in get_time field, but old code only read e.get("time") -> None -> anti-stale dropped every real "Privatemode ON/OFF" response -> UNKNOWN/TIMEOUT.
+         Anti-stale stays strict; success False/error never confirms; wrong mode refused.
+      
+      2. STATE RESET (lines 898-916): On NEW PRIVATE cycle, request_mode explicitly purges previous cycle end/result fields (private_end_time, private_end_odometer_km, private_distance_km, odometer_end_candidate_km, end_candidate_sample_at, business_command_sent_at, confirmation_source, requested_target, last_command, command_sent_at, navixy_command_id, old GPS anchor) BEFORE writing new START.
+         Start fields + fresh anchor preserved through PRIVATE->BUSINESS. private_mileage_session history untouched.
+      
+      TEST RESULTS (python -m pytest, working dir /app/backend, project venv):
+      
+      ✅ (1) CONFIRMATION SUITE (test_fmc130_confirmation_fix.py): 35/35 PASSED in 5.76s (100%)
+      
+      Specifically verified get_time tests:
+      - test_entry_time_reads_get_time_when_time_absent ✓
+      - test_field_private_confirmed_via_get_time_text_body ✓
+      - test_field_business_confirmed_via_get_time_hardware_ack ✓
+      - test_field_get_time_before_command_is_stale_refused ✓
+      - test_field_no_usable_timestamp_refused ✓
+      - test_field_wrong_mode_via_get_time_refused ✓
+      - test_field_success_false_via_get_time_refused ✓
+      - test_new_cycle_purges_stale_timeout_fields ✓
+      
+      ✅ (2) STATE-RESET + FULL NON-REGRESSION: 130/130 PASSED in 10.65s (100%)
+      
+      Test suites: test_private_mode_phase2.py (26), test_private_mode_confirmation.py (14), test_private_mileage.py (9), test_private_mileage_integration.py (5), test_private_mileage_sessions.py (10), test_reports_private_km_avl16.py (6), test_reports_private_redaction.py (6), test_fmc130_business_recovery.py (7), test_fmc130_lkp_fixes.py (11), test_fmc130_resolve_pending.py (7), test_fmc130_lkp_no_samples.py (5), test_fmc130_prive_pro_ux.py (8), test_private_mode_gate.py (14).
+      
+      State-reset tests in test_private_mode_phase2.py:
+      - test_new_private_cycle_purges_previous_end_result_fields ✓
+      - test_private_to_business_preserves_current_start_and_computes_new_cycle ✓
+      
+      ✅ (3) BACKEND SERVICE: RUNNING (supervisor, pid 53, uptime 3:10:25)
+      
+      TOTAL: 165/165 PASSED (100%)
+      
+      CONCLUSION:
+      _entry_time confirmation fix and state-reset verified green under LEGACY gate. NO ISSUES FOUND.
   - agent: "testing"
     message: |
       AVL16 PRIVATE-KM FEATURE FLAG TECHNICAL REHEARSAL COMPLETE (LOCAL PREVIEW ACTIVATION)
