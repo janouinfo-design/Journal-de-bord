@@ -222,3 +222,124 @@ Marges : +20 % si auth Documents non standard ; +2 j si table de correspondance 
 
 ## 9. Ce qui n'est PAS dans ce cadrage
 GitHub / Save to GitHub, SMTP prod, déploiement VPS, Expo Go / EAS, rapports hebdomadaire et mensuel — chantiers séparés.
+
+---
+
+## Annexe A — Preuves vérifiables de l'inventaire (commandes + sorties brutes, 10/09/2026)
+
+### A.1 Endpoints backend (76) — `grep -c "^@router\." backend/app/routes/{fuel,fuel_statements,energy,fines}.py`
+```
+fuel.py                37
+fuel_statements.py     9
+energy.py              14
+fines.py               16
+TOTAL                  76
+```
+
+### A.2 Pages frontend (18) — `ls frontend/src/pages/{energy,fuel} frontend/src/pages/*Fines*`
+```
+EnergyConsumptionPage.jsx
+EnergyLayout.jsx
+EnergyOverviewPage.jsx
+EnergyReconciliationPage.jsx
+FuelAnomaliesPage.jsx
+FuelCardsPage.jsx
+FuelImportsPage.jsx
+FuelLayout.jsx
+FuelMatchingPage.jsx
+FuelMyTransactionsPage.jsx
+FuelOverviewPage.jsx
+FuelSettingsPage.jsx
+FuelStatementDetailPage.jsx
+FuelStatementsPage.jsx
+FuelTransactionsPage.jsx
+DriverFinesPage.jsx
+FinesDashboardPage.jsx
+FinesPage.jsx
+TOTAL: 18
+```
+
+### A.3 Composants (7) — `ls frontend/src/components/{energy,fuel,fines}`
+```
+EnergyBadge.jsx
+TripEnergyBlock.jsx
+FineFormDialog.jsx
+FuelWidget.jsx
+ManualTxDialog.jsx
+TxDetailDialog.jsx
+(+ components/livre/FinesWidget.jsx — widget Dashboard) → 7
+```
+
+### A.4 LOC modules métier + routes — `wc -l`
+```
+  1333 routes/fuel.py
+   315 routes/fuel_statements.py
+   669 routes/energy.py
+   921 routes/fines.py
+   315 fuel_engine.py
+   249 fuel_import.py
+   136 fuel_fx.py
+   229 fuel_statements.py
+   264 fuel_statements_exporter.py
+   243 fuel_anomalies.py
+   318 energy_client.py
+    76 energy_cache.py
+   171 fines_engine.py
+   226 fines_exporter.py
+   163 ocr_engine.py
+    64 object_storage.py
+  5692 total
+```
+
+### A.5 Tests (315) — `grep -c "def test_"` par fichier
+```
+test_energy_alerts_pdf.py                  43
+test_energy_cache.py                       25
+test_energy_contract.py                    9
+test_energy_real_prep.py                   23
+test_energy_reconciliation.py              22
+test_energy_settings_export.py             28
+test_energy_tenant_mapping.py              17
+test_fines_phase1.py                       26
+test_fines_phase2_identify.py              14
+test_fines_phase3_5_6.py                   21
+test_fuel_anomalies_regression.py          9
+test_fuel_phase1.py                        26
+test_iteration25_energy_fixture.py         13
+test_legacy_fuel_guard.py                  22
+test_vehicle_fuel_type.py                  17
+TOTAL                                      315
+```
+
+### A.6 Collections Mongo référencées (occurrences dans les modules concernés)
+```
+     43 fuel_transactions
+     24 fines
+     23 vehicles
+     20 fuel_cards
+     19 fuel_statements
+     11 fuel_anomalies
+     10 drivers
+      9 fuel_import_rows
+      7 trips
+      7 fuel_import_jobs
+      7 fuel_card_assignments
+      5 settings
+      5 fuel_statement_lines
+      5 fuel_exchange_rates
+      3 fuel_transaction_matches
+      3 audit_log
+      2 reconciliation_alert_candidates
+      2 fuel_import_mappings
+      1 driver_sessions
+      1 assignments
+      1 app_state
+```
+
+### A.7 Clés d'identité (Mongo, tenant default, lecture seule)
+```
+tenants.default.navixy_master_user_id = 121349
+vehicles avec navixy_tracker_id : 13 / 19
+drivers avec navixy_employee_id : 12
+fines.documents[].storage_path (Object Storage) ; justificatifs carburant : backend/storage/fuel/ (disque local)
+```
