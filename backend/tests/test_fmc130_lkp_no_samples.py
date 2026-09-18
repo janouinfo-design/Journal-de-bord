@@ -45,7 +45,8 @@ def base_state():
     }
 
 
-def install_gps(monkeypatch, *, lat, lng, updated, moving=False, ignition=False):
+def install_gps(monkeypatch, *, lat, lng, updated, moving=False, ignition=False,
+                connection_status="active"):
     async def fake_gps(*args, **kwargs):
         return {
             "lat": lat,
@@ -54,7 +55,7 @@ def install_gps(monkeypatch, *, lat, lng, updated, moving=False, ignition=False)
             "movement_status": "moving" if moving else "stopped",
             "ignition": ignition,
             "speed": 0,
-            "connection_status": "active",
+            "connection_status": connection_status,
         }
 
     monkeypatch.setattr(pm, "_fetch_gps_state", fake_gps)
@@ -148,12 +149,72 @@ def test_zero_samples_does_not_confirm_if_position_left_anchor(monkeypatch):
     assert source == pm.SRC_UNCONFIRMED
 
 
-def test_zero_samples_does_not_confirm_with_stale_gps(monkeypatch):
+def test_zero_samples_stale_gps_can_confirm_with_large_odo_delta(monkeypatch):
+    """Terrain réel : en PRIVATE la dernière position peut rester gelée avec
+    gps.updated antérieur à la commande. AVL16 + connexion active + position
+    proche de l'ancre constituent alors la preuve fail-closed renforcée."""
     install_gps(
         monkeypatch,
         lat=46.5452700,
         lng=6.5892833,
         updated="2026-09-11T15:30:00+00:00",
+        connection_status="active",
+    )
+
+    async def odo(_tracker):
+        return 56772.71  # +0.78 km > seuil stale renforcé
+
+    state, source = run(pm.telemetry_confirm(
+        TENANT,
+        TRACKER,
+        pm.PRIVATE,
+        SENT,
+        capability(),
+        state_doc=base_state(),
+        read_odo_km=odo,
+        fetch_samples=no_samples,
+        fetch_command_responses=no_device_response,
+    ))
+
+    assert state == pm.PRIVATE
+    assert source == pm.SRC_TELEMETRY
+
+
+def test_zero_samples_stale_gps_rejects_small_odo_delta(monkeypatch):
+    install_gps(
+        monkeypatch,
+        lat=46.5452700,
+        lng=6.5892833,
+        updated="2026-09-11T15:30:00+00:00",
+        connection_status="active",
+    )
+
+    async def odo(_tracker):
+        return 56772.25  # +0.32 km : > seuil normal 0.2, < seuil stale 0.5
+
+    state, source = run(pm.telemetry_confirm(
+        TENANT,
+        TRACKER,
+        pm.PRIVATE,
+        SENT,
+        capability(),
+        state_doc=base_state(),
+        read_odo_km=odo,
+        fetch_samples=no_samples,
+        fetch_command_responses=no_device_response,
+    ))
+
+    assert state is None
+    assert source == pm.SRC_UNCONFIRMED
+
+
+def test_zero_samples_stale_gps_requires_active_connection(monkeypatch):
+    install_gps(
+        monkeypatch,
+        lat=46.5452700,
+        lng=6.5892833,
+        updated="2026-09-11T15:30:00+00:00",
+        connection_status="offline",
     )
 
     async def odo(_tracker):
