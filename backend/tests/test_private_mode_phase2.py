@@ -49,6 +49,11 @@ class _DB:
         self.audit_log = _Coll()
         self.feature_flags = _Coll()
         self.tenants = _Coll()
+        # Compte chauffeur — requis par la gate account-model PROD
+        # (driver_account_private_mode_enabled lit db.drivers + db.users).
+        # Compatible LEGACY (ignoré) et ACCOUNT_MODEL (autorise le compte d1/u1).
+        self.drivers = _Coll()
+        self.users = _Coll()
 
 
 def _run(coro):
@@ -104,6 +109,13 @@ def _db_with_vehicle(tracker_id=3657864, model="telfmb003_fmc003", capability=No
          {"$set": {"id": "vA", "tenant_id": "default", "model": model,
                    "navixy_tracker_id": tracker_id, "plate": "GE-TEST",
                    "private_mode_pilot": True}}, upsert=True))
+    # Compte chauffeur autorisé (pour la gate account-model PROD ; ignoré en LEGACY).
+    _run(db.drivers.update_one({"id": "d1"},
+         {"$set": {"id": "d1", "tenant_id": "default", "user_id": "u1",
+                   "email": "d1@x", "active": True}}, upsert=True))
+    _run(db.users.update_one({"id": "u1"},
+         {"$set": {"id": "u1", "tenant_id": "default", "email": "d1@x",
+                   "role": "driver", "active": True, "private_mode_enabled": True}}, upsert=True))
     if capability is not None:
         _run(pm.upsert_vehicle_capability(db, capability))
     return db

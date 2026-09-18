@@ -54,6 +54,9 @@ class _DB:
         self.audit_log = _Coll()
         self.feature_flags = _Coll()
         self.tenants = _Coll()
+        # Compte chauffeur — requis par la gate account-model PROD.
+        self.drivers = _Coll()
+        self.users = _Coll()
 
 
 def _run(coro):
@@ -66,6 +69,13 @@ def _db_fmc130():
          {"$set": {"id": "vA", "tenant_id": "default", "model": "telfmb130_fmc130",
                    "navixy_tracker_id": 781479, "plate": "LOGITRAK AUDI",
                    "private_mode_pilot": True}}, upsert=True))
+    # Compte chauffeur autorisé (gate account-model PROD ; ignoré en LEGACY).
+    _run(db.drivers.update_one({"id": "d1"},
+         {"$set": {"id": "d1", "tenant_id": "default", "user_id": "u1",
+                   "email": "d1@x", "active": True}}, upsert=True))
+    _run(db.users.update_one({"id": "u1"},
+         {"$set": {"id": "u1", "tenant_id": "default", "email": "d1@x",
+                   "role": "driver", "active": True, "private_mode_enabled": True}}, upsert=True))
     vc = VehicleOdometerCapability(
         vehicle_id="vA", tracker_id=781479, device_model="FMC130",
         private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
