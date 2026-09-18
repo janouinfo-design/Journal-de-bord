@@ -346,6 +346,11 @@ def test_new_private_cycle_clears_previous_result_fields(monkeypatch):
     """Un nouveau PRIVATE ne réutilise jamais end/distance/timeout d'un ancien cycle."""
     _full_pilot_env(monkeypatch)
 
+    async def no_gps_state(tenant, tracker):
+        return None
+
+    monkeypatch.setattr(pm, "_fetch_gps_state", no_gps_state)
+
     db = _DB()
     _run(db.vehicles.update_one(
         {"id": "vA"},
