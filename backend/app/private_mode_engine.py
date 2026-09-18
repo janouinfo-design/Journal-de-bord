@@ -294,6 +294,13 @@ LKP_RESUME_MIN_M = float(os.environ.get("PRIVATE_LKP_RESUME_MIN_M", "30"))  # pe
 LKP_NOSAMPLE_MIN_DELTA_KM = float(
     os.environ.get("PRIVATE_LKP_NOSAMPLE_MIN_DELTA_KM", "0.2")
 )
+# Si la dernière position GPS n'a PAS avancé après la commande PRIVATE (cas terrain
+# FMC130 : position réellement gelée/masquée), on exige un delta AVL16 plus élevé
+# avant de l'accepter comme preuve. Cela évite qu'un simple jitter odomètre + GPS
+# momentanément périmé produise un faux PRIVATE.
+LKP_NOSAMPLE_STALE_MIN_DELTA_KM = float(
+    os.environ.get("PRIVATE_LKP_NOSAMPLE_STALE_MIN_DELTA_KM", "0.5")
+)
 LKP_NOSAMPLE_MAX_RADIUS_M = float(
     os.environ.get("PRIVATE_LKP_NOSAMPLE_MAX_RADIUS_M", "50")
 )
@@ -663,9 +670,26 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
             if odo_delta < LKP_NOSAMPLE_MIN_DELTA_KM:
                 return None, SRC_UNCONFIRMED
 
-            # La position courante doit avoir été actualisée après la commande.
-            if not (sent and gps_upd and gps_upd > sent):
+            # Une position postérieure à la commande reste la preuve la plus simple.
+            # MAIS le mode Privé FMC130 peut justement laisser la dernière position
+            # connue GELÉE avec un gps.updated antérieur à la commande. Dans ce cas,
+            # exiger gps_upd > sent rendrait la confirmation impossible par design.
+            #
+            # Fallback fail-closed pour ce cas terrain :
+            #   - AVL16 a progressé significativement ;
+            #   - aucun sample de trajet n'est exposé après la commande ;
+            #   - la dernière position reste proche de l'ancre pré-PRIVATE ;
+            #   - si gps.updated est ancien, le tracker doit toujours être connecté
+            #     et le delta AVL16 doit dépasser un seuil renforcé.
+            if gps_upd is None:
                 return None, SRC_UNCONFIRMED
+
+            if sent and gps_upd <= sent:
+                connection = str(st.get("connection_status") or "").strip().lower()
+                if connection not in ("active", "online", "connected"):
+                    return None, SRC_UNCONFIRMED
+                if odo_delta < LKP_NOSAMPLE_STALE_MIN_DELTA_KM:
+                    return None, SRC_UNCONFIRMED
 
             anchor_lat = sd.get("private_gps_anchor_lat")
             anchor_lng = sd.get("private_gps_anchor_lng")
@@ -891,11 +915,22 @@ async def request_mode(
     requested_state = PRIVATE_REQUESTED if target_mode == PRIVATE else BUSINESS_REQUESTED
     base = {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
             "driver_id": driver_id, "previous_state": cur_state,
-            # ANTI-STALE : purge des champs d'un cycle de transition PRÉCÉDENT (jamais réutilisés).
-            "pending_timeout_at": None, "transition_result": None, "confirmed_at": None}
+            # ANTI-STALE : purge COMPLÈTE des métadonnées de transition du cycle précédent.
+            # Les champs sont explicitement mis à None car _save_mode_state fait un $set
+            # (un simple oubli laisserait survivre des valeurs d'un ancien cycle).
+            "pending_timeout_at": None, "transition_result": None, "confirmed_at": None,
+            "requested_target": None, "last_command": None, "command_sent_at": None,
+            "navixy_command_id": None, "confirmation_source": None,
+            # Les bornes/résultats de FIN appartiennent au cycle courant uniquement.
+            "private_end_time": None, "private_end_odometer_km": None,
+            "private_distance_km": None}
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
+        # L'ancre aussi est propre au cycle. Si la lecture GPS pré-commande échoue,
+        # on préfère None à la réutilisation dangereuse d'une ancienne ancre.
+        base["private_gps_anchor_lat"] = None
+        base["private_gps_anchor_lng"] = None
         odo_start, snap_status = await _read_odometer_snapshot(
             db, tid, vehicle_id, tracker_id, read_odo_km)
         base["private_start_time"] = _now()
@@ -1033,21 +1068,58 @@ def _private_distance(start_km, end_km) -> Optional[float]:
 # Fenêtre max d'attente d'une confirmation télémétrique avant de basculer en UNKNOWN.
 PENDING_TIMEOUT_S = int(os.environ.get("PRIVATE_MODE_PENDING_TIMEOUT_S", "300"))
 
+# Après un TIMEOUT, la preuve réelle peut arriver légèrement plus tard (GPS réémis
+# après OFF, ou AVL16 suffisamment progressé après ON). On autorise une RÉCUPÉRATION
+# tardive bornée, toujours avec les MÊMES preuves strictes et sans renvoyer de commande.
+# Cela évite qu'un état UNKNOWN devienne irréversible alors que la preuve arrive après
+# la fenêtre UX de 5 min.
+LATE_CONFIRM_GRACE_S = int(os.environ.get("PRIVATE_MODE_LATE_CONFIRM_GRACE_S", "1800"))
+
+
+def confirmation_resolution_needed(state_doc: dict) -> bool:
+    """True si une lecture peut encore résoudre honnêtement la dernière transition.
+
+    - PENDING_CONFIRMATION : résolution normale.
+    - UNKNOWN + TIMEOUT récent : récupération tardive, bornée et fail-closed.
+    Aucun autre état n'est requalifié.
+    """
+    if not isinstance(state_doc, dict):
+        return False
+    if state_doc.get("state") == PENDING_CONFIRMATION:
+        return True
+    if not (
+        state_doc.get("state") == UNKNOWN
+        and state_doc.get("transition_result") == TRANSITION_TIMEOUT
+        and state_doc.get("requested_target") in (PRIVATE, BUSINESS)
+    ):
+        return False
+    sent = _parse(state_doc.get("command_sent_at"))
+    if not sent:
+        return False
+    age = (datetime.now(timezone.utc) - sent).total_seconds()
+    return age <= (PENDING_TIMEOUT_S + LATE_CONFIRM_GRACE_S)
+
 
 async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[str] = None,
                                        *, read_odo_km=_default_read_odo_km,
                                        fetch_samples=None, fetch_command_responses=None) -> dict:
-    """Résout (best-effort, READ-ONLY) un état PENDING_CONFIRMATION.
+    """Résout (best-effort, READ-ONLY) une transition en attente ou récemment timeoutée.
 
-    Preuves (fail-closed) : RÉPONSE DEVICE (autoritative) puis télémétrie (fallback).
-    - Confirme -> CONFIRMED PRIVATE/BUSINESS + distance privée au retour Business.
-    - Pas de preuve ET timeout dépassé -> UNKNOWN + transition_result=TIMEOUT.
-    - Sinon reste PENDING_CONFIRMATION.
-    Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
+    Preuves (fail-closed) : réponse device si cette métadonnée est réellement exposée
+    par Navixy, puis télémétrie stricte en fallback.
+    - PENDING + preuve -> PRIVATE/BUSINESS confirmé.
+    - PENDING sans preuve au timeout -> UNKNOWN + transition_result=TIMEOUT.
+    - UNKNOWN/TIMEOUT récent + preuve arrivée tardivement -> récupération confirmée.
+    - Aucune preuve -> état inchangé.
+    N'envoie AUCUNE commande device.
     """
     st = await get_mode_state(db, vehicle_id)
-    if st.get("state") != PENDING_CONFIRMATION:
+    if not confirmation_resolution_needed(st):
         return st
+    recovering_after_timeout = (
+        st.get("state") == UNKNOWN
+        and st.get("transition_result") == TRANSITION_TIMEOUT
+    )
     tid = tenant_id or st.get("tenant_id") or _TENANT
     tracker_id = st.get("tracker_id")
     requested = st.get("requested_target")
@@ -1080,8 +1152,14 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         state_doc=st, read_odo_km=_effective_read_odo, **_extra)
 
     if confirmed == requested:
+        previous_timeout_at = st.get("pending_timeout_at")
         new_doc = {**st, "state": requested, "confirmation_source": source,
-                   "confirmed_at": _now(), "transition_result": TRANSITION_CONFIRMED}
+                   "confirmed_at": _now(), "transition_result": TRANSITION_CONFIRMED,
+                   "pending_timeout_at": None}
+        if recovering_after_timeout:
+            new_doc["recovered_from_timeout_at"] = previous_timeout_at or _now()
+        else:
+            new_doc["recovered_from_timeout_at"] = None
         new_doc.pop("requested_target", None)
         # distance privée au retour Business (jamais inventée)
         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
@@ -1126,8 +1204,15 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         await _save_mode_state(db, new_doc)
         await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
                           "requested_mode": requested, "resulting_state": requested,
-                          "result": "confirmed_async", "confirmation_source": source})
+                          "result": ("confirmed_late_after_timeout"
+                                     if recovering_after_timeout else "confirmed_async"),
+                          "confirmation_source": source})
         return new_doc
+
+    # Une récupération tardive sans preuve reste honnêtement UNKNOWN/TIMEOUT.
+    # On ne relance ni timeout, ni commande, ni mutation supplémentaire.
+    if recovering_after_timeout:
+        return st
 
     # pas de preuve -> timeout ?
     sent = _parse(st.get("command_sent_at"))
