@@ -174,6 +174,19 @@ def test_old_timeout_is_not_resolution_candidate(monkeypatch):
     assert pm.confirmation_resolution_needed(st) is False
 
 
+def test_future_timeout_timestamp_is_not_resolution_candidate():
+    """Horloge incohérente/future -> fail-closed, jamais de récupération."""
+    st = {
+        "state": pm.UNKNOWN,
+        "transition_result": pm.TRANSITION_TIMEOUT,
+        "requested_target": pm.PRIVATE,
+        "command_sent_at": (
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat(),
+    }
+    assert pm.confirmation_resolution_needed(st) is False
+
+
 def test_late_private_proof_recovers_unknown_timeout(monkeypatch):
     db = _db()
     now = datetime.now(timezone.utc)
@@ -243,6 +256,53 @@ def test_late_timeout_without_proof_stays_unknown(monkeypatch):
     assert out["state"] == pm.UNKNOWN
     assert out["transition_result"] == pm.TRANSITION_TIMEOUT
     assert out["requested_target"] == pm.BUSINESS
+
+
+def test_late_business_recovery_uses_off_candidate_not_later_live_odo(monkeypatch):
+    """Reproduit le terrain 18.09 : OFF à 57309.29, confirmation plus tard
+    alors que l'AVL16 a encore augmenté en PRO. L'état métier doit rester à
+    1.16 km, exactement comme private_mileage."""
+    db = _db()
+    now = datetime.now(timezone.utc)
+    sent = (now - timedelta(seconds=pm.PENDING_TIMEOUT_S + 5)).isoformat()
+
+    _run(db.private_mode_state.update_one(
+        {"vehicle_id": "vA"},
+        {"$set": {
+            "vehicle_id": "vA",
+            "tenant_id": "default",
+            "tracker_id": 781479,
+            "state": pm.UNKNOWN,
+            "previous_state": pm.UNKNOWN,
+            "requested_target": pm.BUSINESS,
+            "last_command": "privatemode OFF",
+            "command_sent_at": sent,
+            "pending_timeout_at": now.isoformat(),
+            "transition_result": pm.TRANSITION_TIMEOUT,
+            "confirmation_source": pm.SRC_UNCONFIRMED,
+            "private_start_odometer_km": 57308.13,
+            "private_end_candidate_odometer_km": 57309.29,
+            "private_end_candidate_sample_at": sent,
+        }},
+        upsert=True,
+    ))
+
+    async def _proof(*args, **kwargs):
+        return pm.BUSINESS, pm.SRC_TELEMETRY
+
+    async def _later_live_odo(_tracker):
+        return 57311.50  # km PRO parcourus après OFF : ne doivent PAS être comptés
+
+    monkeypatch.setattr(pm, "telemetry_confirm", _proof)
+
+    out = _run(pm.resolve_pending_confirmation(
+        db, "vA", "default", read_odo_km=_later_live_odo
+    ))
+
+    assert out["state"] == pm.BUSINESS
+    assert out["transition_result"] == pm.TRANSITION_CONFIRMED
+    assert out["private_end_odometer_km"] == 57309.29
+    assert out["private_distance_km"] == 1.16
 
 
 def test_new_private_cycle_clears_old_end_distance_and_anchor(monkeypatch):
@@ -350,5 +410,7 @@ def test_business_request_clears_old_end_result_but_preserves_current_start(monk
     assert st["private_end_time"] is None
     assert st["private_end_odometer_km"] is None
     assert st["private_distance_km"] is None
+    assert st["private_end_candidate_odometer_km"] == 57309.29
+    assert st["private_end_candidate_sample_at"] is not None
     assert st["pending_timeout_at"] is None
     assert st["transition_result"] is None
