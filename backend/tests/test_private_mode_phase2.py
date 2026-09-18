@@ -524,3 +524,66 @@ def test_redact_never_introduces_zero_zero():
     for k in ("start_lat", "start_lng", "end_lat", "end_lng"):
         assert red[k] is None
         assert red[k] != 0
+
+
+# ===========================================================================
+# PHASE C (terrain 18.09) — PURGE d'état entre cycles : un NOUVEAU PRIVATE ne
+# doit PAS exposer les champs de FIN/RÉSULTAT d'un cycle précédent (bug observé :
+# PRIVATE_DISTANCE_KM=1.68 / END_ODO=57175.96 alors que le nouveau START=57308.13).
+# ===========================================================================
+def test_new_private_cycle_purges_previous_end_result_fields():
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    # Seed d'un ANCIEN cycle terminé (valeurs de fin qui NE doivent pas survivre).
+    _run(db.private_mode_state.update_one({"vehicle_id": "vA"}, {"$set": {
+        "vehicle_id": "vA", "tenant_id": "default", "state": pm.BUSINESS,
+        "private_start_time": "2026-09-01T00:00:00+00:00",
+        "private_start_odometer_km": 57000.0,
+        "private_end_time": "2026-09-01T00:30:00+00:00",
+        "private_end_odometer_km": 57175.96,
+        "private_distance_km": 1.68,
+        "odometer_end_candidate_km": 57175.96,
+        "business_command_sent_at": "2026-09-01T00:30:00+00:00",
+        "confirmation_source": pm.SRC_TELEMETRY,
+        "transition_result": pm.TRANSITION_CONFIRMED,
+        "private_gps_anchor_lat": 46.1, "private_gps_anchor_lng": 6.1,
+    }}, upsert=True))
+
+    # NOUVEAU PRIVATE : START à 57308.13.
+    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+         send_command=_mock_command(), confirm=_mock_confirm("no"),
+         read_odo_km=_mock_odo([57308.13])))
+    st = _run(pm.get_mode_state(db, "vA"))
+
+    # Le nouveau START est correct...
+    assert st["private_start_odometer_km"] == 57308.13
+    # ...et TOUS les champs de fin/résultat du cycle précédent sont purgés (None).
+    assert st.get("private_end_odometer_km") is None
+    assert st.get("private_distance_km") is None
+    assert st.get("private_end_time") is None
+    assert st.get("odometer_end_candidate_km") is None
+    assert st.get("business_command_sent_at") is None
+    assert st.get("transition_result") is None
+    # l'ancienne ancre GPS ne doit pas rester (best-effort réel None en test -> None)
+    assert st.get("private_gps_anchor_lat") is None
+
+
+def test_private_to_business_preserves_current_start_and_computes_new_cycle():
+    """PRIVATE -> BUSINESS : le START courant est conservé et la distance calculée
+    porte sur CE cycle (57308.13 -> 57309.29 = 1.16), pas sur un ancien."""
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    # PRIVATE confirmé : START 57308.13
+    _run(pm.request_mode(db, "d1", pm.PRIVATE, "d1@x", resolve_session=_session_ok,
+         send_command=_mock_command(), confirm=_mock_confirm("ok"),
+         read_odo_km=_mock_odo([57308.13])))
+    st1 = _run(pm.get_mode_state(db, "vA"))
+    assert st1["state"] == pm.PRIVATE and st1["private_start_odometer_km"] == 57308.13
+
+    # BUSINESS confirmé : END 57309.29 -> distance = 1.16 (arrondi)
+    res = _run(pm.request_mode(db, "d1", pm.BUSINESS, "d1@x", resolve_session=_session_ok,
+               send_command=_mock_command(), confirm=_mock_confirm("ok"),
+               read_odo_km=_mock_odo([57309.29])))
+    st2 = _run(pm.get_mode_state(db, "vA"))
+    assert st2["state"] == pm.BUSINESS
+    assert st2["private_start_odometer_km"] == 57308.13   # start du cycle préservé
+    assert st2["private_end_odometer_km"] == 57309.29
+    assert st2["private_distance_km"] == 1.16

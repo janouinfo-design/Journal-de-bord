@@ -281,6 +281,24 @@ LKP_NOSAMPLE_MAX_RADIUS_M = float(
 ANTI_STALE_SKEW_S = int(os.environ.get("PRIVATE_DEVICE_RESP_SKEW_S", "5"))
 
 
+def _entry_time(entry: dict):
+    """Instant d'une entrée history/tracker/list, timezone-aware (UTC), robuste au
+    champ réellement renvoyé par Navixy.
+
+    ROOT CAUSE terrain (18.09.2026) : l'anti-stale ne lisait QUE `time`. Or Navixy peut
+    porter l'horodatage dans `get_time` (comme ailleurs dans ce codebase : track points,
+    odometer_calibration, beacons). Si `time` est absent -> _parse(None)=None -> l'entrée
+    était rejetée à tort, empêchant toute confirmation DEVICE_RESPONSE.
+    On lit donc, dans l'ordre : time, get_time, timestamp, event_time. None si aucun."""
+    if not isinstance(entry, dict):
+        return None
+    for k in ("time", "get_time", "timestamp", "event_time"):
+        dt = _parse(entry.get(k))
+        if dt is not None:
+            return dt
+    return None
+
+
 def _dominant_position(samples) -> tuple[Optional[float], int, int]:
     """Cherche la POSITION DOMINANTE d'une liste de samples [{lat,lng},...].
 
@@ -545,8 +563,9 @@ async def _device_response_confirm(tenant_id: str, tracker_id: int, requested_st
     sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
     threshold = (sent - timedelta(seconds=ANTI_STALE_SKEW_S)) if sent is not None else None
     for e in entries:
-        et = _parse(e.get("time"))   # timezone-aware (offset explicite avec iso_datetime=true)
-        # Anti-stale : la réponse doit être POSTÉRIEURE à la commande (à la marge de skew près).
+        et = _entry_time(e)   # robuste : time | get_time | timestamp | event_time (UTC aware)
+        # Anti-stale STRICT : la réponse doit être POSTÉRIEURE à la commande (marge de skew).
+        # Sans horodatage exploitable -> on REFUSE (fail-closed : jamais une vieille preuve).
         if threshold is not None and (et is None or et < threshold):
             continue
         if _command_response_matches(e, requested_state):
@@ -876,6 +895,27 @@ async def request_mode(
 
     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
     if target_mode == PRIVATE:
+        # PHASE C — PURGE EXPLICITE des champs de FIN/RÉSULTAT d'un cycle PRÉCÉDENT.
+        # `_save_mode_state({**cur, **base, ...})` réétale `cur` : sans purge, un ancien
+        # private_end_odometer_km / private_distance_km / private_end_time (cycle antérieur)
+        # contaminerait le nouveau cycle (bug terrain : END_ODO=57175.96, DIST=1.68 affichés
+        # alors que le nouveau START=57308.13). On les remet à None ICI, dans `base`, AVANT
+        # d'écrire les nouvelles bornes de START. L'historique private_mileage_session n'est
+        # PAS touché (il conserve correctement les cycles clos, ex. 1.16 km).
+        base["private_end_time"] = None
+        base["private_end_odometer_km"] = None
+        base["private_distance_km"] = None
+        base["odometer_end_candidate_km"] = None      # ancien candidat -> jamais réutilisé
+        base["end_candidate_sample_at"] = None
+        base["business_command_sent_at"] = None
+        base["confirmation_source"] = None            # confirmation du cycle précédent non pertinente
+        base["requested_target"] = None
+        base["last_command"] = None
+        base["command_sent_at"] = None
+        base["navixy_command_id"] = None
+        # NB : private_start_time / private_start_odometer_km / private_gps_anchor_* sont
+        # (ré)écrits juste après et DOIVENT rester valides jusqu'à la fin correcte du cycle.
+
         odo_start, snap_status = await _read_odometer_snapshot(
             db, tid, vehicle_id, tracker_id, read_odo_km)
         base["private_start_time"] = _now()
@@ -884,6 +924,9 @@ async def request_mode(
         base["odometer_source"] = SOURCE_TELTONIKA_TOTAL_ODOMETER
         # Ancre GPS de dernière position connue (stratégie LAST_KNOWN_POSITION) — INTERNE :
         # sert uniquement à confirmer/masquer, jamais exposée au frontend. Best-effort.
+        # Purge d'abord l'ancienne ancre pour ne pas garder celle d'un cycle antérieur.
+        base["private_gps_anchor_lat"] = None
+        base["private_gps_anchor_lng"] = None
         try:
             gps0 = await _fetch_gps_state(tid, int(tracker_id))
         except Exception:

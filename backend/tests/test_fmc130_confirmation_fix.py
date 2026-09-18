@@ -516,3 +516,94 @@ def test_fetch_window_uses_iso_utc_and_iso_datetime_flag(monkeypatch):
     # le credential ne doit pas fuiter dans l'URL
     assert "STUB" not in captured.get("url", "")
 
+
+
+# ===========================================================================
+# TERRAIN 18.09.2026 — ROOT CAUSE : l'anti-stale ne lisait QUE `time`.
+# Navixy peut porter l'instant dans `get_time`. _entry_time() lit désormais
+# time | get_time | timestamp | event_time (timezone-aware). Fail-closed conservé.
+# ===========================================================================
+def _entry_get_time_only(get_time_iso, body=None, cmd_name=None, param=None, success=True):
+    """Entrée history SANS `time`, horodatée uniquement via `get_time` (cas terrain)."""
+    e = {"get_time": get_time_iso, "event": "command_sent", "message": body,
+         "extra": {"command": {"name": cmd_name or "custom", "param": param,
+                               "response": {"status": None,
+                                            "body": body, "error": None,
+                                            "success": success}}}}
+    return e
+
+
+def test_entry_time_reads_get_time_when_time_absent():
+    e = _entry_get_time_only("2026-09-18T08:44:10Z")
+    dt = pm._entry_time(e)
+    assert dt is not None and dt.isoformat().startswith("2026-09-18T08:44:10")
+
+
+def test_field_private_confirmed_via_get_time_text_body():
+    """Réponse 'Privatemode ON' horodatée en get_time (pas time), postérieure -> PRIVATE."""
+    sent = "2026-09-18T08:43:41+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_entry_get_time_only("2026-09-18T08:44:05Z", body="Privatemode ON")]
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, sent, _cap(),
+                      fetch_command_responses=_resp))
+    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+
+
+def test_field_business_confirmed_via_get_time_hardware_ack():
+    """ACK hardware 'privatemode OFF' (success True, body None) daté en get_time -> BUSINESS."""
+    sent = "2026-09-18T09:01:42+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_entry_get_time_only("2026-09-18T09:03:55Z", cmd_name="privatemode OFF",
+                                     success=True)]
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, sent, _cap(),
+                      fetch_command_responses=_resp))
+    assert state == pm.BUSINESS and src == pm.SRC_DEVICE_RESPONSE
+
+
+def test_field_get_time_before_command_is_stale_refused():
+    """get_time ANTÉRIEUR à la commande -> refus anti-stale (cycle précédent jamais réutilisé)."""
+    sent = "2026-09-18T08:43:41+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_entry_get_time_only("2026-09-18T08:40:00Z", body="Privatemode ON")]
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, sent, _cap(),
+                      fetch_command_responses=_resp))
+    assert state != pm.PRIVATE and src == pm.SRC_UNCONFIRMED
+
+
+def test_field_no_usable_timestamp_refused():
+    """Aucune date exploitable (ni time ni get_time...) -> refus (fail-closed)."""
+    sent = "2026-09-18T08:43:41+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [{"event": "command_sent", "message": "Privatemode ON",
+                 "extra": {"command": {"name": "custom", "param": None,
+                                       "response": {"body": "Privatemode ON", "success": True}}}}]
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, sent, _cap(),
+                      fetch_command_responses=_resp))
+    assert state != pm.PRIVATE and src == pm.SRC_UNCONFIRMED
+
+
+def test_field_wrong_mode_via_get_time_refused():
+    """OFF postérieur mais on demande PRIVATE -> pas de confirmation (mauvais mode)."""
+    sent = "2026-09-18T08:43:41+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_entry_get_time_only("2026-09-18T08:44:05Z", body="Privatemode OFF")]
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.PRIVATE, sent, _cap(),
+                      fetch_command_responses=_resp))
+    assert state != pm.PRIVATE and src == pm.SRC_UNCONFIRMED
+
+
+def test_field_success_false_via_get_time_refused():
+    """success False daté en get_time -> jamais confirmé (fail-closed)."""
+    sent = "2026-09-18T09:01:42+00:00"
+
+    async def _resp(tenant_id, tracker_id, since_iso):
+        return [_entry_get_time_only("2026-09-18T09:03:55Z", cmd_name="privatemode OFF",
+                                     success=False)]
+    state, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, sent, _cap(),
+                      fetch_command_responses=_resp))
+    assert state != pm.BUSINESS and src == pm.SRC_UNCONFIRMED
