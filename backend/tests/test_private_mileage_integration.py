@@ -272,6 +272,14 @@ def test_delayed_business_confirmation_uses_candidate_not_post_off_km():
     # private_ended_at = borne OFF (business_command_sent_at), pas l'heure de confirmation
     assert closed[0]["private_ended_at"] == closed[0]["business_command_sent_at"]
 
+    # Le state métier doit utiliser EXACTEMENT la même borne END que la session
+    # kilométrique. Jamais une relecture tardive qui inclurait des km PRO.
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["state"] == pm.BUSINESS
+    assert st["private_end_odometer_km"] == 10012.4
+    assert st["private_distance_km"] == 12.4
+    assert st["private_end_time"] == closed[0]["business_command_sent_at"]
+
 
 def test_stale_open_does_not_contaminate_next_private():
     """FIX PR#6 : une OPEN résiduelle (BUSINESS jamais confirmé) ne bloque pas et ne
