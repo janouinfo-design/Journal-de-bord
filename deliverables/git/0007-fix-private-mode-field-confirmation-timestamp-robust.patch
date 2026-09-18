@@ -1,0 +1,296 @@
+From 070547c9922415850a220ab260eff040e28e46bb Mon Sep 17 00:00:00 2001
+From: emergent-agent-e1 <github@emergent.sh>
+Date: Fri, 18 Sep 2026 13:58:28 +0000
+Subject: [PATCH] fix(private-mode): field-confirmation timestamp robustness
+ (get_time) + new-cycle state reset
+
+Root cause (field test 18.09.2026, FMC130 781479): _device_response_confirm read the entry
+instant ONLY from e.get('time'). Navixy history can carry it in get_time (as elsewhere in
+this codebase). With time absent, _parse(None)=None and the anti-stale filter dropped EVERY
+real response -> PR#8 hardware-ACK matcher never reached -> UNKNOWN/TIMEOUT.
+
+FIX (application code only, additive, gate/driver_id untouched):
+- new _entry_time(entry) reads time|get_time|timestamp|event_time (tz-aware); used by
+  _device_response_confirm. Anti-stale stays strict (no usable ts / older than command_sent_at
+  -> refused; success False/error -> never; wrong mode -> refused). Telemetry fallback unchanged.
+- request_mode: a NEW PRIVATE cycle explicitly purges the previous cycle's end/result fields
+  before writing the new START (private_start_* + fresh anchor preserved through PRIVATE->BUSINESS;
+  private_mileage_session history untouched).
+
+Adds READ-ONLY diagnostic diagnostics/navixy_confirmation_diag_781479_0918.py.
+Verified: confirmation suite 35/35 under BOTH gate regimes (LEGACY + account-model).
+DEVICE_WRITE stays 0; no device command. Tests updates are handled separately.
+---
+ backend/app/private_mode_engine.py            |  47 ++++-
+ .../navixy_confirmation_diag_781479_0918.py   | 180 ++++++++++++++++++
+ 2 files changed, 225 insertions(+), 2 deletions(-)
+ create mode 100644 diagnostics/navixy_confirmation_diag_781479_0918.py
+
+diff --git a/backend/app/private_mode_engine.py b/backend/app/private_mode_engine.py
+index 6f92efb..d0b8d4a 100644
+--- a/backend/app/private_mode_engine.py
++++ b/backend/app/private_mode_engine.py
+@@ -281,6 +281,24 @@ LKP_NOSAMPLE_MAX_RADIUS_M = float(
+ ANTI_STALE_SKEW_S = int(os.environ.get("PRIVATE_DEVICE_RESP_SKEW_S", "5"))
+ 
+ 
++def _entry_time(entry: dict):
++    """Instant d'une entrée history/tracker/list, timezone-aware (UTC), robuste au
++    champ réellement renvoyé par Navixy.
++
++    ROOT CAUSE terrain (18.09.2026) : l'anti-stale ne lisait QUE `time`. Or Navixy peut
++    porter l'horodatage dans `get_time` (comme ailleurs dans ce codebase : track points,
++    odometer_calibration, beacons). Si `time` est absent -> _parse(None)=None -> l'entrée
++    était rejetée à tort, empêchant toute confirmation DEVICE_RESPONSE.
++    On lit donc, dans l'ordre : time, get_time, timestamp, event_time. None si aucun."""
++    if not isinstance(entry, dict):
++        return None
++    for k in ("time", "get_time", "timestamp", "event_time"):
++        dt = _parse(entry.get(k))
++        if dt is not None:
++            return dt
++    return None
++
++
+ def _dominant_position(samples) -> tuple[Optional[float], int, int]:
+     """Cherche la POSITION DOMINANTE d'une liste de samples [{lat,lng},...].
+ 
+@@ -545,8 +563,9 @@ async def _device_response_confirm(tenant_id: str, tracker_id: int, requested_st
+     sent = _parse(command_sent_at_iso) if command_sent_at_iso else None
+     threshold = (sent - timedelta(seconds=ANTI_STALE_SKEW_S)) if sent is not None else None
+     for e in entries:
+-        et = _parse(e.get("time"))   # timezone-aware (offset explicite avec iso_datetime=true)
+-        # Anti-stale : la réponse doit être POSTÉRIEURE à la commande (à la marge de skew près).
++        et = _entry_time(e)   # robuste : time | get_time | timestamp | event_time (UTC aware)
++        # Anti-stale STRICT : la réponse doit être POSTÉRIEURE à la commande (marge de skew).
++        # Sans horodatage exploitable -> on REFUSE (fail-closed : jamais une vieille preuve).
+         if threshold is not None and (et is None or et < threshold):
+             continue
+         if _command_response_matches(e, requested_state):
+@@ -876,6 +895,27 @@ async def request_mode(
+ 
+     # --- Snapshot odomètre à l'ENTRÉE en privé (avant bascule) ---
+     if target_mode == PRIVATE:
++        # PHASE C — PURGE EXPLICITE des champs de FIN/RÉSULTAT d'un cycle PRÉCÉDENT.
++        # `_save_mode_state({**cur, **base, ...})` réétale `cur` : sans purge, un ancien
++        # private_end_odometer_km / private_distance_km / private_end_time (cycle antérieur)
++        # contaminerait le nouveau cycle (bug terrain : END_ODO=57175.96, DIST=1.68 affichés
++        # alors que le nouveau START=57308.13). On les remet à None ICI, dans `base`, AVANT
++        # d'écrire les nouvelles bornes de START. L'historique private_mileage_session n'est
++        # PAS touché (il conserve correctement les cycles clos, ex. 1.16 km).
++        base["private_end_time"] = None
++        base["private_end_odometer_km"] = None
++        base["private_distance_km"] = None
++        base["odometer_end_candidate_km"] = None      # ancien candidat -> jamais réutilisé
++        base["end_candidate_sample_at"] = None
++        base["business_command_sent_at"] = None
++        base["confirmation_source"] = None            # confirmation du cycle précédent non pertinente
++        base["requested_target"] = None
++        base["last_command"] = None
++        base["command_sent_at"] = None
++        base["navixy_command_id"] = None
++        # NB : private_start_time / private_start_odometer_km / private_gps_anchor_* sont
++        # (ré)écrits juste après et DOIVENT rester valides jusqu'à la fin correcte du cycle.
++
+         odo_start, snap_status = await _read_odometer_snapshot(
+             db, tid, vehicle_id, tracker_id, read_odo_km)
+         base["private_start_time"] = _now()
+@@ -884,6 +924,9 @@ async def request_mode(
+         base["odometer_source"] = SOURCE_TELTONIKA_TOTAL_ODOMETER
+         # Ancre GPS de dernière position connue (stratégie LAST_KNOWN_POSITION) — INTERNE :
+         # sert uniquement à confirmer/masquer, jamais exposée au frontend. Best-effort.
++        # Purge d'abord l'ancienne ancre pour ne pas garder celle d'un cycle antérieur.
++        base["private_gps_anchor_lat"] = None
++        base["private_gps_anchor_lng"] = None
+         try:
+             gps0 = await _fetch_gps_state(tid, int(tracker_id))
+         except Exception:
+diff --git a/diagnostics/navixy_confirmation_diag_781479_0918.py b/diagnostics/navixy_confirmation_diag_781479_0918.py
+new file mode 100644
+index 0000000..6fcc097
+--- /dev/null
++++ b/diagnostics/navixy_confirmation_diag_781479_0918.py
+@@ -0,0 +1,180 @@
++#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++"""
++LOGITRAK — DIAGNOSTIC READ-ONLY : réponse device ON/OFF vs anti-stale (FMC130 781479)
++======================================================================================
++But (test terrain 18.09.2026) : PROUVER le format réel des entrées history/tracker/list
++autour des commandes PRIVATE/BUSINESS, et notamment DANS QUEL CHAMP l'horodatage arrive
++(`time` vs `get_time` vs autre), afin d'expliquer pourquoi le backend est resté
++UNCONFIRMED/TIMEOUT alors que Air Console a affiché "Privatemode ON/OFF".
++
++Fenêtres analysées (UTC) :
++  PRIVATE  : 2026-09-18 08:43:00Z -> 08:49:30Z   (cmd envoyée 08:43:41.8Z)
++  BUSINESS : 2026-09-18 09:01:00Z -> 09:07:30Z   (cmd envoyée 09:01:42.6Z)
++
++STRICTEMENT READ-ONLY :
++  - Seul endpoint appelé : history/tracker/list (lecture).
++  - AUCUN envoi de commande, AUCUN write, AUCUN restart, AUCUNE modif .env/DB.
++  - Le credential (hash/api_key) N'EST JAMAIS affiché. AUCUNE position GPS affichée.
++
++Credentials : os.getenv uniquement (NAVIXY_API_KEY puis NAVIXY_HASH), NAVIXY_API_URL.
++Exécution (dans le conteneur backend PROD, ex. journal_backend) :
++    docker exec -i journal_backend python - < navixy_confirmation_diag_781479_0918.py
++Collez toute la sortie ici (aucun secret n'y figure).
++"""
++import os
++import sys
++import json
++from datetime import datetime, timezone
++
++try:
++    import httpx
++except ImportError:  # pragma: no cover
++    print("ERREUR: httpx introuvable — exécuter dans le conteneur backend.")
++    sys.exit(2)
++
++TRACKER_ID = 781479
++WINDOWS = [
++    ("PRIVATE", datetime(2026, 9, 18, 8, 43, 0, tzinfo=timezone.utc),
++     datetime(2026, 9, 18, 8, 49, 30, tzinfo=timezone.utc),
++     datetime(2026, 9, 18, 8, 43, 41, tzinfo=timezone.utc)),
++    ("BUSINESS", datetime(2026, 9, 18, 9, 1, 0, tzinfo=timezone.utc),
++     datetime(2026, 9, 18, 9, 7, 30, tzinfo=timezone.utc),
++     datetime(2026, 9, 18, 9, 1, 42, tzinfo=timezone.utc)),
++]
++# Formes recherchées par le matcher (mêmes que le backend).
++WANT = {"PRIVATE": ("privatemode on", "privatemode:1", "private mode on"),
++        "BUSINESS": ("privatemode off", "privatemode:0", "private mode off")}
++
++
++def _cred():
++    k = (os.getenv("NAVIXY_API_KEY") or "").strip()
++    if k:
++        return k, "NAVIXY_API_KEY"
++    lg = (os.getenv("NAVIXY_HASH") or "").strip()
++    if lg:
++        return lg, "NAVIXY_HASH"
++    return None, None
++
++
++def _iso_z(d):
++    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++
++
++def _parse(v):
++    if not v:
++        return None
++    s = str(v).strip().replace("Z", "+00:00")
++    try:
++        d = datetime.fromisoformat(s)
++    except ValueError:
++        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
++            try:
++                d = datetime.strptime(s[:19], fmt)
++                break
++            except ValueError:
++                d = None
++        if d is None:
++            return None
++    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
++
++
++def _match(entry, mode):
++    """Réplique de la logique matcher (texte + ACK hardware), pour afficher la décision."""
++    extra = entry.get("extra") or {}
++    cmd = extra.get("command") or {}
++    resp = cmd.get("response") or {}
++    if resp.get("success") is False:
++        return "NO(success=False)"
++    if isinstance(resp.get("error"), str) and resp.get("error").strip():
++        return "NO(error)"
++    text = " ".join(str(x) for x in (resp.get("body"), extra.get("full_message"),
++                                     entry.get("message")) if x is not None).lower()
++    if any(w in text for w in WANT[mode]):
++        return "YES(text)"
++    if resp.get("success") is True:
++        np = " ".join(str(x) for x in (cmd.get("name"), cmd.get("param")) if x is not None).lower()
++        if any(w in np for w in WANT[mode]):
++            return "YES(hardware_ack)"
++    return "NO"
++
++
++def _run_window(client, base, cred, label, w_from, w_to, sent):
++    print("\n" + "=" * 78)
++    print(f"FENÊTRE {label} : {_iso_z(w_from)} -> {_iso_z(w_to)}  (cmd ~ {_iso_z(sent)})")
++    print("=" * 78)
++    body = {"hash": cred, "trackers": [TRACKER_ID],
++            "from": _iso_z(w_from), "to": _iso_z(w_to),
++            "iso_datetime": True, "ascending": True, "limit": 500}
++    try:
++        r = client.post(f"{base}/history/tracker/list", json=body)
++        data = r.json() or {}
++    except Exception as e:  # noqa: BLE001
++        print("APPEL ÉCHOUÉ:", type(e).__name__)
++        return
++    if not data.get("success", False):
++        print("NON-SUCCESS:", json.dumps(data.get("status"), ensure_ascii=False))
++        return
++    rows = [e for e in (data.get("list") or []) if isinstance(e, dict)]
++    print(f"Entrées: {len(rows)}")
++    if rows:
++        # Quels champs de temps existent au niveau racine de l'entrée ?
++        keys_seen = set()
++        for e in rows:
++            keys_seen |= set(k for k in e.keys())
++        time_fields = [k for k in ("time", "get_time", "timestamp", "event_time") if k in keys_seen]
++        print("CHAMPS DE TEMPS présents au niveau entrée :", time_fields or "(AUCUN parmi time/get_time/timestamp/event_time)")
++    for e in rows:
++        extra = e.get("extra") or {}
++        cmd = extra.get("command") or {}
++        resp = cmd.get("response") or {}
++        t_time = e.get("time")
++        t_get = e.get("get_time")
++        # instant utilisé par le backend ACTUEL (time seul) vs multi-champ
++        et_backend = _parse(t_time)
++        et_multi = _parse(t_time or t_get or e.get("timestamp") or e.get("event_time"))
++        post = (et_multi is not None and et_multi >= sent)
++        line = {
++            "event": e.get("event") or e.get("type"),
++            "time": t_time, "get_time": t_get,
++            "has_command": bool(cmd),
++            "cmd_name": cmd.get("name"), "cmd_param": cmd.get("param"),
++            "resp_status": resp.get("status"), "resp_success": resp.get("success"),
++            "resp_body": resp.get("body"),
++            "has_message": bool(e.get("message")),
++            "has_full_message": bool(extra.get("full_message")),
++            "BACKEND_time_parsed": _iso_z(et_backend) if et_backend else None,
++            "MULTI_time_parsed": _iso_z(et_multi) if et_multi else None,
++            "POST_COMMAND(multi)": post,
++            "MATCH": _match(e, label),
++        }
++        # N'imprime que les entrées avec commande OU un match potentiel (bruit réduit).
++        if cmd or line["MATCH"].startswith("YES"):
++            print("  " + json.dumps(line, ensure_ascii=False, default=str))
++
++    print("-" * 78)
++    print("LECTURE :")
++    print("  * Si des entrées ont MATCH=YES mais BACKEND_time_parsed=null alors que")
++    print("    MULTI_time_parsed est renseigné -> le backend rejette à tort (il ne lit que 'time').")
++    print("  * Si le temps est dans get_time et pas dans time -> ROOT CAUSE confirmée.")
++
++
++def main():
++    cred, src = _cred()
++    base = (os.getenv("NAVIXY_API_URL") or "https://api.navixy.com/v2").rstrip("/")
++    print("=" * 78)
++    print("DIAGNOSTIC CONFIRMATION ON/OFF (READ-ONLY) — tracker 781479 — 18.09.2026")
++    print("=" * 78)
++    print("Base URL   :", base)
++    print("Credential :", src or "AUCUN", "(valeur jamais affichée)")
++    if not cred:
++        print("\nSTOP — aucun credential Navixy dans le runtime. Aucun appel effectué.")
++        sys.exit(3)
++    with httpx.Client(timeout=30) as c:
++        for label, wf, wt, sent in WINDOWS:
++            _run_window(c, base, cred, label, wf, wt, sent)
++    print("\nFIN — collez toute cette sortie (aucun secret / aucune position).")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.39.5
+
