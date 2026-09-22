@@ -1,0 +1,37 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=390, initial-scale=1"/><title>Documents — Light</title>
+<style>
+:root{--bg:#f1f5f9;--card:#fff;--text:#0f172a;--muted:#64748b;--border:#e2e8f0;
+--primary:#2563eb;--primarySoft:#eff4ff;--success:#16a34a;--successSoft:#dcfce7;
+--warnBg:#fffbeb;--warnText:#b45309;--shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.10)}
+*{box-sizing:border-box;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+body{margin:0;background:var(--bg);color:var(--text)}
+.phone{width:390px;min-height:844px;margin:0 auto;padding:16px 16px 90px}
+h1{font-size:26px;font-weight:800;margin:8px 0 12px;letter-spacing:-.3px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.chip{padding:7px 13px;border-radius:999px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--border);color:var(--muted)}
+.chip.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.add{width:100%;border:1px dashed var(--primary);background:var(--primarySoft);color:var(--primary);border-radius:14px;padding:14px;font-size:15px;font-weight:700;margin-bottom:16px}
+.doc{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:var(--shadow);margin-bottom:10px;display:flex;align-items:center;gap:12px}
+.thumb{width:44px;height:44px;border-radius:10px;background:var(--primarySoft);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:20px}
+.doc .body{flex:1}
+.doc .nm{font-size:15px;font-weight:700}
+.doc .meta{color:var(--muted);font-size:13px;margin-top:3px}
+.status{padding:4px 10px;border-radius:999px;font-size:11px;font-weight:800}
+.status.ok{background:var(--successSoft);color:var(--success)}
+.status.pend{background:var(--warnBg);color:var(--warnText)}
+.chev{color:var(--muted);font-size:20px}
+.tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:0;width:390px;background:#fff;border-top:1px solid var(--border);display:flex;justify-content:space-around;padding:8px 0 12px}
+.tab{font-size:11px;color:var(--muted);text-align:center}.tab .ic{font-size:18px;display:block}.tab.active{color:var(--primary)}
+</style></head><body><div class="phone">
+<h1>Documents</h1>
+<div class="chips"><div class="chip active">Tous</div><div class="chip">Permis</div><div class="chip">Carte grise</div><div class="chip">Assurance</div></div>
+<button class="add">＋  Ajouter un document</button>
+
+<div class="doc"><div class="thumb">📄</div><div class="body"><div class="nm">Carte grise</div><div class="meta">GE 123456 · ajouté le 12.09.2026</div></div><span class="status ok">Validé</span><span class="chev">›</span></div>
+<div class="doc"><div class="thumb">🪪</div><div class="body"><div class="nm">Permis de conduire</div><div class="meta">Orhan Demir · exp. 03.2030</div></div><span class="status ok">Validé</span><span class="chev">›</span></div>
+<div class="doc"><div class="thumb">🛡️</div><div class="body"><div class="nm">Assurance RC</div><div class="meta">OCR en cours de vérification…</div></div><span class="status pend">En attente</span><span class="chev">›</span></div>
+
+</div>
+<div class="tabbar"><div class="tab"><span class="ic">🚚</span>Conduite</div><div class="tab"><span class="ic">🗺️</span>Trajets</div><div class="tab active"><span class="ic">📄</span>Documents</div><div class="tab"><span class="ic">🔧</span>Inspection</div><div class="tab"><span class="ic">👤</span>Profil</div></div>
+</body></html>

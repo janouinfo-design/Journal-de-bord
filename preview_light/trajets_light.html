@@ -1,0 +1,42 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=390, initial-scale=1"/><title>Trajets — Light</title>
+<style>
+:root{--bg:#f1f5f9;--card:#fff;--text:#0f172a;--muted:#64748b;--border:#e2e8f0;
+--primary:#2563eb;--primarySoft:#eff4ff;--pro:#2563eb;--perso:#475569;
+--proSoft:#eff4ff;--persoSoft:#f1f5f9;--warnBg:#fffbeb;--warnBorder:#fcd34d;--warnText:#b45309;
+--shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.10)}
+*{box-sizing:border-box;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+body{margin:0;background:var(--bg);color:var(--text)}
+.phone{width:390px;min-height:844px;margin:0 auto;padding:16px 16px 90px}
+h1{font-size:26px;font-weight:800;margin:8px 0 12px;letter-spacing:-.3px}
+.filters{display:flex;gap:8px;margin-bottom:14px}
+.chip{padding:8px 14px;border-radius:999px;font-size:13px;font-weight:600;background:#fff;border:1px solid var(--border);color:var(--muted)}
+.chip.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.daylabel{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:14px 2px 8px}
+.trip{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:var(--shadow);margin-bottom:10px;display:flex;align-items:center;gap:12px}
+.trip .body{flex:1}
+.trip .route{font-size:15px;font-weight:700}
+.trip .meta{color:var(--muted);font-size:13px;margin-top:4px}
+.tag{padding:4px 10px;border-radius:999px;font-size:11px;font-weight:800}
+.tag.pro{background:var(--proSoft);color:var(--pro)}
+.tag.perso{background:var(--persoSoft);color:var(--perso)}
+.tag.tocls{background:var(--warnBg);color:var(--warnText)}
+.chev{color:var(--muted);font-size:20px}
+.tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:0;width:390px;background:#fff;border-top:1px solid var(--border);display:flex;justify-content:space-around;padding:8px 0 12px}
+.tab{font-size:11px;color:var(--muted);text-align:center}.tab .ic{font-size:18px;display:block}.tab.active{color:var(--primary)}
+</style></head><body><div class="phone">
+<h1>Mes trajets</h1>
+<div class="filters"><div class="chip active">Tous</div><div class="chip">Professionnel</div><div class="chip">Privé</div><div class="chip">À classer</div></div>
+
+<div class="daylabel">Aujourd’hui</div>
+<div class="trip"><div class="body"><div class="route">Nyon → Lausanne</div><div class="meta">24.8 km · 09:12 – 09:41</div></div><span class="tag pro">PRO</span><span class="chev">›</span></div>
+<div class="trip"><div class="body"><div class="route">Lausanne → Renens</div><div class="meta">6.1 km · 12:30 – 12:44</div></div><span class="tag tocls">À classer</span><span class="chev">›</span></div>
+
+<div class="daylabel">Hier</div>
+<div class="trip"><div class="body"><div class="route">Genève → Nyon</div><div class="meta">22.0 km · 18:05 – 18:33</div></div><span class="tag perso">PRIVÉ</span><span class="chev">›</span></div>
+<div class="trip"><div class="body"><div class="route">Meyrin → Genève</div><div class="meta">9.4 km · 08:02 – 08:20</div></div><span class="tag pro">PRO</span><span class="chev">›</span></div>
+<div class="trip"><div class="body"><div class="route">Carouge → Meyrin</div><div class="meta">11.7 km · 07:40 – 07:58</div></div><span class="tag pro">PRO</span><span class="chev">›</span></div>
+
+</div>
+<div class="tabbar"><div class="tab"><span class="ic">🚚</span>Conduite</div><div class="tab active"><span class="ic">🗺️</span>Trajets</div><div class="tab"><span class="ic">📄</span>Documents</div><div class="tab"><span class="ic">🔧</span>Inspection</div><div class="tab"><span class="ic">👤</span>Profil</div></div>
+</body></html>
