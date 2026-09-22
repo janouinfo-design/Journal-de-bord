@@ -1,0 +1,242 @@
+From f15a96c7d3bfbe1100c76ed444c2a729c865ca66 Mon Sep 17 00:00:00 2001
+From: emergent-agent-e1 <github@emergent.sh>
+Date: Tue, 22 Sep 2026 12:21:58 +0000
+Subject: [PATCH] =?UTF-8?q?feat(private-mode):=20Option=20B=20=E2=80=94=20?=
+ =?UTF-8?q?async=20BUSINESS=20confirmation=20after=20timeout=20(fail-close?=
+ =?UTF-8?q?d)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Field data (FMC130 781479): the tracker goes OFFLINE at engine-off/standstill and stops
+emitting fresh GPS, so a BUSINESS (privatemode OFF) sent at standstill can never satisfy the
+'fresh position after OFF' rule within PENDING_TIMEOUT_S -> it timed out to UNKNOWN forever,
+even though the device really switched OFF (Navixy history also carries no command response
+on this account, so device-response confirmation is impossible).
+
+Option B (resolve_pending_confirmation):
+- On BUSINESS timeout without proof: keep state=UNKNOWN + transition_result=TIMEOUT (honest,
+  UI unblocked) BUT set awaiting_async_confirm=True so the transition can be re-evaluated later.
+- Guard now also re-evaluates state==UNKNOWN & TIMEOUT & requested_target==BUSINESS &
+  awaiting_async_confirm. If telemetry_confirm(BUSINESS) later returns a REAL fresh, non-zero,
+  non-frozen position posterior to command_sent_at -> promote to BUSINESS (transition_result=
+  CONFIRMED_LATE, awaiting cleared). Fail-closed: promotion ONLY on real proof; never fabricated.
+- New window ASYNC_CONFIRM_MAX_S (default 86400s): beyond it, stop retrying, stay UNKNOWN.
+- Already-CLOSED (DEGRADED) mileage session untouched (close_session idempotent); private_km/AVL16
+  not recomputed.
+
++5 tests (H..L). resolve_pending 12/12; full regression 170/170 PASS (testing_agent).
+DEVICE_WRITE stays 0; no device command; all mocked.
+---
+ backend/app/private_mode_engine.py           | 50 +++++++++-
+ backend/tests/test_fmc130_resolve_pending.py | 98 ++++++++++++++++++++
+ 2 files changed, 146 insertions(+), 2 deletions(-)
+
+diff --git a/backend/app/private_mode_engine.py b/backend/app/private_mode_engine.py
+index d0b8d4a..5ee0d51 100644
+--- a/backend/app/private_mode_engine.py
++++ b/backend/app/private_mode_engine.py
+@@ -1056,6 +1056,17 @@ def _private_distance(start_km, end_km) -> Optional[float]:
+ # Fenêtre max d'attente d'une confirmation télémétrique avant de basculer en UNKNOWN.
+ PENDING_TIMEOUT_S = int(os.environ.get("PRIVATE_MODE_PENDING_TIMEOUT_S", "300"))
+ 
++# OPTION B — confirmation BUSINESS ASYNCHRONE APRÈS timeout.
++# Terrain FMC130 781479 : à l'arrêt moteur coupé, le tracker passe OFFLINE et ne réémet
++# plus de position GPS fraîche -> la confirmation BUSINESS (qui exige une trame fraîche
++# postérieure au OFF) ne peut pas aboutir dans la fenêtre PENDING_TIMEOUT_S -> UNKNOWN.
++# Le device a pourtant bien reçu 'privatemode OFF'. On autorise donc une PROMOTION TARDIVE :
++# tant que ce délai n'est pas dépassé, resolve_pending_confirmation RETENTE la preuve
++# télémétrique BUSINESS même en état UNKNOWN (flag awaiting_async_confirm). Fail-closed :
++# promotion UNIQUEMENT sur preuve réelle ; jamais de faux « actif ». Défaut 24 h.
++ASYNC_CONFIRM_MAX_S = int(os.environ.get("PRIVATE_MODE_ASYNC_CONFIRM_MAX_S", "86400"))
++TRANSITION_CONFIRMED_LATE = "CONFIRMED_LATE"  # promu après timeout par preuve tardive
++
+ 
+ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[str] = None,
+                                        *, read_odo_km=_default_read_odo_km,
+@@ -1069,7 +1080,26 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
+     Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
+     """
+     st = await get_mode_state(db, vehicle_id)
+-    if st.get("state") != PENDING_CONFIRMATION:
++    # OPTION B : on résout un PENDING classique, ET on retente la promotion tardive d'un
++    # BUSINESS parti en UNKNOWN au timeout (tant que la fenêtre asynchrone n'est pas dépassée).
++    _awaiting_late = (
++        st.get("state") == UNKNOWN
++        and st.get("transition_result") == TRANSITION_TIMEOUT
++        and st.get("requested_target") == BUSINESS
++        and bool(st.get("awaiting_async_confirm"))
++    )
++    if _awaiting_late:
++        # Fenêtre asynchrone expirée ? -> on cesse de retenter (reste UNKNOWN, honnête).
++        _sent = _parse(st.get("command_sent_at"))
++        if _sent:
++            from datetime import datetime as _dt, timezone as _tz
++            if (_dt.now(_tz.utc) - _sent).total_seconds() > ASYNC_CONFIRM_MAX_S:
++                if st.get("awaiting_async_confirm"):
++                    cleared = {**st, "awaiting_async_confirm": False}
++                    await _save_mode_state(db, cleared)
++                    return cleared
++                return st
++    elif st.get("state") != PENDING_CONFIRMATION:
+         return st
+     tid = tenant_id or st.get("tenant_id") or _TENANT
+     tracker_id = st.get("tracker_id")
+@@ -1103,8 +1133,12 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
+         state_doc=st, read_odo_km=_effective_read_odo, **_extra)
+ 
+     if confirmed == requested:
++        # Promotion tardive (Option B) : si on était en UNKNOWN/TIMEOUT en attente async,
++        # on marque CONFIRMED_LATE (traçabilité) ; sinon confirmation normale.
++        _tr = TRANSITION_CONFIRMED_LATE if _awaiting_late else TRANSITION_CONFIRMED
+         new_doc = {**st, "state": requested, "confirmation_source": source,
+-                   "confirmed_at": _now(), "transition_result": TRANSITION_CONFIRMED}
++                   "confirmed_at": _now(), "transition_result": _tr,
++                   "awaiting_async_confirm": False, "pending_timeout_at": None}
+         new_doc.pop("requested_target", None)
+         # distance privée au retour Business (jamais inventée)
+         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
+@@ -1137,6 +1171,12 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
+                           "result": "confirmed_async", "confirmation_source": source})
+         return new_doc
+ 
++    # Déjà en attente asynchrone (Option B) et toujours pas de preuve -> on reste UNKNOWN,
++    # sans re-déclencher la logique de timeout (elle a déjà été jouée). On continuera à
++    # retenter aux prochains GET tant que la fenêtre ASYNC_CONFIRM_MAX_S n'est pas dépassée.
++    if _awaiting_late:
++        return st
++
+     # pas de preuve -> timeout ?
+     sent = _parse(st.get("command_sent_at"))
+     if sent:
+@@ -1148,15 +1188,21 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
+             # previous_state était BUSINESS -> restaurer BUSINESS serait un FAUX état.
+             # => state = UNKNOWN (honnête), tout en CONSERVANT l'historique complet
+             #    (previous_state / requested_target / last_command / command_sent_at) via **st.
++            # OPTION B : pour un BUSINESS, on garde la porte ouverte à une PROMOTION TARDIVE
++            #   (awaiting_async_confirm=True) — le tracker offline à l'arrêt réémettra une
++            #   position fraîche à son réveil, ce qui pourra alors confirmer BUSINESS.
++            #   L'état reste UNKNOWN pour l'UI (débloquée, honnête) ; jamais de faux « actif ».
+             timed = {**st, "state": UNKNOWN,
+                      "confirmation_source": SRC_UNCONFIRMED,
+                      "transition_result": TRANSITION_TIMEOUT,
++                     "awaiting_async_confirm": (requested == BUSINESS),
+                      "pending_timeout_at": _now()}
+             await _save_mode_state(db, timed)
+             await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
+                               "requested_mode": requested, "resulting_state": UNKNOWN,
+                               "result": "pending_timeout",
+                               "transition_result": TRANSITION_TIMEOUT,
++                              "awaiting_async_confirm": (requested == BUSINESS),
+                               "previous_state": st.get("previous_state")})
+             # FIX PR#6 : un BUSINESS réellement envoyé mais non confirmé ne doit PAS laisser
+             # la session kilométrique OPEN indéfiniment (elle bloquerait la prochaine PRIVATE).
+diff --git a/backend/tests/test_fmc130_resolve_pending.py b/backend/tests/test_fmc130_resolve_pending.py
+index 96326bc..395ec96 100644
+--- a/backend/tests/test_fmc130_resolve_pending.py
++++ b/backend/tests/test_fmc130_resolve_pending.py
+@@ -254,3 +254,101 @@ def test_G_injection_read_odo_km_still_works(monkeypatch):
+         return 56010.0  # injection de test
+     st = _run(pm.resolve_pending_confirmation(db, "vA", "default", read_odo_km=_injected))
+     assert st["state"] == pm.PRIVATE
++
++
++# ===========================================================================
++# OPTION B — confirmation BUSINESS ASYNCHRONE après timeout (tracker offline à l'arrêt).
++# Terrain FMC130 781479 : au OFF moteur coupé, pas de trame GPS fraîche -> timeout -> UNKNOWN,
++# MAIS on garde la porte ouverte : au réveil du tracker (position fraîche non gelée), BUSINESS
++# est PROMU (CONFIRMED_LATE). Fail-closed : promotion UNIQUEMENT sur preuve réelle.
++# ===========================================================================
++def _make_timed_out_business(db, sent_iso, start_odo=57308.13):
++    """État post-timeout d'un BUSINESS : UNKNOWN + TIMEOUT + awaiting_async_confirm=True."""
++    st = {"vehicle_id": "vA", "state": pm.UNKNOWN,
++          "previous_state": pm.PRIVATE, "requested_target": pm.BUSINESS,
++          "last_command": "setparam privatemode:0", "command_sent_at": sent_iso,
++          "tracker_id": 781479, "tenant_id": "default",
++          "transition_result": pm.TRANSITION_TIMEOUT,
++          "awaiting_async_confirm": True,
++          "private_start_odometer_km": start_odo,
++          # ancre privée (pour tester "non gelé") :
++          "private_gps_anchor_lat": 46.50000, "private_gps_anchor_lng": 6.60000}
++    _run(db.private_mode_state.update_one({"vehicle_id": "vA"}, {"$set": st}, upsert=True))
++
++
++def test_H_business_timeout_sets_awaiting_async_confirm(monkeypatch):
++    """Au timeout d'un BUSINESS sans preuve -> UNKNOWN + awaiting_async_confirm=True (porte ouverte)."""
++    from datetime import datetime, timezone, timedelta
++    old = (datetime.now(timezone.utc) - timedelta(seconds=pm.PENDING_TIMEOUT_S + 30)).isoformat()
++    db = _db_fmc130()
++    _make_pending(db, pm.PRIVATE, pm.BUSINESS, old, start_odo=57308.13)
++    _mock_live_avl16(monkeypatch, None, reason="NAVIXY_UNAVAILABLE")
++    _mock_gps(monkeypatch, None)  # tracker offline -> aucune position
++    st = _run(pm.resolve_pending_confirmation(db, "vA", "default"))
++    assert st["state"] == pm.UNKNOWN
++    assert st["transition_result"] == pm.TRANSITION_TIMEOUT
++    assert st.get("awaiting_async_confirm") is True   # promotion tardive possible
++
++
++def test_I_business_promoted_late_when_fresh_position_returns(monkeypatch):
++    """Réveil du tracker : position RÉELLE, FRAÎCHE, NON gelée, postérieure au OFF -> BUSINESS
++    promu CONFIRMED_LATE (jamais un faux 'actif' : c'est une vraie preuve télémétrique)."""
++    from datetime import datetime, timezone, timedelta
++    sent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
++    db = _db_fmc130()
++    _make_timed_out_business(db, sent, start_odo=57308.13)
++    _mock_live_avl16(monkeypatch, 57309.29)   # AVL16 dispo
++    # position FRAÎCHE (maintenant), NON gelée (loin de l'ancre 46.5/6.6), postérieure au OFF
++    _mock_gps(monkeypatch, {"lat": 46.7000, "lng": 6.9000, "movement_status": "moving",
++                            "ignition": True, "gps_updated": _now_iso(), "speed": 12})
++    _mock_samples(monkeypatch, [{"lat": 46.60, "lng": 6.70}, {"lat": 46.70, "lng": 6.90}])
++    st = _run(pm.resolve_pending_confirmation(db, "vA", "default"))
++    assert st["state"] == pm.BUSINESS
++    assert st["transition_result"] == pm.TRANSITION_CONFIRMED_LATE
++    assert st.get("awaiting_async_confirm") is False
++
++
++def test_J_business_still_unknown_if_no_proof_at_wakeup(monkeypatch):
++    """Toujours pas de preuve (tracker encore offline) -> reste UNKNOWN, jamais promu."""
++    from datetime import datetime, timezone, timedelta
++    sent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
++    db = _db_fmc130()
++    _make_timed_out_business(db, sent, start_odo=57308.13)
++    _mock_live_avl16(monkeypatch, None, reason="NAVIXY_UNAVAILABLE")
++    _mock_gps(monkeypatch, None)
++    st = _run(pm.resolve_pending_confirmation(db, "vA", "default"))
++    assert st["state"] == pm.UNKNOWN
++    assert st.get("awaiting_async_confirm") is True   # on continue d'attendre
++
++
++def test_K_business_not_promoted_if_position_frozen_on_anchor(monkeypatch):
++    """Position FRAÎCHE mais TOUJOURS gelée sur l'ancre privée (device encore masqué) ->
++    pas de promotion (fail-closed : ce n'est pas une preuve de reprise)."""
++    from datetime import datetime, timezone, timedelta
++    sent = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
++    db = _db_fmc130()
++    _make_timed_out_business(db, sent, start_odo=57308.13)
++    _mock_live_avl16(monkeypatch, 57309.29)
++    # position = l'ancre (gelée) -> considérée masquée -> pas de reprise prouvée
++    _mock_gps(monkeypatch, {"lat": 46.50000, "lng": 6.60000, "movement_status": "parked",
++                            "ignition": False, "gps_updated": _now_iso(), "speed": 0})
++    _mock_samples(monkeypatch, [])
++    st = _run(pm.resolve_pending_confirmation(db, "vA", "default"))
++    assert st["state"] == pm.UNKNOWN
++    assert st.get("awaiting_async_confirm") is True
++
++
++def test_L_async_window_expired_stops_retrying(monkeypatch):
++    """Au-delà de ASYNC_CONFIRM_MAX_S sans preuve -> on cesse d'attendre (awaiting=False),
++    reste UNKNOWN (honnête). Aucune fabrication."""
++    from datetime import datetime, timezone, timedelta
++    sent = (datetime.now(timezone.utc) - timedelta(seconds=pm.ASYNC_CONFIRM_MAX_S + 60)).isoformat()
++    db = _db_fmc130()
++    _make_timed_out_business(db, sent, start_odo=57308.13)
++    # même si une preuve existait, la fenêtre est expirée -> on n'essaie plus
++    _mock_live_avl16(monkeypatch, 57309.29)
++    _mock_gps(monkeypatch, {"lat": 46.7, "lng": 6.9, "movement_status": "moving",
++                            "ignition": True, "gps_updated": _now_iso()})
++    st = _run(pm.resolve_pending_confirmation(db, "vA", "default"))
++    assert st["state"] == pm.UNKNOWN
++    assert st.get("awaiting_async_confirm") is False
+-- 
+2.39.5
+
