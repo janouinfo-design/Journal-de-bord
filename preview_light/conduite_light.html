@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=390, initial-scale=1"/>
+<title>Conduite — Light premium</title>
+<style>
+  :root{
+    --bg:#f1f5f9;           /* fond app (gris très clair) */
+    --card:#ffffff;         /* cartes */
+    --text:#0f172a;         /* texte principal */
+    --muted:#64748b;        /* texte secondaire */
+    --border:#e2e8f0;       /* bordures */
+    --primary:#2563eb;      /* bleu LOGITRAK */
+    --primarySoft:#eff4ff;  /* fond bleu clair (actif) */
+    --pro:#2563eb;
+    --perso:#475569;
+    --persoSoft:#f1f5f9;
+    --success:#16a34a;
+    --danger:#dc2626;
+    --warnBg:#fffbeb; --warnBorder:#fcd34d; --warnText:#b45309;
+    --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.10);
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  body{margin:0;background:var(--bg);color:var(--text)}
+  .phone{width:390px;min-height:844px;margin:0 auto;background:var(--bg);padding:16px 16px 90px;position:relative}
+  .status{height:20px}
+  h1.title{font-size:26px;font-weight:800;margin:6px 0 2px;letter-spacing:-.3px}
+  .section{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:18px 2px 8px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow)}
+  .row{display:flex;gap:12px}
+  .vehTop{display:flex;justify-content:space-between;align-items:flex-start}
+  .plate{font-size:22px;font-weight:800;letter-spacing:1px}
+  .model{color:var(--muted);font-size:13px;margin-top:2px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:11px;font-weight:700}
+  .pill.off{background:#f1f5f9;color:var(--muted)}
+  .pill.on{background:#dcfce7;color:var(--success)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .btn{margin-top:14px;width:100%;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:700;color:#fff;background:var(--primary);box-shadow:var(--shadow)}
+  .modes{display:flex;gap:12px}
+  .mode{flex:1;background:var(--card);border:2px solid var(--border);border-radius:16px;padding:20px 12px;text-align:center;box-shadow:var(--shadow)}
+  .mode.active{border-color:var(--primary);background:var(--primarySoft)}
+  .mode .lbl{font-size:17px;font-weight:800}
+  .mode.active .lbl{color:var(--primary)}
+  .mode .st{margin-top:6px;font-size:13px;color:var(--muted)}
+  .mode.active .st{color:var(--primary);font-weight:700}
+  .help{color:var(--muted);font-size:13px;margin:12px 2px;line-height:1.45}
+  .seg{display:flex;background:#eef2f7;border:1px solid var(--border);border-radius:12px;padding:4px;gap:4px}
+  .seg .opt{flex:1;text-align:center;padding:9px 0;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted)}
+  .seg .opt.active{background:var(--primary);color:#fff;box-shadow:var(--shadow)}
+  .cap{color:var(--muted);font-size:11px;margin:8px 2px}
+  .km{flex:1;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow)}
+  .km .t{color:var(--muted);font-size:13px;font-weight:600;margin-bottom:8px}
+  .km .v{font-size:22px;font-weight:800}
+  .km .v.pro{color:var(--pro)}
+  .total{margin-top:12px}
+  .total .head{display:flex;justify-content:space-between;align-items:baseline}
+  .total .lab{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
+  .total .val{font-size:22px;font-weight:800}
+  .ratio{display:flex;justify-content:space-between;color:var(--muted);font-size:13px;font-weight:600;margin:12px 0 8px}
+  .bar{display:flex;height:10px;border-radius:999px;overflow:hidden;background:#eef2f7}
+  .bar .p{background:var(--pro)}.bar .q{background:var(--perso)}
+  .warn{display:flex;align-items:center;gap:10px;margin-top:12px;background:var(--warnBg);border:1px solid var(--warnBorder);border-radius:14px;padding:13px}
+  .warn .wt{color:var(--warnText);font-weight:700;font-size:14px}
+  .warn .ws{color:var(--muted);font-size:12px;margin-top:2px}
+  .chev{color:var(--muted);font-size:20px;margin-left:auto}
+  .trip{display:flex;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow)}
+  .trip .rt{font-size:15px;font-weight:700}
+  .trip .mt{color:var(--muted);font-size:13px;margin-top:4px}
+  .info{flex:1;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow)}
+  .info .t{color:var(--muted);font-size:13px;font-weight:600}
+  .info .v{font-size:17px;font-weight:800;margin-top:8px}
+  .info .badge{font-size:15px;font-weight:800;margin-top:8px}
+  .sos{margin-top:20px;width:100%;border:none;border-radius:16px;padding:16px;font-size:16px;font-weight:800;color:#fff;background:var(--danger);box-shadow:var(--shadow);letter-spacing:.5px}
+  .tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:0;width:390px;background:#fff;border-top:1px solid var(--border);display:flex;justify-content:space-around;padding:8px 0 12px}
+  .tab{font-size:11px;color:var(--muted);text-align:center}
+  .tab .ic{font-size:18px;display:block}
+  .tab.active{color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="status"></div>
+  <h1 class="title">Conduite</h1>
+
+  <div class="section">Véhicule actuel</div>
+  <div class="card">
+    <div class="vehTop">
+      <div>
+        <div class="plate">GE 123456</div>
+        <div class="model">Mercedes Sprinter</div>
+      </div>
+      <div class="pill on"><span class="dot" style="background:var(--success)"></span>Connecté</div>
+    </div>
+    <button class="btn">Changer de véhicule</button>
+  </div>
+
+  <div class="section">Mode</div>
+  <div class="modes">
+    <div class="mode active">
+      <div class="lbl">Professionnel</div>
+      <div class="st">Actif</div>
+    </div>
+    <div class="mode">
+      <div class="lbl">Privé</div>
+      <div class="st">Activer</div>
+    </div>
+  </div>
+  <div class="help">Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels.</div>
+
+  <div class="section">Kilomètres</div>
+  <div class="seg">
+    <div class="opt">Aujourd’hui</div>
+    <div class="opt active">Semaine</div>
+    <div class="opt">Mois</div>
+  </div>
+  <div class="cap">14 – 20 septembre</div>
+  <div class="row">
+    <div class="km"><div class="t">Km Pro</div><div class="v pro">128.6 km</div></div>
+    <div class="km"><div class="t">Km Privé</div><div class="v">32.4 km</div></div>
+  </div>
+
+  <div class="card total">
+    <div class="head"><div class="lab">Total</div><div class="val">161.0 km</div></div>
+    <div class="ratio"><span>Pro 80 %</span><span>Privé 20 %</span></div>
+    <div class="bar"><div class="p" style="flex:80"></div><div class="q" style="flex:20"></div></div>
+  </div>
+
+  <div class="warn">
+    <div>
+      <div class="wt">⚠ 2 trajets à classifier</div>
+      <div class="ws">Merci de vérifier vos trajets non classifiés.</div>
+    </div>
+    <div class="chev">›</div>
+  </div>
+
+  <div class="section">Dernier trajet</div>
+  <div class="trip">
+    <div>
+      <div class="rt">Nyon → Lausanne</div>
+      <div class="mt">24.8 km · Professionnel · 09:12 – 09:41</div>
+    </div>
+    <div class="chev">›</div>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <div class="info"><div class="t">Odomètre véhicule</div><div class="v">140 539 km</div></div>
+    <div class="info"><div class="t">Position visible</div><div class="badge" style="color:var(--primary)">Mode professionnel</div></div>
+  </div>
+
+  <button class="sos">🆘  SOS Urgence</button>
+</div>
+
+<div class="tabbar">
+  <div class="tab active"><span class="ic">🚚</span>Conduite</div>
+  <div class="tab"><span class="ic">🗺️</span>Trajets</div>
+  <div class="tab"><span class="ic">📄</span>Documents</div>
+  <div class="tab"><span class="ic">🔧</span>Inspection</div>
+  <div class="tab"><span class="ic">👤</span>Profil</div>
+</div>
+</body>
+</html>
