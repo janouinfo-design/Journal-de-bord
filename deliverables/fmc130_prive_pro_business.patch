@@ -197,8 +197,8 @@ index 1e73e29..e0b36c8 100644
  import pytest
  import requests
  
--BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://github-import-138.preview.emergentagent.com"
-+BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://private-mode-diag.preview.emergentagent.com"
+-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://fmc130-telemetry.preview.emergentagent.com"
++BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://fmc130-telemetry.preview.emergentagent.com"
  API = f"{BASE}/api"
  
  ADMIN = ("admin@logitrak.ch", "admin123")
@@ -675,8 +675,8 @@ index 50b98ed..6549452 100644
  import pytest
  import requests
  
--BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
-+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
  ADMIN = {"email": "admin@logitrak.ch", "password": "admin123"}
  DRIVER = {"email": "chauffeur@logitrak.ch", "password": "chauffeur123"}
  DRIVER_ID = "1580345e-6b8e-45a2-88e7-513a008b6b12"
@@ -688,8 +688,8 @@ index e19b3f2..6cf6ac8 100644
  import pytest
  import requests
  
--BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
-+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
  API = f"{BASE_URL}/api"
  
  
@@ -701,8 +701,8 @@ index bfd3901..a60328a 100644
  import pytest
  import requests
  
--BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
-+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
  API = f"{BASE_URL}/api"
  
  
@@ -714,8 +714,8 @@ index e949be4..4321f3d 100644
  import pytest
  import requests
  
--BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-import-138.preview.emergentagent.com").rstrip("/")
-+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://private-mode-diag.preview.emergentagent.com").rstrip("/")
+-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
++BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://fmc130-telemetry.preview.emergentagent.com").rstrip("/")
  API = f"{BASE_URL}/api"
  
  ADMIN = {"email": "admin@logitrak.ch", "password": "admin123"}

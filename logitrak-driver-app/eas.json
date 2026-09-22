@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://private-mode-diag.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://fmc130-telemetry.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,7 +25,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://private-mode-diag.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://fmc130-telemetry.preview.emergentagent.com"
       }
     },
     "production": {

@@ -4,7 +4,7 @@ import uuid
 import pytest
 import requests
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://private-mode-diag.preview.emergentagent.com"
+BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://fmc130-telemetry.preview.emergentagent.com"
 API = f"{BASE}/api"
 
 ADMIN = ("admin@logitrak.ch", "admin123")
