@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
   },
-  submitText: { color: colors.text, fontSize: font.size.lg, fontWeight: '600' },
+  submitText: { color: colors.textInverse, fontSize: font.size.lg, fontWeight: '600' },
   logout: { marginTop: spacing.lg, alignItems: 'center' },
   logoutText: { color: colors.textMuted, fontSize: font.size.sm },
 });

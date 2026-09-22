@@ -186,11 +186,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: spacing.md,
   },
-  avatarText: { color: colors.text, fontSize: font.size.hero, fontWeight: '700' },
+  avatarText: { color: colors.textInverse, fontSize: font.size.hero, fontWeight: '700' },
   name: { color: colors.text, fontSize: font.size.xl, fontWeight: '700' },
   email: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 2 },
   errorBox: {
-    backgroundColor: 'rgba(239,68,68,0.12)',
+    backgroundColor: colors.dangerSoft,
     borderColor: colors.danger,
     borderWidth: 1,
     borderRadius: radius.md,
@@ -227,5 +227,5 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   actionText: { color: colors.primary, fontSize: font.size.md, fontWeight: '600' },
-  logoutBtn: { borderColor: 'rgba(239,68,68,0.4)' },
+  logoutBtn: { borderColor: colors.danger },
 });
