@@ -1061,6 +1061,17 @@ def _private_distance(start_km, end_km) -> Optional[float]:
 # Fenêtre max d'attente d'une confirmation télémétrique avant de basculer en UNKNOWN.
 PENDING_TIMEOUT_S = int(os.environ.get("PRIVATE_MODE_PENDING_TIMEOUT_S", "300"))
 
+# OPTION B — confirmation BUSINESS ASYNCHRONE APRÈS timeout.
+# Terrain FMC130 781479 : à l'arrêt moteur coupé, le tracker passe OFFLINE et ne réémet
+# plus de position GPS fraîche -> la confirmation BUSINESS (qui exige une trame fraîche
+# postérieure au OFF) ne peut pas aboutir dans la fenêtre PENDING_TIMEOUT_S -> UNKNOWN.
+# Le device a pourtant bien reçu 'privatemode OFF'. On autorise donc une PROMOTION TARDIVE :
+# tant que ce délai n'est pas dépassé, resolve_pending_confirmation RETENTE la preuve
+# télémétrique BUSINESS même en état UNKNOWN (flag awaiting_async_confirm). Fail-closed :
+# promotion UNIQUEMENT sur preuve réelle ; jamais de faux « actif ». Défaut 24 h.
+ASYNC_CONFIRM_MAX_S = int(os.environ.get("PRIVATE_MODE_ASYNC_CONFIRM_MAX_S", "86400"))
+TRANSITION_CONFIRMED_LATE = "CONFIRMED_LATE"  # promu après timeout par preuve tardive
+
 
 async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[str] = None,
                                        *, read_odo_km=_default_read_odo_km,
@@ -1074,7 +1085,26 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
     Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
     """
     st = await get_mode_state(db, vehicle_id)
-    if st.get("state") != PENDING_CONFIRMATION:
+    # OPTION B : on résout un PENDING classique, ET on retente la promotion tardive d'un
+    # BUSINESS parti en UNKNOWN au timeout (tant que la fenêtre asynchrone n'est pas dépassée).
+    _awaiting_late = (
+        st.get("state") == UNKNOWN
+        and st.get("transition_result") == TRANSITION_TIMEOUT
+        and st.get("requested_target") == BUSINESS
+        and bool(st.get("awaiting_async_confirm"))
+    )
+    if _awaiting_late:
+        # Fenêtre asynchrone expirée ? -> on cesse de retenter (reste UNKNOWN, honnête).
+        _sent = _parse(st.get("command_sent_at"))
+        if _sent:
+            from datetime import datetime as _dt, timezone as _tz
+            if (_dt.now(_tz.utc) - _sent).total_seconds() > ASYNC_CONFIRM_MAX_S:
+                if st.get("awaiting_async_confirm"):
+                    cleared = {**st, "awaiting_async_confirm": False}
+                    await _save_mode_state(db, cleared)
+                    return cleared
+                return st
+    elif st.get("state") != PENDING_CONFIRMATION:
         return st
     tid = tenant_id or st.get("tenant_id") or _TENANT
     tracker_id = st.get("tracker_id")
@@ -1108,8 +1138,12 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         state_doc=st, read_odo_km=_effective_read_odo, **_extra)
 
     if confirmed == requested:
+        # Promotion tardive (Option B) : si on était en UNKNOWN/TIMEOUT en attente async,
+        # on marque CONFIRMED_LATE (traçabilité) ; sinon confirmation normale.
+        _tr = TRANSITION_CONFIRMED_LATE if _awaiting_late else TRANSITION_CONFIRMED
         new_doc = {**st, "state": requested, "confirmation_source": source,
-                   "confirmed_at": _now(), "transition_result": TRANSITION_CONFIRMED}
+                   "confirmed_at": _now(), "transition_result": _tr,
+                   "awaiting_async_confirm": False, "pending_timeout_at": None}
         new_doc.pop("requested_target", None)
         # distance privée au retour Business (jamais inventée)
         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
@@ -1157,6 +1191,12 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
                           "result": "confirmed_async", "confirmation_source": source})
         return new_doc
 
+    # Déjà en attente asynchrone (Option B) et toujours pas de preuve -> on reste UNKNOWN,
+    # sans re-déclencher la logique de timeout (elle a déjà été jouée). On continuera à
+    # retenter aux prochains GET tant que la fenêtre ASYNC_CONFIRM_MAX_S n'est pas dépassée.
+    if _awaiting_late:
+        return st
+
     # pas de preuve -> timeout ?
     sent = _parse(st.get("command_sent_at"))
     if sent:
@@ -1168,15 +1208,21 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
             # previous_state était BUSINESS -> restaurer BUSINESS serait un FAUX état.
             # => state = UNKNOWN (honnête), tout en CONSERVANT l'historique complet
             #    (previous_state / requested_target / last_command / command_sent_at) via **st.
+            # OPTION B : pour un BUSINESS, on garde la porte ouverte à une PROMOTION TARDIVE
+            #   (awaiting_async_confirm=True) — le tracker offline à l'arrêt réémettra une
+            #   position fraîche à son réveil, ce qui pourra alors confirmer BUSINESS.
+            #   L'état reste UNKNOWN pour l'UI (débloquée, honnête) ; jamais de faux « actif ».
             timed = {**st, "state": UNKNOWN,
                      "confirmation_source": SRC_UNCONFIRMED,
                      "transition_result": TRANSITION_TIMEOUT,
+                     "awaiting_async_confirm": (requested == BUSINESS),
                      "pending_timeout_at": _now()}
             await _save_mode_state(db, timed)
             await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
                               "requested_mode": requested, "resulting_state": UNKNOWN,
                               "result": "pending_timeout",
                               "transition_result": TRANSITION_TIMEOUT,
+                              "awaiting_async_confirm": (requested == BUSINESS),
                               "previous_state": st.get("previous_state")})
             # FIX PR#6 : un BUSINESS réellement envoyé mais non confirmé ne doit PAS laisser
             # la session kilométrique OPEN indéfiniment (elle bloquerait la prochaine PRIVATE).
