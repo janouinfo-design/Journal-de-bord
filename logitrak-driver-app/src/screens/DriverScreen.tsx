@@ -341,7 +341,7 @@ function DriverScreenBle() {
               testID="driver-claim-button"
             >
               {submitting ? (
-                <ActivityIndicator color={colors.text} />
+                <ActivityIndicator color={colors.textInverse} />
               ) : (
                 <Text style={styles.claimBtnText}>Je conduis</Text>
               )}
@@ -471,7 +471,7 @@ function DriverScreenBle() {
             testID="driver-stop-button"
           >
             {submitting ? (
-              <ActivityIndicator color={colors.text} />
+              <ActivityIndicator color={colors.textInverse} />
             ) : (
               <Text style={styles.stopBtnText}>Je m’arrête</Text>
             )}
@@ -570,7 +570,7 @@ const styles = StyleSheet.create({
   helloName: { color: colors.text, fontSize: font.size.lg, fontWeight: '600' },
 
   conflictBanner: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    backgroundColor: colors.warningSoft,
     borderColor: colors.warning,
     borderWidth: 1,
     borderRadius: radius.md,
@@ -596,8 +596,8 @@ const styles = StyleSheet.create({
   model: { color: colors.textMuted, fontSize: font.size.md, marginBottom: spacing.md },
   sessionMetaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   badge: { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
-  badgeAuto: { backgroundColor: 'rgba(34,197,94,0.18)' },
-  badgeManual: { backgroundColor: 'rgba(148,163,184,0.18)' },
+  badgeAuto: { backgroundColor: colors.successSoft },
+  badgeManual: { backgroundColor: colors.persoSoft },
   badgeText: { color: colors.text, fontSize: font.size.xs, fontWeight: '700' },
   sessionSince: { color: colors.textMuted, fontSize: font.size.sm },
   autoHint: { color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.sm },
@@ -640,7 +640,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.primary,
-    backgroundColor: 'rgba(59,130,246,0.12)',
+    backgroundColor: colors.primarySoft,
   },
   selectedCheck: { color: colors.primary, fontSize: font.size.lg, fontWeight: '700', marginRight: spacing.sm },
   selectedPlate: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
@@ -655,22 +655,22 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     alignItems: 'center',
   },
-  claimBtnText: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
+  claimBtnText: { color: colors.textInverse, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
 
   banner: { padding: spacing.md, borderRadius: radius.md, marginBottom: spacing.md },
-  bannerPro: { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderColor: colors.primary, borderWidth: 1 },
-  bannerPerso: { backgroundColor: 'rgba(71, 85, 105, 0.15)', borderColor: colors.perso, borderWidth: 1 },
+  bannerPro: { backgroundColor: colors.primarySoft, borderColor: colors.primary, borderWidth: 1 },
+  bannerPerso: { backgroundColor: colors.persoSoft, borderColor: colors.perso, borderWidth: 1 },
   bannerText: { color: colors.text, fontWeight: '600', fontSize: font.size.md },
 
   privacyCard: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: colors.bgCard,
     borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md,
-    borderWidth: 1, borderColor: 'rgba(148,163,184,0.25)',
+    borderWidth: 1, borderColor: colors.border,
   },
   privacyTitle: { color: colors.text, fontWeight: '700', fontSize: font.size.md, marginBottom: spacing.xs },
   privacyState: { color: colors.text, fontSize: font.size.md, marginBottom: spacing.xs },
-  privacyHint: { color: '#94a3b8', fontSize: font.size.sm, marginBottom: spacing.sm },
-  privacyError: { color: '#ef4444', fontSize: font.size.sm, marginTop: spacing.xs },
+  privacyHint: { color: colors.textMuted, fontSize: font.size.sm, marginBottom: spacing.sm },
+  privacyError: { color: colors.danger, fontSize: font.size.sm, marginTop: spacing.xs },
 
 
   modesRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
@@ -683,7 +683,7 @@ const styles = StyleSheet.create({
     minHeight: 120,
   },
   modeBtnActive: { borderWidth: 3, borderColor: colors.text },
-  modeLabel: { color: colors.text, fontSize: font.size.hero, fontWeight: '700', letterSpacing: 2 },
+  modeLabel: { color: colors.textInverse, fontSize: font.size.hero, fontWeight: '700', letterSpacing: 2 },
   modeSub: { color: colors.text, fontSize: font.size.sm, opacity: 0.9, marginTop: 4 },
   modeBadge: {
     marginTop: spacing.sm,
@@ -703,7 +703,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.md,
   },
-  stopBtnText: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
+  stopBtnText: { color: colors.textInverse, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
 
   footerCard: {
     backgroundColor: colors.bgCard,

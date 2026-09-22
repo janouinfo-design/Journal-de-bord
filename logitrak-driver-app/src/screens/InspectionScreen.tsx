@@ -192,7 +192,7 @@ export function InspectionScreen() {
             disabled={busy}
             testID="inspection-validate"
           >
-            {busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.validateText}>Valider l’inspection</Text>}
+            {busy ? <ActivityIndicator color={colors.textInverse} /> : <Text style={styles.validateText}>Valider l’inspection</Text>}
           </TouchableOpacity>
           <TouchableOpacity style={styles.cancelBtn} onPress={() => setCurrent(null)} disabled={busy} testID="inspection-cancel">
             <Text style={styles.cancelText}>Revenir plus tard</Text>
@@ -228,7 +228,7 @@ export function InspectionScreen() {
           disabled={!hasVehicle || busy}
           testID="inspection-new"
         >
-          {busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.newBtnText}>Nouvelle inspection</Text>}
+          {busy ? <ActivityIndicator color={colors.textInverse} /> : <Text style={styles.newBtnText}>Nouvelle inspection</Text>}
         </TouchableOpacity>
 
         <Text style={styles.sectionLabel}>Historique</Text>
@@ -282,10 +282,10 @@ const styles = StyleSheet.create({
   plate: { color: colors.text, fontSize: font.size.xl, fontWeight: '700', letterSpacing: 1, marginTop: 2 },
   contextSub: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 2 },
   newBtn: { backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center', marginBottom: spacing.lg },
-  newBtnText: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+  newBtnText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '700' },
   btnDisabled: { opacity: 0.5 },
   sectionLabel: { color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase', letterSpacing: 1, marginBottom: spacing.sm },
-  errorBox: { backgroundColor: 'rgba(239,68,68,0.12)', borderColor: colors.danger, borderWidth: 1, borderRadius: radius.md, padding: spacing.md },
+  errorBox: { backgroundColor: colors.dangerSoft, borderColor: colors.danger, borderWidth: 1, borderRadius: radius.md, padding: spacing.md },
   errorText: { color: colors.danger, fontSize: font.size.sm },
   retry: { color: colors.primary, fontWeight: '600', marginTop: spacing.sm },
   emptyCard: { backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
@@ -315,7 +315,7 @@ const styles = StyleSheet.create({
   addPhotoBtn: { borderWidth: 1, borderColor: colors.primary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 4 },
   addPhotoText: { color: colors.primary, fontSize: font.size.xs, fontWeight: '600' },
   validateBtn: { backgroundColor: colors.success, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center', marginTop: spacing.md },
-  validateText: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+  validateText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '700' },
   cancelBtn: { alignItems: 'center', paddingVertical: spacing.md, marginTop: spacing.sm },
   cancelText: { color: colors.textMuted, fontSize: font.size.sm },
 });

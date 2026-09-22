@@ -223,7 +223,7 @@ export default function DriverScreenManual() {
                 {vehicle?.model ? <Text style={styles.vehicleModel}>{vehicle.model}</Text> : null}
               </View>
               <View
-                style={[styles.connPill, { backgroundColor: connected ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.15)' }]}
+                style={[styles.connPill, { backgroundColor: connected ? colors.successSoft : colors.persoSoft }]}
                 accessibilityLabel={connected ? 'Connecté' : 'Hors ligne'}
               >
                 <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.textMuted }]} />
@@ -518,7 +518,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',
   },
-  changeBtnText: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+  changeBtnText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '700' },
 
   modesRow: { flexDirection: 'row', gap: spacing.md },
   modeCard: {
@@ -561,8 +561,8 @@ const styles = StyleSheet.create({
 
   warnCard: {
     flexDirection: 'row', alignItems: 'center', marginTop: spacing.md,
-    backgroundColor: 'rgba(250,204,21,0.10)', borderRadius: radius.lg, borderWidth: 1,
-    borderColor: 'rgba(250,204,21,0.5)', padding: spacing.md,
+    backgroundColor: colors.warningSoft, borderRadius: radius.lg, borderWidth: 1,
+    borderColor: colors.warningBorder, padding: spacing.md,
   },
   warnTitle: { color: colors.warning, fontSize: font.size.md, fontWeight: '700' },
   warnSub: { color: colors.textMuted, fontSize: font.size.sm, marginTop: 2 },
@@ -589,7 +589,7 @@ const styles = StyleSheet.create({
   infoSub: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
   infoBadge: { fontSize: font.size.md, fontWeight: '700', marginTop: spacing.sm },
 
-  modalBackdrop: { flex: 1, backgroundColor: '#00000099', justifyContent: 'flex-end' },
+  modalBackdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: colors.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     padding: spacing.lg, maxHeight: '75%',

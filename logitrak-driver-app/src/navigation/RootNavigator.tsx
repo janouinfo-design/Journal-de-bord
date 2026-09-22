@@ -113,7 +113,7 @@ export function RootNavigator() {
   return (
     <NavigationContainer
       theme={{
-        dark: true,
+        dark: false,
         colors: {
           primary: colors.primary,
           background: colors.bg,
@@ -124,7 +124,7 @@ export function RootNavigator() {
         },
       }}
     >
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Stack.Navigator
         screenOptions={{
           headerStyle: { backgroundColor: colors.bg },

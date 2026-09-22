@@ -172,7 +172,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: spacing.md,
   },
-  logoText: { color: colors.text, fontSize: font.size.hero, fontWeight: '700' },
+  logoText: { color: colors.textInverse, fontSize: font.size.hero, fontWeight: '700' },
   brand: {
     color: colors.text,
     fontSize: font.size.xxl,
@@ -238,7 +238,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  checkmark: { color: colors.text, fontSize: font.size.sm, fontWeight: '700' },
+  checkmark: { color: colors.textInverse, fontSize: font.size.sm, fontWeight: '700' },
   rememberText: { color: colors.text, fontSize: font.size.md },
   error: {
     color: colors.danger,
@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   submitText: {
-    color: colors.text,
+    color: colors.textInverse,
     fontSize: font.size.lg,
     fontWeight: '600',
   },

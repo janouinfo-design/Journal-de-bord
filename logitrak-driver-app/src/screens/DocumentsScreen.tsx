@@ -217,7 +217,7 @@ export function DocumentsScreen() {
                   disabled={uploading}
                   testID="documents-submit"
                 >
-                  {uploading ? <ActivityIndicator color={colors.text} /> : <Text style={styles.submitText}>Envoyer</Text>}
+                  {uploading ? <ActivityIndicator color={colors.textInverse} /> : <Text style={styles.submitText}>Envoyer</Text>}
                 </TouchableOpacity>
               </>
             )}
@@ -244,9 +244,9 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginBottom: spacing.md,
   },
   addBtnDisabled: { opacity: 0.5 },
-  addBtnText: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+  addBtnText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '700' },
   errorBox: {
-    backgroundColor: 'rgba(239,68,68,0.12)', borderColor: colors.danger, borderWidth: 1,
+    backgroundColor: colors.dangerSoft, borderColor: colors.danger, borderWidth: 1,
     borderRadius: radius.md, padding: spacing.md,
   },
   errorText: { color: colors.danger, fontSize: font.size.sm },
@@ -262,13 +262,13 @@ const styles = StyleSheet.create({
     padding: spacing.md, marginBottom: spacing.sm,
   },
   docTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
-  typeBadge: { backgroundColor: 'rgba(59,130,246,0.18)', borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 2 },
-  typeBadgeText: { color: colors.text, fontSize: font.size.xs, fontWeight: '600' },
+  typeBadge: { backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 2 },
+  typeBadgeText: { color: colors.primary, fontSize: font.size.xs, fontWeight: '600' },
   statusBadge: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 2 },
   statusText: { fontSize: font.size.xs, fontWeight: '700' },
   docName: { color: colors.text, fontSize: font.size.md, fontWeight: '600' },
   docMeta: { color: colors.textMuted, fontSize: font.size.xs, marginTop: 2 },
-  modalBackdrop: { flex: 1, backgroundColor: '#00000099', justifyContent: 'flex-end' },
+  modalBackdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: colors.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     padding: spacing.lg, maxHeight: '85%',
@@ -286,10 +286,10 @@ const styles = StyleSheet.create({
   typeLabel: { color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase', letterSpacing: 1, marginBottom: spacing.sm },
   typesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
   typeChip: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  typeChipActive: { borderColor: colors.primary, backgroundColor: 'rgba(59,130,246,0.15)' },
+  typeChipActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
   typeChipText: { color: colors.textMuted, fontSize: font.size.sm },
   typeChipTextActive: { color: colors.text, fontWeight: '700' },
   submitBtn: { backgroundColor: colors.success, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center' },
   submitBtnDisabled: { opacity: 0.6 },
-  submitText: { color: colors.text, fontSize: font.size.md, fontWeight: '700' },
+  submitText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '700' },
 });
