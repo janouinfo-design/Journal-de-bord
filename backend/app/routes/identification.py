@@ -272,6 +272,18 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     if state_now == pm.PENDING_CONFIRMATION:
         rt = st.get("requested_target")
         pending_message = pm._command_sent_message(rt) if rt in (pm.PRIVATE, pm.BUSINESS) else None
+
+    # --- DÉFENSE EN PROFONDEUR anti-stale (exposition) ---
+    # Un cycle PRIVÉ OUVERT n'a PAS de fin : on n'expose JAMAIS de valeurs terminales
+    # (private_end_odometer_km / private_distance_km) tant que state == PRIVATE.
+    # Cela empêche qu'un reliquat d'un cycle antérieur (bug terrain ancien PROD :
+    # nouveau START mais ancien END/DIST) ne soit affiché, INDÉPENDAMMENT de la purge.
+    # On NE touche PAS au calcul AVL16 ni à la fermeture DEGRADED (hors état PRIVATE).
+    if state_now == pm.PRIVATE:
+        exposed_private_distance_km = None
+    else:
+        exposed_private_distance_km = st.get("private_distance_km")
+
     return {
         "state": state_now,
         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
@@ -285,7 +297,7 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         "tracker_id": tracker_id,
         "vehicle_plate": vehicle.get("plate"),
         "private_odometer_supported": private_odo_ok,
-        "private_distance_km": st.get("private_distance_km"),
+        "private_distance_km": exposed_private_distance_km,
         "last_transition_at": st.get("updated_at"),
         # --- Historique de transition (jamais perdu au timeout) ---
         "transition_result": st.get("transition_result"),       # CONFIRMED|TIMEOUT|None

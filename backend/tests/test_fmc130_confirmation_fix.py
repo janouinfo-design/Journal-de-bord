@@ -329,9 +329,10 @@ def test_command_response_matches_helper():
 
 
 # ---------------------------------------------------------------------------
-# ACK HARDWARE (Teltonika raw command) : la réponse ne porte QUE `success`
-# (body=None). La preuve = name/param désignant la commande privatemode du bon
-# mode + success True. Root cause du PENDING : le body-only matcher ratait ce cas.
+# ACK HARDWARE (Teltonika raw command) : la réponse ne porte QUE `success`.
+# RÈGLE MÉTIER (18.09 + doc Navixy) : `success is True` prouve UNIQUEMENT l'ENVOI
+# (COMMAND_SENT), PAS l'exécution (MODE_CONFIRMED). Donc un ACK hardware sans TEXTE
+# device explicite ne confirme JAMAIS le mode -> UNCONFIRMED (télémétrie prend le relais).
 # ---------------------------------------------------------------------------
 def _hw_ack(time_iso, cmd_name, success=True):
     return {"time": time_iso, "event": "command_sent", "message": None,
@@ -340,16 +341,17 @@ def _hw_ack(time_iso, cmd_name, success=True):
                                                "error": None, "success": success}}}}
 
 
-def test_hardware_ack_confirms_private_without_body():
-    """ACK hardware 'privatemode ON' (success True, body None) -> PRIVATE / DEVICE_RESPONSE."""
+def test_hardware_ack_success_true_alone_does_NOT_confirm_private():
+    """success=True + name='privatemode ON' mais SANS texte device -> PAS confirmé.
+    (success prouve l'envoi, pas l'exécution : la confirmation vient de la télémétrie.)"""
     e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON")
-    assert pm._command_response_matches(e, pm.PRIVATE) is True
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
     assert pm._command_response_matches(e, pm.BUSINESS) is False
 
 
-def test_hardware_ack_confirms_business_without_body():
+def test_hardware_ack_success_true_alone_does_NOT_confirm_business():
     e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF")
-    assert pm._command_response_matches(e, pm.BUSINESS) is True
+    assert pm._command_response_matches(e, pm.BUSINESS) is False
     assert pm._command_response_matches(e, pm.PRIVATE) is False
 
 
@@ -378,16 +380,24 @@ def test_hardware_ack_success_none_not_confirmed_business():
     assert pm._command_response_matches(e, pm.BUSINESS) is False
 
 
-def test_hardware_ack_colon_forms_confirm_with_success_true():
-    """Formes 'privatemode:1' / 'privatemode:0' avec success True -> confirmées."""
+def test_hardware_ack_colon_forms_success_true_alone_does_NOT_confirm():
+    """Formes 'privatemode:1' / 'privatemode:0' avec success True mais SANS texte device
+    -> PAS confirmées (success = envoi, pas exécution)."""
     on = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
     on["extra"]["command"]["param"] = "privatemode:1"
     off = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
     off["extra"]["command"]["param"] = "privatemode:0"
-    assert pm._command_response_matches(on, pm.PRIVATE) is True
-    assert pm._command_response_matches(on, pm.BUSINESS) is False
-    assert pm._command_response_matches(off, pm.BUSINESS) is True
-    assert pm._command_response_matches(off, pm.PRIVATE) is False
+    assert pm._command_response_matches(on, pm.PRIVATE) is False
+    assert pm._command_response_matches(off, pm.BUSINESS) is False
+
+
+def test_hardware_ack_success_true_WITH_device_text_confirms():
+    """Si un ACK hardware porte AUSSI le TEXTE device 'Privatemode ON' dans body/message,
+    c'est le TEXTE (preuve autoritative) qui confirme — pas success."""
+    e = _hw_ack("2026-09-10T12:00:20+00:00", "raw", success=True)
+    e["extra"]["command"]["response"]["body"] = "Privatemode ON"
+    assert pm._command_response_matches(e, pm.PRIVATE) is True
+    assert pm._command_response_matches(e, pm.BUSINESS) is False
 
 
 def test_hardware_ack_colon_forms_success_none_not_confirmed():
@@ -418,16 +428,17 @@ def test_text_path_body_confirms_regardless_of_success_none():
     assert pm._command_response_matches(e, pm.PRIVATE) is True
 
 
-def test_hardware_ack_end_to_end_confirms_private_via_telemetry_confirm():
-    """Chaîne complète : ACK hardware postérieur -> telemetry_confirm -> PRIVATE/DEVICE_RESPONSE
-    (sans aucun GPS ni sample ; c'est la preuve qui manquait et laissait l'app en PENDING)."""
+def test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm():
+    """RÈGLE 18.09 : un ACK hardware (success=true) SANS texte device et SANS preuve
+    télémétrique ne confirme PAS -> UNCONFIRMED. `success` prouve l'envoi, pas l'exécution.
+    (La confirmation réelle doit venir de la télémétrie LKP+AVL16, pas de l'ACK d'envoi.)"""
     sent = "2026-09-10T12:00:00+00:00"
 
     async def _resp(tenant_id, tracker_id, since_iso):
         return [_hw_ack("2026-09-10T12:00:15+00:00", "privatemode ON")]
     state, src = _run(pm.telemetry_confirm(
         "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
-    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+    assert state is None and src == pm.SRC_UNCONFIRMED
 
 
 def test_hardware_ack_stale_before_command_ignored():
@@ -560,8 +571,10 @@ def test_field_private_confirmed_via_get_time_text_body():
     assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
 
 
-def test_field_business_confirmed_via_get_time_hardware_ack():
-    """ACK hardware 'privatemode OFF' (success True, body None) daté en get_time -> BUSINESS."""
+def test_field_business_hardware_ack_get_time_does_NOT_confirm():
+    """ACK hardware 'privatemode OFF' (success True, body None) daté en get_time :
+    l'horodatage get_time est bien lu (postérieur à la commande), MAIS success seul ne
+    confirme pas -> UNCONFIRMED (18.09 : succes = envoi, pas exécution)."""
     sent = "2026-09-18T09:01:42+00:00"
 
     async def _resp(tenant_id, tracker_id, since_iso):
@@ -569,7 +582,7 @@ def test_field_business_confirmed_via_get_time_hardware_ack():
                                      success=True)]
     state, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, sent, _cap(),
                       fetch_command_responses=_resp))
-    assert state == pm.BUSINESS and src == pm.SRC_DEVICE_RESPONSE
+    assert state is None and src == pm.SRC_UNCONFIRMED
 
 
 def test_field_get_time_before_command_is_stale_refused():

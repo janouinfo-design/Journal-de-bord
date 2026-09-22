@@ -442,18 +442,22 @@ def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
 def _command_response_matches(entry: dict, target_mode: str) -> bool:
     """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?
 
-    Deux formes documentées (Navixy history `extra.command.response`) :
-      * commande HTTP     : la PREUVE est le TEXTE renvoyé par le device
-        (response.body / extra.full_message / entry.message).
-      * commande HARDWARE (Teltonika raw) : response ne porte QUE `success`.
-        La PREUVE = cmd.name/param désignant EXACTEMENT la commande privatemode du
-        mode visé ET response.success is True.
+    PREUVE AUTORITATIVE = TEXTE explicite renvoyé par le device
+    (response.body / extra.full_message / entry.message) contenant
+    'Privatemode ON' (PRIVATE) ou 'Privatemode OFF' (BUSINESS).
+
+    RÈGLE MÉTIER CRITIQUE (validée terrain 18.09 + doc Navixy) :
+      `response.success is True` sur une commande HARDWARE (Teltonika raw) prouve
+      SEULEMENT que la commande a été ENVOYÉE (COMMAND_SENT), PAS qu'elle a été
+      EXÉCUTÉE (MODE_CONFIRMED). On ne l'utilise donc JAMAIS comme preuve de mode.
+      -> Une commande hardware avec `success=true` mais SANS texte device explicite
+         renvoie False (UNCONFIRMED) : la confirmation doit alors venir de la
+         preuve TÉLÉMÉTRIQUE validée (LKP + incrément AVL16), jamais de l'ACK d'envoi.
 
     FAIL-CLOSED strict :
       - échec explicite (success is False / error non vide) -> jamais confirmé ;
-      - le TEXTE n'utilise JAMAIS cmd.name/param (sinon un name='privatemode ON' avec
-        success=None serait faussement confirmé) ;
-      - l'ACK HARDWARE exige success is True (pas None) + match de commande STRICT.
+      - le TEXTE n'utilise JAMAIS cmd.name/param (le nom de commande n'est pas une
+        réponse device : un name='privatemode ON' avec success=None ne prouve rien).
     """
     extra = entry.get("extra") or {}
     cmd = extra.get("command") or {}
@@ -469,8 +473,9 @@ def _command_response_matches(entry: dict, target_mode: str) -> bool:
         """minuscule + espaces normalisés (aucun cmd.name/param ici pour le TEXTE)."""
         return " ".join(" ".join(str(p).split()) for p in parts if p is not None).lower()
 
-    # ---- (1) Preuve TEXTUELLE (réponse HTTP du device) : body / full_message / message ----
+    # ---- Preuve TEXTUELLE device (SEULE preuve autoritative) : body / full_message / message ----
     # On N'INCLUT PAS cmd.name/param : le nom de commande n'est pas une réponse device.
+    # On N'UTILISE PAS response.success : « envoyée » n'est pas « exécutée » (cf. docstring).
     text = _norm(resp.get("body"), extra.get("full_message"), entry.get("message"))
     if text:
         if target_mode == PRIVATE and (("privatemode on" in text) or ("privatemode:1" in text)
@@ -480,26 +485,8 @@ def _command_response_matches(entry: dict, target_mode: str) -> bool:
                                         or ("private mode off" in text)):
             return True
 
-    # ---- (2) Preuve ACK HARDWARE : name/param STRICT + success is True (jamais None) ----
-    if resp.get("success") is True:
-        name_param = _norm(cmd.get("name"), cmd.get("param"))
-        # match STRICT par token (évite un substring permissif type 'privatemode online') :
-        tokens = set(name_param.replace(":", " : ").split())  # sépare aussi 'privatemode:1'
-        joined = name_param
-        if target_mode == PRIVATE:
-            want_forms = ("privatemode on", "privatemode:1")
-        else:
-            want_forms = ("privatemode off", "privatemode:0")
-        for w in want_forms:
-            # accepte la forme exacte contiguë OU la présence stricte des 2 tokens attendus
-            if joined == w or joined.startswith(w + " ") or joined.endswith(" " + w) \
-                    or (" " + w + " ") in (" " + joined + " "):
-                return True
-            # forme 'privatemode:1' éclatée en tokens {'privatemode',':','1'}
-            if ":" in w:
-                base, val = w.split(":", 1)
-                if base in tokens and val in tokens and ":" in tokens:
-                    return True
+    # Pas de texte device explicite -> PAS de confirmation par réponse device.
+    # (success=true seul = COMMAND_SENT, jamais MODE_CONFIRMED.)
     return False
 
 

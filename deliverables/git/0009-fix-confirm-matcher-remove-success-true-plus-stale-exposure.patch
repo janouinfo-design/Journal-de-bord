@@ -1,0 +1,396 @@
+diff --git a/backend/app/private_mode_engine.py b/backend/app/private_mode_engine.py
+index 5ee0d51..5935127 100644
+--- a/backend/app/private_mode_engine.py
++++ b/backend/app/private_mode_engine.py
+@@ -442,18 +442,22 @@ def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
+ def _command_response_matches(entry: dict, target_mode: str) -> bool:
+     """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?
+ 
+-    Deux formes documentées (Navixy history `extra.command.response`) :
+-      * commande HTTP     : la PREUVE est le TEXTE renvoyé par le device
+-        (response.body / extra.full_message / entry.message).
+-      * commande HARDWARE (Teltonika raw) : response ne porte QUE `success`.
+-        La PREUVE = cmd.name/param désignant EXACTEMENT la commande privatemode du
+-        mode visé ET response.success is True.
++    PREUVE AUTORITATIVE = TEXTE explicite renvoyé par le device
++    (response.body / extra.full_message / entry.message) contenant
++    'Privatemode ON' (PRIVATE) ou 'Privatemode OFF' (BUSINESS).
++
++    RÈGLE MÉTIER CRITIQUE (validée terrain 18.09 + doc Navixy) :
++      `response.success is True` sur une commande HARDWARE (Teltonika raw) prouve
++      SEULEMENT que la commande a été ENVOYÉE (COMMAND_SENT), PAS qu'elle a été
++      EXÉCUTÉE (MODE_CONFIRMED). On ne l'utilise donc JAMAIS comme preuve de mode.
++      -> Une commande hardware avec `success=true` mais SANS texte device explicite
++         renvoie False (UNCONFIRMED) : la confirmation doit alors venir de la
++         preuve TÉLÉMÉTRIQUE validée (LKP + incrément AVL16), jamais de l'ACK d'envoi.
+ 
+     FAIL-CLOSED strict :
+       - échec explicite (success is False / error non vide) -> jamais confirmé ;
+-      - le TEXTE n'utilise JAMAIS cmd.name/param (sinon un name='privatemode ON' avec
+-        success=None serait faussement confirmé) ;
+-      - l'ACK HARDWARE exige success is True (pas None) + match de commande STRICT.
++      - le TEXTE n'utilise JAMAIS cmd.name/param (le nom de commande n'est pas une
++        réponse device : un name='privatemode ON' avec success=None ne prouve rien).
+     """
+     extra = entry.get("extra") or {}
+     cmd = extra.get("command") or {}
+@@ -469,8 +473,9 @@ def _command_response_matches(entry: dict, target_mode: str) -> bool:
+         """minuscule + espaces normalisés (aucun cmd.name/param ici pour le TEXTE)."""
+         return " ".join(" ".join(str(p).split()) for p in parts if p is not None).lower()
+ 
+-    # ---- (1) Preuve TEXTUELLE (réponse HTTP du device) : body / full_message / message ----
++    # ---- Preuve TEXTUELLE device (SEULE preuve autoritative) : body / full_message / message ----
+     # On N'INCLUT PAS cmd.name/param : le nom de commande n'est pas une réponse device.
++    # On N'UTILISE PAS response.success : « envoyée » n'est pas « exécutée » (cf. docstring).
+     text = _norm(resp.get("body"), extra.get("full_message"), entry.get("message"))
+     if text:
+         if target_mode == PRIVATE and (("privatemode on" in text) or ("privatemode:1" in text)
+@@ -480,26 +485,8 @@ def _command_response_matches(entry: dict, target_mode: str) -> bool:
+                                         or ("private mode off" in text)):
+             return True
+ 
+-    # ---- (2) Preuve ACK HARDWARE : name/param STRICT + success is True (jamais None) ----
+-    if resp.get("success") is True:
+-        name_param = _norm(cmd.get("name"), cmd.get("param"))
+-        # match STRICT par token (évite un substring permissif type 'privatemode online') :
+-        tokens = set(name_param.replace(":", " : ").split())  # sépare aussi 'privatemode:1'
+-        joined = name_param
+-        if target_mode == PRIVATE:
+-            want_forms = ("privatemode on", "privatemode:1")
+-        else:
+-            want_forms = ("privatemode off", "privatemode:0")
+-        for w in want_forms:
+-            # accepte la forme exacte contiguë OU la présence stricte des 2 tokens attendus
+-            if joined == w or joined.startswith(w + " ") or joined.endswith(" " + w) \
+-                    or (" " + w + " ") in (" " + joined + " "):
+-                return True
+-            # forme 'privatemode:1' éclatée en tokens {'privatemode',':','1'}
+-            if ":" in w:
+-                base, val = w.split(":", 1)
+-                if base in tokens and val in tokens and ":" in tokens:
+-                    return True
++    # Pas de texte device explicite -> PAS de confirmation par réponse device.
++    # (success=true seul = COMMAND_SENT, jamais MODE_CONFIRMED.)
+     return False
+ 
+ 
+diff --git a/backend/app/routes/identification.py b/backend/app/routes/identification.py
+index 61a6c08..c4f7cee 100644
+--- a/backend/app/routes/identification.py
++++ b/backend/app/routes/identification.py
+@@ -272,6 +272,18 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
+     if state_now == pm.PENDING_CONFIRMATION:
+         rt = st.get("requested_target")
+         pending_message = pm._command_sent_message(rt) if rt in (pm.PRIVATE, pm.BUSINESS) else None
++
++    # --- DÉFENSE EN PROFONDEUR anti-stale (exposition) ---
++    # Un cycle PRIVÉ OUVERT n'a PAS de fin : on n'expose JAMAIS de valeurs terminales
++    # (private_end_odometer_km / private_distance_km) tant que state == PRIVATE.
++    # Cela empêche qu'un reliquat d'un cycle antérieur (bug terrain ancien PROD :
++    # nouveau START mais ancien END/DIST) ne soit affiché, INDÉPENDAMMENT de la purge.
++    # On NE touche PAS au calcul AVL16 ni à la fermeture DEGRADED (hors état PRIVATE).
++    if state_now == pm.PRIVATE:
++        exposed_private_distance_km = None
++    else:
++        exposed_private_distance_km = st.get("private_distance_km")
++
+     return {
+         "state": state_now,
+         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
+@@ -285,7 +297,7 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
+         "tracker_id": tracker_id,
+         "vehicle_plate": vehicle.get("plate"),
+         "private_odometer_supported": private_odo_ok,
+-        "private_distance_km": st.get("private_distance_km"),
++        "private_distance_km": exposed_private_distance_km,
+         "last_transition_at": st.get("updated_at"),
+         # --- Historique de transition (jamais perdu au timeout) ---
+         "transition_result": st.get("transition_result"),       # CONFIRMED|TIMEOUT|None
+diff --git a/backend/tests/test_fmc130_confirmation_fix.py b/backend/tests/test_fmc130_confirmation_fix.py
+index 597c99d..bb6edb6 100644
+--- a/backend/tests/test_fmc130_confirmation_fix.py
++++ b/backend/tests/test_fmc130_confirmation_fix.py
+@@ -329,9 +329,10 @@ def test_command_response_matches_helper():
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# ACK HARDWARE (Teltonika raw command) : la réponse ne porte QUE `success`
+-# (body=None). La preuve = name/param désignant la commande privatemode du bon
+-# mode + success True. Root cause du PENDING : le body-only matcher ratait ce cas.
++# ACK HARDWARE (Teltonika raw command) : la réponse ne porte QUE `success`.
++# RÈGLE MÉTIER (18.09 + doc Navixy) : `success is True` prouve UNIQUEMENT l'ENVOI
++# (COMMAND_SENT), PAS l'exécution (MODE_CONFIRMED). Donc un ACK hardware sans TEXTE
++# device explicite ne confirme JAMAIS le mode -> UNCONFIRMED (télémétrie prend le relais).
+ # ---------------------------------------------------------------------------
+ def _hw_ack(time_iso, cmd_name, success=True):
+     return {"time": time_iso, "event": "command_sent", "message": None,
+@@ -340,16 +341,17 @@ def _hw_ack(time_iso, cmd_name, success=True):
+                                                "error": None, "success": success}}}}
+ 
+ 
+-def test_hardware_ack_confirms_private_without_body():
+-    """ACK hardware 'privatemode ON' (success True, body None) -> PRIVATE / DEVICE_RESPONSE."""
++def test_hardware_ack_success_true_alone_does_NOT_confirm_private():
++    """success=True + name='privatemode ON' mais SANS texte device -> PAS confirmé.
++    (success prouve l'envoi, pas l'exécution : la confirmation vient de la télémétrie.)"""
+     e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON")
+-    assert pm._command_response_matches(e, pm.PRIVATE) is True
++    assert pm._command_response_matches(e, pm.PRIVATE) is False
+     assert pm._command_response_matches(e, pm.BUSINESS) is False
+ 
+ 
+-def test_hardware_ack_confirms_business_without_body():
++def test_hardware_ack_success_true_alone_does_NOT_confirm_business():
+     e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF")
+-    assert pm._command_response_matches(e, pm.BUSINESS) is True
++    assert pm._command_response_matches(e, pm.BUSINESS) is False
+     assert pm._command_response_matches(e, pm.PRIVATE) is False
+ 
+ 
+@@ -378,16 +380,24 @@ def test_hardware_ack_success_none_not_confirmed_business():
+     assert pm._command_response_matches(e, pm.BUSINESS) is False
+ 
+ 
+-def test_hardware_ack_colon_forms_confirm_with_success_true():
+-    """Formes 'privatemode:1' / 'privatemode:0' avec success True -> confirmées."""
++def test_hardware_ack_colon_forms_success_true_alone_does_NOT_confirm():
++    """Formes 'privatemode:1' / 'privatemode:0' avec success True mais SANS texte device
++    -> PAS confirmées (success = envoi, pas exécution)."""
+     on = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
+     on["extra"]["command"]["param"] = "privatemode:1"
+     off = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
+     off["extra"]["command"]["param"] = "privatemode:0"
+-    assert pm._command_response_matches(on, pm.PRIVATE) is True
+-    assert pm._command_response_matches(on, pm.BUSINESS) is False
+-    assert pm._command_response_matches(off, pm.BUSINESS) is True
+-    assert pm._command_response_matches(off, pm.PRIVATE) is False
++    assert pm._command_response_matches(on, pm.PRIVATE) is False
++    assert pm._command_response_matches(off, pm.BUSINESS) is False
++
++
++def test_hardware_ack_success_true_WITH_device_text_confirms():
++    """Si un ACK hardware porte AUSSI le TEXTE device 'Privatemode ON' dans body/message,
++    c'est le TEXTE (preuve autoritative) qui confirme — pas success."""
++    e = _hw_ack("2026-09-10T12:00:20+00:00", "raw", success=True)
++    e["extra"]["command"]["response"]["body"] = "Privatemode ON"
++    assert pm._command_response_matches(e, pm.PRIVATE) is True
++    assert pm._command_response_matches(e, pm.BUSINESS) is False
+ 
+ 
+ def test_hardware_ack_colon_forms_success_none_not_confirmed():
+@@ -418,16 +428,17 @@ def test_text_path_body_confirms_regardless_of_success_none():
+     assert pm._command_response_matches(e, pm.PRIVATE) is True
+ 
+ 
+-def test_hardware_ack_end_to_end_confirms_private_via_telemetry_confirm():
+-    """Chaîne complète : ACK hardware postérieur -> telemetry_confirm -> PRIVATE/DEVICE_RESPONSE
+-    (sans aucun GPS ni sample ; c'est la preuve qui manquait et laissait l'app en PENDING)."""
++def test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm():
++    """RÈGLE 18.09 : un ACK hardware (success=true) SANS texte device et SANS preuve
++    télémétrique ne confirme PAS -> UNCONFIRMED. `success` prouve l'envoi, pas l'exécution.
++    (La confirmation réelle doit venir de la télémétrie LKP+AVL16, pas de l'ACK d'envoi.)"""
+     sent = "2026-09-10T12:00:00+00:00"
+ 
+     async def _resp(tenant_id, tracker_id, since_iso):
+         return [_hw_ack("2026-09-10T12:00:15+00:00", "privatemode ON")]
+     state, src = _run(pm.telemetry_confirm(
+         "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
+-    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
++    assert state is None and src == pm.SRC_UNCONFIRMED
+ 
+ 
+ def test_hardware_ack_stale_before_command_ignored():
+@@ -560,8 +571,10 @@ def test_field_private_confirmed_via_get_time_text_body():
+     assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+ 
+ 
+-def test_field_business_confirmed_via_get_time_hardware_ack():
+-    """ACK hardware 'privatemode OFF' (success True, body None) daté en get_time -> BUSINESS."""
++def test_field_business_hardware_ack_get_time_does_NOT_confirm():
++    """ACK hardware 'privatemode OFF' (success True, body None) daté en get_time :
++    l'horodatage get_time est bien lu (postérieur à la commande), MAIS success seul ne
++    confirme pas -> UNCONFIRMED (18.09 : succes = envoi, pas exécution)."""
+     sent = "2026-09-18T09:01:42+00:00"
+ 
+     async def _resp(tenant_id, tracker_id, since_iso):
+@@ -569,7 +582,7 @@ def test_field_business_confirmed_via_get_time_hardware_ack():
+                                      success=True)]
+     state, src = _run(pm.telemetry_confirm("default", 781479, pm.BUSINESS, sent, _cap(),
+                       fetch_command_responses=_resp))
+-    assert state == pm.BUSINESS and src == pm.SRC_DEVICE_RESPONSE
++    assert state is None and src == pm.SRC_UNCONFIRMED
+ 
+ 
+ def test_field_get_time_before_command_is_stale_refused():
+diff --git a/backend/tests/test_private_mode_stale_exposure.py b/backend/tests/test_private_mode_stale_exposure.py
+new file mode 100644
+index 0000000..6bcd5df
+--- /dev/null
++++ b/backend/tests/test_private_mode_stale_exposure.py
+@@ -0,0 +1,166 @@
++"""Défense en profondeur anti-stale — endpoint GET /driver/private-mode.
++
++RÈGLE : un cycle PRIVÉ OUVERT (state==PRIVATE) n'a pas de fin -> l'endpoint
++n'expose JAMAIS de valeur terminale (private_distance_km) même si un reliquat
++d'un cycle antérieur subsiste dans private_mode_state (bug terrain ancien PROD :
++nouveau START mais ancien END/DIST). Hors état PRIVATE, la valeur (ex. cycle clos
++BUSINESS) reste exposée normalement.
++
++Tous les accès sont MOCKÉS (aucun réseau, aucune commande device, DEVICE_WRITE non requis).
++La gate est neutralisée pour isoler la logique d'exposition (allowed=True stub).
++"""
++from __future__ import annotations
++
++import asyncio
++import os as _os
++
++from app import private_mode_engine as pm
++from app import private_mode_gate as _gate
++from app import ble_engine as _ble
++from app.routes import identification as ident
++from app.routes import _helpers as _h
++
++
++def _run(coro):
++    return asyncio.get_event_loop().run_until_complete(coro)
++
++
++class _Coll:
++    def __init__(self):
++        self.docs = []
++
++    async def find_one(self, q, proj=None):
++        for d in self.docs:
++            if all(d.get(k) == v for k, v in q.items()):
++                return dict(d)
++        return None
++
++    async def update_one(self, q, upd, upsert=False):
++        for d in self.docs:
++            if all(d.get(k) == v for k, v in q.items()):
++                d.update(upd.get("$set", {}))
++                return
++        if upsert:
++            nd = dict(q)
++            nd.update(upd.get("$set", {}))
++            self.docs.append(nd)
++
++
++class _DB:
++    def __init__(self):
++        self.vehicles = _Coll()
++        self.private_mode_state = _Coll()
++        self.vehicle_private_capabilities = _Coll()
++
++
++def _seed(state_doc: dict):
++    """Prépare un DB fake + monkeypatch minimal ; renvoie (db, restore)."""
++    db = _DB()
++    _run(db.vehicles.update_one(
++        {"id": "vA"},
++        {"$set": {"id": "vA", "tenant_id": "default", "model": "telfmu130_fmc130",
++                  "navixy_tracker_id": 781479, "plate": "LOGITRAK AUDI",
++                  "private_mode_pilot": True}}, upsert=True))
++    _run(db.private_mode_state.update_one(
++        {"vehicle_id": "vA"}, {"$set": {"vehicle_id": "vA", **state_doc}}, upsert=True))
++
++    saved = {
++        "get_db": ident.get_db,
++        "feature_enabled": _gate.feature_enabled,
++        "kill_switch_active": _gate.kill_switch_active,
++        "resolve": _h.resolve_driver_id_for_user,
++        "session": _ble.get_current_session,
++        "can_use": _gate.can_use_private_mode,
++        "resolve_cap": pm.resolve_vehicle_capability,
++        "device_write": pm.device_write_enabled,
++    }
++
++    ident.get_db = lambda: db
++    _gate.feature_enabled = lambda: True
++
++    async def _kill(_db):
++        return False
++    _gate.kill_switch_active = _kill
++    ident.gate = _gate  # s'assure que la route voit nos stubs
++
++    async def _resolve(_db, _user):
++        return "d1"
++    _h.resolve_driver_id_for_user = _resolve
++    ident.resolve_driver_id_for_user = _resolve
++
++    async def _session(_db, _driver):
++        return {"vehicle_id": "vA", "status": "confirmed"}
++    _ble.get_current_session = _session
++
++    async def _can_use(_db, **kw):
++        return {"allowed": True, "reason": None, "http": 200, "level": "ok"}
++    _gate.can_use_private_mode = _can_use
++
++    async def _cap(_db, _tid, _model):
++        return None  # capability non requise pour la logique d'exposition
++    pm.resolve_vehicle_capability = _cap
++
++    pm.device_write_enabled = lambda: False  # PROD-like ; n'affecte pas allowed
++
++    def restore():
++        ident.get_db = saved["get_db"]
++        _gate.feature_enabled = saved["feature_enabled"]
++        _gate.kill_switch_active = saved["kill_switch_active"]
++        _h.resolve_driver_id_for_user = saved["resolve"]
++        ident.resolve_driver_id_for_user = saved["resolve"]
++        _ble.get_current_session = saved["session"]
++        _gate.can_use_private_mode = saved["can_use"]
++        pm.resolve_vehicle_capability = saved["resolve_cap"]
++        pm.device_write_enabled = saved["device_write"]
++
++    return db, restore
++
++
++def _get():
++    return _run(ident.driver_private_mode_get(user={"tenant_id": "default",
++                                                    "email": "d1@x", "role": "driver",
++                                                    "id": "u1"}))
++
++
++def test_open_private_cycle_never_exposes_stale_distance():
++    """state==PRIVATE avec reliquats d'un cycle antérieur -> private_distance_km=None."""
++    db, restore = _seed({
++        "state": pm.PRIVATE,
++        # reliquats d'un ANCIEN cycle (bug terrain) — ne doivent PAS être exposés :
++        "private_end_odometer_km": 57175.96,
++        "private_distance_km": 1.68,
++        # bornes du cycle courant :
++        "private_start_odometer_km": 57308.13,
++    })
++    try:
++        out = _get()
++        assert out["state"] == pm.PRIVATE
++        assert out["private_distance_km"] is None  # défense en profondeur
++    finally:
++        restore()
++
++
++def test_closed_business_cycle_still_exposes_distance():
++    """Hors état PRIVATE (ex. cycle clos), la distance légitime reste exposée."""
++    db, restore = _seed({
++        "state": pm.BUSINESS,
++        "private_start_odometer_km": 57308.13,
++        "private_end_odometer_km": 57309.29,
++        "private_distance_km": 1.16,          # cycle clos validé terrain
++    })
++    try:
++        out = _get()
++        assert out["state"] == pm.BUSINESS
++        assert out["private_distance_km"] == 1.16
++    finally:
++        restore()
++
++
++def test_unknown_state_exposes_none_distance():
++    """UNKNOWN sans distance -> None (aucune valeur inventée)."""
++    db, restore = _seed({"state": pm.UNKNOWN})
++    try:
++        out = _get()
++        assert out["private_distance_km"] is None
++    finally:
++        restore()
