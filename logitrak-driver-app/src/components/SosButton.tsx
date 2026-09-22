@@ -96,7 +96,7 @@ export default function SosButton({ isPrivate = false, compact = true }: { isPri
         {/* jauge de maintien */}
         <Animated.View style={[styles.progress, { width: widthInterp }]} pointerEvents="none" />
         {sending ? (
-          <ActivityIndicator color={colors.text} />
+          <ActivityIndicator color={colors.textInverse} />
         ) : (
           <Text style={[styles.btnText, compact && styles.btnTextCompact]}>SOS</Text>
         )}
@@ -129,7 +129,7 @@ const styles = StyleSheet.create({
     position: 'absolute', left: 0, top: 0, bottom: 0,
     backgroundColor: '#00000033',
   },
-  btnText: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
+  btnText: { color: colors.textInverse, fontSize: font.size.lg, fontWeight: '700', letterSpacing: 1 },
   btnTextCompact: { fontSize: font.size.md, letterSpacing: 2 },
   hint: { color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.xs },
   result: { fontSize: font.size.sm, marginTop: spacing.sm, textAlign: 'center' },

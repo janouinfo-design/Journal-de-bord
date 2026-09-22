@@ -267,9 +267,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     alignItems: 'center',
   },
-  classifyBtnActivePro: { borderColor: colors.primary, backgroundColor: 'rgba(59,130,246,0.12)' },
-  classifyBtnActivePerso: { borderColor: colors.perso, backgroundColor: 'rgba(71,85,105,0.18)' },
-  classifyBtnText: { color: colors.text, fontWeight: '700', letterSpacing: 1 },
+  classifyBtnActivePro: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  classifyBtnActivePerso: { borderColor: colors.perso, backgroundColor: colors.persoSoft },
+  classifyBtnText: { color: colors.textInverse, fontWeight: '700', letterSpacing: 1 },
   retryBtn: {
     marginTop: spacing.lg,
     borderWidth: 1,

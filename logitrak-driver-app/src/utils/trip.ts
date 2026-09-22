@@ -52,12 +52,12 @@ export type ClassificationBadge = {
 /** Badge PRO / PRIVÉ / À classer selon la classification RÉELLE (null = à classer). */
 export function classificationBadge(c: TripClassification): ClassificationBadge {
   if (c === 'professional') {
-    return { label: 'PRO', color: colors.primary, bg: 'rgba(59,130,246,0.15)' };
+    return { label: 'PRO', color: colors.pro, bg: colors.proSoft };
   }
   if (c === 'personal') {
-    return { label: 'PRIVÉ', color: colors.perso, bg: 'rgba(71,85,105,0.20)' };
+    return { label: 'PRIVÉ', color: colors.perso, bg: colors.persoSoft };
   }
-  return { label: 'À classer', color: colors.warning, bg: 'rgba(245,158,11,0.15)' };
+  return { label: 'À classer', color: colors.warning, bg: colors.warningSoft };
 }
 
 /** Titre court d'un trajet : "Origine → Destination" (adresses réelles). */
