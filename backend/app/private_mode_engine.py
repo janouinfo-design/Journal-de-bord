@@ -496,26 +496,8 @@ def _command_response_matches(entry: dict, target_mode: str) -> bool:
                                         or ("private mode off" in text)):
             return True
 
-    # ---- (2) Preuve ACK HARDWARE : name/param STRICT + success is True (jamais None) ----
-    if resp.get("success") is True:
-        name_param = _norm(cmd.get("name"), cmd.get("param"))
-        # match STRICT par token (évite un substring permissif type 'privatemode online') :
-        tokens = set(name_param.replace(":", " : ").split())  # sépare aussi 'privatemode:1'
-        joined = name_param
-        if target_mode == PRIVATE:
-            want_forms = ("privatemode on", "privatemode:1")
-        else:
-            want_forms = ("privatemode off", "privatemode:0")
-        for w in want_forms:
-            # accepte la forme exacte contiguë OU la présence stricte des 2 tokens attendus
-            if joined == w or joined.startswith(w + " ") or joined.endswith(" " + w) \
-                    or (" " + w + " ") in (" " + joined + " "):
-                return True
-            # forme 'privatemode:1' éclatée en tokens {'privatemode',':','1'}
-            if ":" in w:
-                base, val = w.split(":", 1)
-                if base in tokens and val in tokens and ":" in tokens:
-                    return True
+    # Pas de texte device explicite -> PAS de confirmation par reponse device.
+    # (success=true seul = COMMAND_SENT, jamais MODE_CONFIRMED.)
     return False
 
 

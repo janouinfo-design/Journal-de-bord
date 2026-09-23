@@ -308,6 +308,13 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     if state_now == pm.PENDING_CONFIRMATION:
         rt = st.get("requested_target")
         pending_message = pm._command_sent_message(rt) if rt in (pm.PRIVATE, pm.BUSINESS) else None
+
+    # --- DEFENSE EN PROFONDEUR anti-stale (exposition) ---
+    # state==PRIVATE (cycle ouvert) -> ne jamais exposer de valeur terminale.
+    if state_now == pm.PRIVATE:
+        exposed_private_distance_km = None
+    else:
+        exposed_private_distance_km = st.get("private_distance_km")
     return {
         "state": state_now,
         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
@@ -321,7 +328,7 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         "tracker_id": tracker_id,
         "vehicle_plate": vehicle.get("plate"),
         "private_odometer_supported": private_odo_ok,
-        "private_distance_km": st.get("private_distance_km"),
+        "private_distance_km": exposed_private_distance_km,
         "last_transition_at": st.get("updated_at"),
         # --- Historique de transition (jamais perdu au timeout) ---
         "transition_result": st.get("transition_result"),       # CONFIRMED|TIMEOUT|None
