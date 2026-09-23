@@ -17,6 +17,7 @@ import os as _os
 from app import private_mode_engine as pm
 from app import private_mode_gate as _gate
 from app import ble_engine as _ble
+from app import vehicle_assignment as _va
 from app.routes import identification as ident
 from app.routes import _helpers as _h
 
@@ -73,6 +74,7 @@ def _seed(state_doc: dict):
         "can_use": _gate.can_use_private_mode,
         "resolve_cap": pm.resolve_vehicle_capability,
         "device_write": pm.device_write_enabled,
+        "resolve_active_vehicle": _va.resolve_active_vehicle,
     }
 
     ident.get_db = lambda: db
@@ -91,6 +93,11 @@ def _seed(state_doc: dict):
     async def _session(_db, _driver):
         return {"vehicle_id": "vA", "status": "confirmed"}
     _ble.get_current_session = _session
+
+    # Nouvelle architecture : la route résout le véhicule actif via l'affectation.
+    async def _resolve_active(_db, _driver, _tenant):
+        return "vA"
+    _va.resolve_active_vehicle = _resolve_active
 
     async def _can_use(_db, **kw):
         return {"allowed": True, "reason": None, "http": 200, "level": "ok"}
@@ -112,6 +119,7 @@ def _seed(state_doc: dict):
         _gate.can_use_private_mode = saved["can_use"]
         pm.resolve_vehicle_capability = saved["resolve_cap"]
         pm.device_write_enabled = saved["device_write"]
+        _va.resolve_active_vehicle = saved["resolve_active_vehicle"]
 
     return db, restore
 

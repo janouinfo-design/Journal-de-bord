@@ -201,6 +201,119 @@ async def driver_stop(user=Depends(get_current_user)):
     return result
 
 
+# ---------- Affectation conducteur <-> véhicule PERSISTANTE (Lot 1) ----------
+# Source de vérité MÉTIER (distincte du BLE/présence). Ne se ferme que sur action
+# explicite. Concurrence garantie par index uniques partiels (tenant, driver|vehicle).
+class AssignIn(BaseModel):
+    vehicle_id: str
+    request_id: Optional[str] = None   # idempotence (double-tap / rejeu réseau)
+
+
+class AssignEndIn(BaseModel):
+    request_id: Optional[str] = None
+
+
+def _assign_dto(a: Optional[dict]) -> Optional[dict]:
+    """DTO exposé au mobile — jamais de champs internes sensibles."""
+    if not a:
+        return None
+    return {
+        "id": a.get("id"),
+        "vehicle_id": a.get("vehicle_id"),
+        "status": a.get("status"),
+        "assignment_started_at": a.get("assignment_started_at"),
+        "segment_started_at": a.get("segment_started_at"),
+        "previous_vehicle_id": a.get("previous_vehicle_id"),
+        "source": a.get("source"),
+    }
+
+
+async def _assign_with_vehicle(db, tenant_id: str, a: Optional[dict]) -> Optional[dict]:
+    """Enrichit le DTO avec plaque/modèle du véhicule (données réelles uniquement)."""
+    dto = _assign_dto(a)
+    if not dto or not dto.get("vehicle_id"):
+        return dto
+    v = await db.vehicles.find_one({"id": dto["vehicle_id"], "tenant_id": tenant_id},
+                                   {"_id": 0, "plate": 1, "model": 1, "label": 1})
+    if v:
+        dto["vehicle_plate"] = v.get("plate")
+        dto["vehicle_model"] = v.get("model")
+        dto["vehicle_label"] = v.get("label")
+    return dto
+
+
+@router.get("/driver/vehicle-assignment/active")
+async def vehicle_assignment_active(user=Depends(get_current_user)):
+    """Affectation ACTIVE du chauffeur (source de vérité serveur). None si aucune."""
+    from app import vehicle_assignment as va
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    a = await va.get_active(db, tenant_id, driver_id)
+    return {"assignment": await _assign_with_vehicle(db, tenant_id, a)}
+
+
+@router.post("/driver/vehicle-assignment/take")
+async def vehicle_assignment_take(payload: AssignIn, user=Depends(get_current_user)):
+    """« Prendre ce véhicule » — crée une affectation ACTIVE persistante."""
+    from app import vehicle_assignment as va
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    authorized = await get_authorized_vehicle_ids_for_driver(db, driver_id)
+    if payload.vehicle_id not in authorized:
+        raise HTTPException(403, "Véhicule non autorisé pour ce chauffeur")
+    res = await va.take(db, tenant_id=tenant_id, driver_id=driver_id,
+                        vehicle_id=payload.vehicle_id, actor_id=user.get("email", "?"),
+                        actor_role=user.get("role", "driver"), request_id=payload.request_id)
+    if res.get("result") == "conflict":
+        code = 409
+        res["assignment"] = await _assign_with_vehicle(db, tenant_id, res.get("assignment"))
+        return {"ok": False, **res, "http_status": code}
+    res["assignment"] = await _assign_with_vehicle(db, tenant_id, res.get("assignment"))
+    return {"ok": True, **res}
+
+
+@router.post("/driver/vehicle-assignment/change")
+async def vehicle_assignment_change(payload: AssignIn, user=Depends(get_current_user)):
+    """« Changer de véhicule » — mutation atomique A->B (jamais deux ACTIVE)."""
+    from app import vehicle_assignment as va
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    authorized = await get_authorized_vehicle_ids_for_driver(db, driver_id)
+    if payload.vehicle_id not in authorized:
+        raise HTTPException(403, "Véhicule non autorisé pour ce chauffeur")
+    res = await va.change(db, tenant_id=tenant_id, driver_id=driver_id,
+                          to_vehicle_id=payload.vehicle_id, actor_id=user.get("email", "?"),
+                          actor_role=user.get("role", "driver"), request_id=payload.request_id)
+    res["assignment"] = await _assign_with_vehicle(db, tenant_id, res.get("assignment"))
+    if res.get("result") == "conflict":
+        return {"ok": False, **res, "http_status": 409}
+    return {"ok": True, **res}
+
+
+@router.post("/driver/vehicle-assignment/end")
+async def vehicle_assignment_end(payload: AssignEndIn, user=Depends(get_current_user)):
+    """« Fin de service » — libère le véhicule (idempotent)."""
+    from app import vehicle_assignment as va
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    driver_id = await resolve_driver_id_for_user(db, user)
+    if not driver_id:
+        raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+    res = await va.end(db, tenant_id=tenant_id, driver_id=driver_id,
+                       actor_id=user.get("email", "?"), actor_role=user.get("role", "driver"),
+                       request_id=payload.request_id)
+    return {"ok": res.get("result") in ("ok", "noop"), **res}
+
+
 # ---------- Phase 2 — Bascule Privé / Professionnel (backend autoritaire) ----------
 @router.get("/driver/private-mode")
 async def driver_private_mode_get(user=Depends(get_current_user)):
@@ -226,13 +339,19 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
                 "can_switch": False, "can_switch_reason": gate.R_KILL_SWITCH,
                 "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
                 "private_odometer_supported": False}
-    sess = await ble_engine.get_current_session(db, driver_id)
-    if not sess or not sess.get("vehicle_id"):
+    # Résolution du VÉHICULE ACTIF — source de vérité = affectation persistante
+    # (vehicle_assignments). Fallback : session BLE/présence (rétro-compat).
+    # SEULE intégration autorisée avec le Mode Privé (moteur inchangé).
+    from app import vehicle_assignment as va
+    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        vehicle_id = sess.get("vehicle_id") if sess else None
+    if not vehicle_id:
         return {"state": pm.UNKNOWN, "allowed": False, "reason": gate.R_NO_VEHICLE,
                 "can_switch": False, "can_switch_reason": gate.R_NO_VEHICLE,
                 "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
                 "private_odometer_supported": False}
-    vehicle_id = sess["vehicle_id"]
     vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0}) or {}
     tracker_id = vehicle.get("navixy_tracker_id")
     model = pm.resolve_model(vehicle.get("model"))
@@ -327,6 +446,12 @@ async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(get_curre
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
     async def _resolve_session(_db, _drv):
+        # Véhicule actif = affectation persistante (source de vérité) ; fallback session BLE.
+        # On fournit au moteur un dict-session minimal {vehicle_id}. Le MOTEUR est inchangé.
+        from app import vehicle_assignment as va
+        vid = await va.resolve_active_vehicle(_db, _drv, tenant_id)
+        if vid:
+            return {"vehicle_id": vid}
         return await ble_engine.get_current_session(_db, _drv)
 
     tenant_id = user.get("tenant_id") or "default"
