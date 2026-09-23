@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  RefreshControl, ActivityIndicator, Modal, FlatList,
+  RefreshControl, ActivityIndicator, Modal, FlatList, AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -57,7 +57,6 @@ export default function DriverScreenManual() {
   const nav = useNavigation<Nav>();
   const [vehicle, setVehicle] = useState<SessionVehicle | null>(null);
   const [connected, setConnected] = useState<boolean>(false);
-  const [loadingVehicle, setLoadingVehicle] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [myVehicles, setMyVehicles] = useState<Vehicle[]>([]);
   const [pickerStatus, setPickerStatus] = useState<PickerStatus>('idle');
@@ -66,12 +65,19 @@ export default function DriverScreenManual() {
   const [pendingChange, setPendingChange] = useState<Vehicle | null>(null);  // confirmation CHANGE A->B
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<KmPeriod>('today');
-  const autoOpenedRef = useRef(false);
 
   const privateMode = usePrivateMode();
   // Source de vérité du VÉHICULE ACTIF = affectation persistante (Lot 2 backend).
-  const assignmentStore = useAssignmentStore();
-  const assignment = assignmentStore.assignment;
+  // Sélecteurs STABLES (évite les re-render/boucles : on ne prend pas l'objet store entier).
+  const assignment = useAssignmentStore((s) => s.assignment);
+  const asgUxState = useAssignmentStore((s) => s.uxState);
+  const asgOffline = useAssignmentStore((s) => s.offline);
+  const asgInFlight = useAssignmentStore((s) => s.inFlight);
+  const asgActionError = useAssignmentStore((s) => s.actionError);
+  const asgRefresh = useAssignmentStore((s) => s.refresh);
+  const asgTake = useAssignmentStore((s) => s.take);
+  const asgChange = useAssignmentStore((s) => s.change);
+  const asgEnd = useAssignmentStore((s) => s.end);
   // Véhicule dérivé de l'affectation (pour km/odomètre qui ont besoin d'un vehicle.id).
   const vehicleFromAssignment: SessionVehicle | null = assignment
     ? { id: assignment.vehicle_id, plate: assignment.vehicle_plate || null, model: assignment.vehicle_model || null }
@@ -101,16 +107,11 @@ export default function DriverScreenManual() {
   }, []);
 
   const loadVehicle = useCallback(async () => {
-    setLoadingVehicle(true);
-    try {
-      // Source de vérité = affectation persistante (GET /vehicle-assignment/active).
-      await assignmentStore.refresh();
-    } finally {
-      setLoadingVehicle(false);
-    }
-  }, [assignmentStore]);
+    // Source de vérité = affectation persistante. Le store gère loading/ready/error/offline.
+    await asgRefresh();
+  }, [asgRefresh]);
 
-  // Synchronise l'état local `vehicle`/`connected` avec l'affectation (rétro-compat du reste de l'écran).
+  // Synchronise l'état local `vehicle` (rétro-compat km/odo) avec l'affectation.
   useEffect(() => {
     if (assignment) {
       setVehicle({
@@ -118,28 +119,27 @@ export default function DriverScreenManual() {
         plate: assignment.vehicle_plate || null,
         model: assignment.vehicle_model || null,
       } as SessionVehicle);
-      setConnected(!assignmentStore.offline);
+      setConnected(!asgOffline);
     } else {
       setVehicle(null);
       setConnected(false);
     }
-  }, [assignment, assignmentStore.offline]);
+  }, [assignment, asgOffline]);
 
+  // BOOT : charge l'affectation UNE fois au montage (asgRefresh est une action zustand STABLE).
   useEffect(() => {
-    (async () => {
-      await loadVehicle();
-      await loadAuthorized();
-    })();
-  }, [loadVehicle, loadAuthorized]);
+    asgRefresh();
+    loadAuthorized();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Retour au premier plan -> re-lecture de l'affectation réelle (jamais d'état obsolète).
   useEffect(() => {
-    if (autoOpenedRef.current) return;
-    if (loadingVehicle || pickerStatus !== 'ready') return;
-    if (!vehicle?.id && myVehicles.length > 0) {
-      autoOpenedRef.current = true;
-      setPickerOpen(true);
-    }
-  }, [loadingVehicle, pickerStatus, vehicle?.id, myVehicles.length]);
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') asgRefresh();
+    });
+    return () => sub.remove();
+  }, [asgRefresh]);
 
   const openPicker = useCallback(async () => {
     setPickerOpen(true);
@@ -161,7 +161,7 @@ export default function DriverScreenManual() {
     // Aucun véhicule actif -> TAKE direct
     setSwitching(true);
     try {
-      const res = await assignmentStore.take(v.id);
+      const res = await asgTake(v.id);
       if (res && res.result === 'ok') {
         setPickerOpen(false);
         await privateMode.refresh();
@@ -169,7 +169,7 @@ export default function DriverScreenManual() {
     } finally {
       setSwitching(false);
     }
-  }, [switching, assignment, assignmentStore, privateMode]);
+  }, [switching, assignment, asgTake, privateMode]);
 
   // Confirmation du changement A -> B (jamais deux ACTIVE ; A reste si B occupé).
   const confirmChange = useCallback(async () => {
@@ -177,36 +177,36 @@ export default function DriverScreenManual() {
     const target = pendingChange;
     setSwitching(true);
     try {
-      const res = await assignmentStore.change(target.id);
+      const res = await asgChange(target.id);
       setPendingChange(null);
       if (res && res.result === 'ok') {
         setPickerOpen(false);
         await privateMode.refresh();
       }
-      // conflit -> assignmentStore.actionError affiché ; A reste ACTIVE (backend garanti)
+      // conflit -> asgActionError affiché ; A reste ACTIVE (backend garanti)
     } finally {
       setSwitching(false);
     }
-  }, [pendingChange, switching, assignmentStore, privateMode]);
+  }, [pendingChange, switching, asgChange, privateMode]);
 
   // « Fin de service » — autorisée UNIQUEMENT si Mode Privé = BUSINESS CONFIRMÉ (fail-closed).
   const endGate = endServiceGate(privateMode.status, false);
   const endService = useCallback(async () => {
     if (!endGate.allowed) return;               // garde-fou : bouton bloqué si mode != BUSINESS
-    const res = await assignmentStore.end();
+    const res = await asgEnd();
     if (res && res.result === 'ok') {
       await privateMode.refresh();
     }
-  }, [endGate.allowed, assignmentStore, privateMode]);
+  }, [endGate.allowed, asgEnd, privateMode]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
-      loadVehicle(), loadAuthorized(), privateMode.refresh(),
+      asgRefresh(), loadAuthorized(), privateMode.refresh(),
       km.refresh(), odo.refresh(), tripsStore.refresh(),
     ]);
     setRefreshing(false);
-  }, [loadVehicle, loadAuthorized, privateMode, km, odo, tripsStore]);
+  }, [asgRefresh, loadAuthorized, privateMode, km, odo, tripsStore]);
 
   const highlightId = vehicle?.id
     ?? (defaultVehicleId && myVehicles.some((v) => v.id === defaultVehicleId)
@@ -217,7 +217,7 @@ export default function DriverScreenManual() {
   const isPrivate = st === 'PRIVATE';
   const isBusiness = st === 'BUSINESS';
   const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
-  const hasVehicle = !!vehicle?.id;
+  const hasVehicle = !!assignment;
   const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
 
   // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
@@ -251,19 +251,34 @@ export default function DriverScreenManual() {
       >
         <Text style={styles.screenTitle} accessibilityRole="header">Conduite</Text>
 
-        {/* ============ VÉHICULE ACTUEL ============ */}
+        {/* ============ MON VÉHICULE — états UX EXCLUSIFS (jamais deux à la fois) ============ */}
         <Text style={styles.sectionLabel}>Mon véhicule</Text>
         <View style={styles.vehicleCard} testID="manual-vehicle-card">
-          {loadingVehicle ? (
-            <ActivityIndicator color={colors.primary} />
+          {asgUxState === 'loading' ? (
+            /* LOADING : uniquement le spinner + texte. AUCUN bouton "Choisir". */
+            <View style={styles.centerBox} testID="manual-vehicle-loading">
+              <ActivityIndicator color={colors.primary} />
+              <Text style={styles.loadingText}>Chargement de votre véhicule…</Text>
+            </View>
+          ) : asgUxState === 'error' ? (
+            /* ERROR : erreur réseau/API != aucun véhicule. Réessayer. */
+            <View testID="manual-vehicle-error">
+              <Text style={styles.emptyText}>Impossible de vérifier votre véhicule.</Text>
+              <TouchableOpacity style={styles.changeBtn} onPress={loadVehicle} testID="manual-vehicle-retry">
+                <Text style={styles.changeBtnText}>Réessayer</Text>
+              </TouchableOpacity>
+            </View>
           ) : hasVehicle ? (
+            /* ACTIVE (ou OFFLINE avec cache) : véhicule + En service depuis + actions. */
             <>
               <View style={styles.vehicleRowTop}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.vehiclePlate} testID="manual-vehicle-plate">
-                    {vehicle?.plate || 'Véhicule'}
+                    {assignment?.vehicle_plate || assignment?.vehicle_label || 'Véhicule'}
                   </Text>
-                  {vehicle?.model ? <Text style={styles.vehicleModel}>{vehicle.model}</Text> : null}
+                  {assignment?.vehicle_model ? (
+                    <Text style={styles.vehicleModel}>{assignment.vehicle_model}</Text>
+                  ) : null}
                   {assignment?.segment_started_at ? (
                     <Text style={styles.vehicleModel} testID="manual-since">
                       En service depuis {fmtTime(assignment.segment_started_at)}
@@ -271,66 +286,66 @@ export default function DriverScreenManual() {
                   ) : null}
                 </View>
                 <View
-                  style={[styles.connPill, { backgroundColor: assignmentStore.offline ? colors.persoSoft : colors.successSoft }]}
-                  accessibilityLabel={assignmentStore.offline ? 'Mode hors ligne' : 'En service'}
+                  style={[styles.connPill, { backgroundColor: asgOffline ? colors.persoSoft : colors.successSoft }]}
+                  accessibilityLabel={asgOffline ? 'Mode hors ligne' : 'En service'}
                 >
-                  <View style={[styles.dot, { backgroundColor: assignmentStore.offline ? colors.textMuted : colors.success }]} />
-                  <Text style={[styles.connText, { color: assignmentStore.offline ? colors.textMuted : colors.success }]}>
-                    {assignmentStore.offline ? 'Hors ligne' : 'En service'}
+                  <View style={[styles.dot, { backgroundColor: asgOffline ? colors.textMuted : colors.success }]} />
+                  <Text style={[styles.connText, { color: asgOffline ? colors.textMuted : colors.success }]}>
+                    {asgOffline ? 'Hors ligne' : 'En service'}
                   </Text>
                 </View>
               </View>
-            </>
-          ) : assignmentStore.uxState === 'error' ? (
-            <View>
-              <Text style={styles.emptyText} testID="manual-vehicle-error">
-                Impossible de vérifier votre véhicule.
-              </Text>
-              <TouchableOpacity style={styles.changeBtn} onPress={loadVehicle} testID="manual-vehicle-retry">
-                <Text style={styles.changeBtnText}>Réessayer</Text>
+
+              {/* Changer de véhicule (bloqué hors ligne). */}
+              <TouchableOpacity
+                style={styles.changeBtn}
+                onPress={openPicker}
+                disabled={asgOffline}
+                testID="manual-change-vehicle"
+                accessibilityRole="button"
+                accessibilityLabel="Changer de véhicule"
+              >
+                <Text style={styles.changeBtnText}>Changer de véhicule</Text>
               </TouchableOpacity>
-            </View>
+
+              {/* Fin de service : TOUJOURS visible si véhicule actif ; action gated par endGate. */}
+              <TouchableOpacity
+                style={[styles.endBtn, !endGate.allowed && styles.endBtnDisabled]}
+                onPress={endService}
+                disabled={!endGate.allowed || asgInFlight || asgOffline}
+                testID="manual-end-service"
+                accessibilityRole="button"
+                accessibilityLabel="Fin de service"
+              >
+                <Text style={[styles.endBtnText, !endGate.allowed && styles.endBtnTextDisabled]}>
+                  Fin de service
+                </Text>
+              </TouchableOpacity>
+              {!endGate.allowed && endGate.message ? (
+                <Text style={styles.endHint} testID="manual-end-hint">{endGate.message}</Text>
+              ) : null}
+              {asgActionError ? (
+                <Text style={styles.endHint} testID="manual-assignment-error">{asgActionError}</Text>
+              ) : null}
+            </>
           ) : (
-            <Text style={styles.emptyText} testID="manual-no-vehicle">Aucun véhicule en cours</Text>
+            /* NONE : aucun véhicule actif -> proposer Choisir. */
+            <View testID="manual-no-vehicle">
+              <Text style={styles.emptyText}>Aucun véhicule en cours</Text>
+              <TouchableOpacity
+                style={styles.changeBtn}
+                onPress={openPicker}
+                testID="manual-choose-vehicle"
+                accessibilityRole="button"
+                accessibilityLabel="Choisir un véhicule"
+              >
+                <Text style={styles.changeBtnText}>Choisir un véhicule</Text>
+              </TouchableOpacity>
+              {asgActionError ? (
+                <Text style={styles.endHint} testID="manual-assignment-error">{asgActionError}</Text>
+              ) : null}
+            </View>
           )}
-
-          {/* Bouton principal : Choisir (si aucun) ou Changer (si actif). Pas de "reprendre". */}
-          {assignmentStore.uxState !== 'error' ? (
-            <TouchableOpacity
-              style={styles.changeBtn}
-              onPress={openPicker}
-              disabled={assignmentStore.offline}
-              testID="manual-change-vehicle"
-              accessibilityRole="button"
-              accessibilityLabel={hasVehicle ? 'Changer de véhicule' : 'Choisir un véhicule'}
-            >
-              <Text style={styles.changeBtnText}>
-                {hasVehicle ? 'Changer de véhicule' : 'Choisir un véhicule'}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-
-          {/* Fin de service : distinct, autorisé UNIQUEMENT si Mode Privé = BUSINESS confirmé. */}
-          {hasVehicle ? (
-            <TouchableOpacity
-              style={[styles.endBtn, !endGate.allowed && styles.endBtnDisabled]}
-              onPress={endService}
-              disabled={!endGate.allowed || assignmentStore.inFlight || assignmentStore.offline}
-              testID="manual-end-service"
-              accessibilityRole="button"
-              accessibilityLabel="Fin de service"
-            >
-              <Text style={[styles.endBtnText, !endGate.allowed && styles.endBtnTextDisabled]}>
-                Fin de service
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-          {hasVehicle && !endGate.allowed && endGate.message ? (
-            <Text style={styles.endHint} testID="manual-end-hint">{endGate.message}</Text>
-          ) : null}
-          {assignmentStore.actionError ? (
-            <Text style={styles.endHint} testID="manual-assignment-error">{assignmentStore.actionError}</Text>
-          ) : null}
         </View>
 
         {/* ============ MODE ============ */}
@@ -630,6 +645,8 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
   connText: { fontSize: font.size.xs, fontWeight: '700' },
   emptyText: { color: colors.textMuted, fontSize: font.size.md, paddingVertical: spacing.md },
+  centerBox: { alignItems: 'center', paddingVertical: spacing.lg, gap: spacing.sm },
+  loadingText: { color: colors.textMuted, fontSize: font.size.md },
   changeBtn: {
     marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',
