@@ -456,66 +456,60 @@ def _position_is_anchor_frozen(sd: dict, cur_lat, cur_lng) -> bool:
 # Anti-faux-positif : une absence/erreur/history vide ne confirme JAMAIS.
 # ---------------------------------------------------------------------------
 def _command_response_matches(entry: dict, target_mode: str) -> bool:
-    """L'entrée d'historique porte-t-elle une RÉPONSE device confirmant `target_mode` ?
+    """La réponse DEVICE confirme-t-elle explicitement `target_mode` ?
 
-    Deux formes documentées (Navixy history `extra.command.response`) :
-      * commande HTTP     : la PREUVE est le TEXTE renvoyé par le device
-        (response.body / extra.full_message / entry.message).
-      * commande HARDWARE (Teltonika raw) : response ne porte QUE `success`.
-        La PREUVE = cmd.name/param désignant EXACTEMENT la commande privatemode du
-        mode visé ET response.success is True.
+    Preuve autoritative acceptée : TEXTE explicite réellement renvoyé par le
+    device dans response.body / extra.full_message / entry.message.
 
-    FAIL-CLOSED strict :
-      - échec explicite (success is False / error non vide) -> jamais confirmé ;
-      - le TEXTE n'utilise JAMAIS cmd.name/param (sinon un name='privatemode ON' avec
-        success=None serait faussement confirmé) ;
-      - l'ACK HARDWARE exige success is True (pas None) + match de commande STRICT.
+    Important : `response.success is True` signifie seulement que la commande
+    a été acceptée/traitée par la couche de commande. Ce n'est PAS une preuve de
+    l'état réel ON/OFF du tracker et ne doit jamais, à lui seul, confirmer le mode.
+
+    FAIL-CLOSED :
+      - success=False ou error non vide -> jamais confirmé ;
+      - cmd.name/cmd.param ne sont jamais utilisés comme preuve ;
+      - sans texte device explicite -> False, puis fallback télémétrique.
     """
     extra = entry.get("extra") or {}
     cmd = extra.get("command") or {}
     resp = cmd.get("response") or {}
 
-    # Échec explicite -> jamais une preuve.
     if resp.get("success") is False:
         return False
     if isinstance(resp.get("error"), str) and resp.get("error").strip():
         return False
 
     def _norm(*parts) -> str:
-        """minuscule + espaces normalisés (aucun cmd.name/param ici pour le TEXTE)."""
-        return " ".join(" ".join(str(p).split()) for p in parts if p is not None).lower()
+        return " ".join(
+            " ".join(str(p).split())
+            for p in parts
+            if p is not None
+        ).lower()
 
-    # ---- (1) Preuve TEXTUELLE (réponse HTTP du device) : body / full_message / message ----
-    # On N'INCLUT PAS cmd.name/param : le nom de commande n'est pas une réponse device.
-    text = _norm(resp.get("body"), extra.get("full_message"), entry.get("message"))
-    if text:
-        if target_mode == PRIVATE and (("privatemode on" in text) or ("privatemode:1" in text)
-                                       or ("private mode on" in text)):
-            return True
-        if target_mode == BUSINESS and (("privatemode off" in text) or ("privatemode:0" in text)
-                                        or ("private mode off" in text)):
-            return True
+    # Ne jamais inclure cmd.name/cmd.param : le nom de la commande envoyée
+    # n'est pas une réponse du device.
+    text = _norm(
+        resp.get("body"),
+        extra.get("full_message"),
+        entry.get("message"),
+    )
+    if not text:
+        return False
 
-    # ---- (2) Preuve ACK HARDWARE : name/param STRICT + success is True (jamais None) ----
-    if resp.get("success") is True:
-        name_param = _norm(cmd.get("name"), cmd.get("param"))
-        # match STRICT par token (évite un substring permissif type 'privatemode online') :
-        tokens = set(name_param.replace(":", " : ").split())  # sépare aussi 'privatemode:1'
-        joined = name_param
-        if target_mode == PRIVATE:
-            want_forms = ("privatemode on", "privatemode:1")
-        else:
-            want_forms = ("privatemode off", "privatemode:0")
-        for w in want_forms:
-            # accepte la forme exacte contiguë OU la présence stricte des 2 tokens attendus
-            if joined == w or joined.startswith(w + " ") or joined.endswith(" " + w) \
-                    or (" " + w + " ") in (" " + joined + " "):
-                return True
-            # forme 'privatemode:1' éclatée en tokens {'privatemode',':','1'}
-            if ":" in w:
-                base, val = w.split(":", 1)
-                if base in tokens and val in tokens and ":" in tokens:
-                    return True
+    if target_mode == PRIVATE:
+        return (
+            "privatemode on" in text
+            or "privatemode:1" in text
+            or "private mode on" in text
+        )
+
+    if target_mode == BUSINESS:
+        return (
+            "privatemode off" in text
+            or "privatemode:0" in text
+            or "private mode off" in text
+        )
+
     return False
 
 
