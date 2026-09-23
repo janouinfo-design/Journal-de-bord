@@ -119,6 +119,7 @@ async def _run_fuel_fx():
 BEACON_JOB_ID = "beacon_poll"
 SWEEP_JOB_ID = "session_sweep"
 CONFLICT_ALERT_JOB_ID = "conflict_alerts"
+ASSIGNMENT_RECONCILE_JOB_ID = "vehicle_assignment_reconcile"
 
 
 async def _run_beacon_poll():
@@ -180,6 +181,19 @@ async def _run_conflict_alerts():
         logger.error("Conflict alert job error: %s", e)
 
 
+async def _run_assignment_reconcile():
+    """Toutes les 5 min : réconcilie les events d'affectation véhicule PENDING (idempotent,
+    déterministe, tous tenants). Ne devine jamais ; laisse les cas ambigus en PENDING+log."""
+    try:
+        from app.db import get_raw_db
+        from app.vehicle_assignment import reconcile_pending_vehicle_assignment_events
+        stats = await reconcile_pending_vehicle_assignment_events(get_raw_db())
+        if stats.get("scanned"):
+            logger.info("Vehicle-assignment reconcile: %s", stats)
+    except Exception as e:
+        logger.error("Vehicle-assignment reconcile error: %s", e)
+
+
 async def _persist_next_run(db):
     if _scheduler is None:
         return
@@ -232,6 +246,11 @@ async def init_scheduler():
     _scheduler.add_job(
         _run_conflict_alerts, IntervalTrigger(minutes=10),
         id=CONFLICT_ALERT_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # Réconciliation des events d'affectation véhicule PENDING (idempotent) — toutes les 5 min.
+    _scheduler.add_job(
+        _run_assignment_reconcile, IntervalTrigger(minutes=5),
+        id=ASSIGNMENT_RECONCILE_JOB_ID, replace_existing=True, max_instances=1, coalesce=True,
     )
     await _persist_next_run(db)
     logger.info("Scheduler initialised (enabled=%s, interval_min=%s)",

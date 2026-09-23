@@ -234,3 +234,64 @@ async def private_mode_kill_switch(payload: KillSwitchIn, user=Depends(require_r
     from app import private_mode_gate as gate
     db = get_db()
     return await gate.set_kill_switch(db, payload.active, actor=user.get("email", "?"))
+
+
+# ---------- Admin : affectations conducteur <-> véhicule (Lot 1 backend) ----------
+# Visibilité gestionnaire + « Forcer fin de service ». Tenant-scopé (require_roles).
+@router.get("/vehicle-assignments/active")
+async def admin_list_active_assignments(user=Depends(require_roles("admin", "manager"))):
+    """Liste des affectations ACTIVE du tenant : véhicule / conducteur / depuis / statut."""
+    from app import vehicle_assignment as va  # noqa: F401 (cohérence d'import)
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    rows = await db.vehicle_assignments.find(
+        {"tenant_id": tenant_id, "status": "ACTIVE"}, {"_id": 0}).to_list(1000)
+    out = []
+    for a in rows:
+        v = await db.vehicles.find_one({"id": a.get("vehicle_id")},
+                                       {"_id": 0, "plate": 1, "model": 1}) or {}
+        d = await db.drivers.find_one({"id": a.get("driver_id")},
+                                      {"_id": 0, "name": 1}) or {}
+        out.append({
+            "id": a.get("id"),
+            "vehicle_id": a.get("vehicle_id"),
+            "vehicle_plate": v.get("plate"),
+            "driver_id": a.get("driver_id"),
+            "driver_name": d.get("name"),
+            "since": a.get("segment_started_at") or a.get("assignment_started_at"),
+            "status": a.get("status"),
+        })
+    out.sort(key=lambda x: (x.get("vehicle_plate") or ""))
+    return {"assignments": out}
+
+
+class ForceEndIn(BaseModel):
+    vehicle_id: str
+    reason: Optional[str] = None
+    request_id: Optional[str] = None
+
+
+@router.post("/vehicle-assignments/force-end")
+async def admin_force_end_assignment(payload: ForceEndIn,
+                                     user=Depends(require_roles("admin", "manager"))):
+    """« Forcer la fin de service » (gestionnaire). Audité (ADMIN_FORCE_RELEASE)."""
+    from app import vehicle_assignment as va
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    res = await va.force_end(db, tenant_id=tenant_id, vehicle_id=payload.vehicle_id,
+                             actor_id=user.get("email", "?"), actor_role=user.get("role", "admin"),
+                             request_id=payload.request_id,
+                             reason=va.END_REASON_ADMIN)
+    return {"ok": res.get("result") in ("ok", "noop"), **res}
+
+
+@router.get("/vehicle-assignments/history")
+async def admin_assignment_history(vehicle_id: Optional[str] = None,
+                                   driver_id: Optional[str] = None,
+                                   user=Depends(require_roles("admin", "manager"))):
+    """Historique reconstruit UNIQUEMENT depuis les events (jamais le doc courant)."""
+    from app import vehicle_assignment as va
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    return {"events": await va.history(db, tenant_id, vehicle_id=vehicle_id,
+                                       driver_id=driver_id)}
