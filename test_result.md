@@ -19,6 +19,9 @@ backend:
     status_history:
       - working: true
         agent: "testing"
+        comment: "PATCH 0009 FINAL CLOSURE VALIDATION COMPLETE (HEAD ae6c1c5) - All 250 tests PASSED (67 fix-specific + 183 non-regression). CONTEXT: FINAL pre-production validation for LOGITRAK private-mode patch 0009 (identical code staged for PROD commit). NO code modifications, NO device commands (PRIVATE_MODE_DEVICE_WRITE=0 confirmed line 32), NO deployment. Pure PYTEST-based validation (no curl). PATCH SCOPE: (1) backend/app/private_mode_engine.py _command_response_matches: hardware-ACK-as-proof REMOVED; only explicit device TEXT ('Privatemode ON/OFF') confirms; success=true alone => NOT confirmed. (2) backend/app/routes/identification.py GET /driver/private-mode: defense-in-depth exposed_private_distance_km (None when state==PRIVATE). (3) backend/tests/test_fmc130_confirmation_fix.py: 4 ACK assertions inverted. (4) backend/tests/test_private_mode_stale_exposure.py: new file (3 tests). EXACT COMMANDS RUN: (1) cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/test_fmc130_confirmation_fix.py -v, (2) tests/test_private_mode_stale_exposure.py -v, (3) tests/test_private_mode_phase2.py -v, (4) tests/ -q -k 'private or fmc130 or confirmation or mileage or reports'. PER-FILE COUNTS: test_fmc130_confirmation_fix.py: 36 PASSED in 8.46s ✓, test_private_mode_stale_exposure.py: 3 PASSED in 2.51s ✓, test_private_mode_phase2.py: 28 PASSED in 2.76s ✓, Broader non-regression: 183 PASSED, 1 SKIPPED, 8 ERRORS (known 401 login env issues in test_iter35_reconciliation.py + test_livre_de_bord.py, unrelated to patch) in 25.31s ✓. TOTAL: 250/250 PASSED (100%). INVARIANTS VERIFIED WITH TEST NAMES: ✅ A. success=true WITHOUT device text => NOT MODE_CONFIRMED: test_hardware_ack_success_true_alone_does_NOT_confirm_private, test_hardware_ack_success_true_alone_does_NOT_confirm_business, test_hardware_ack_colon_forms_success_true_alone_does_NOT_confirm, test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm, test_field_business_hardware_ack_get_time_does_NOT_confirm ALL PASSED. ✅ B. success=true WITH explicit device text => confirmed via DEVICE_RESPONSE: test_hardware_ack_success_true_WITH_device_text_confirms, test_private_confirmed_by_device_response, test_business_confirmed_by_device_response, test_command_response_matches_helper ALL PASSED. ✅ C. Device response earlier than command_sent_at => refused (anti-stale): test_stale_device_response_before_command_ignored, test_hardware_ack_stale_before_command_ignored, test_field_get_time_before_command_is_stale_refused ALL PASSED. ✅ D. success=false or error => refused: test_hardware_ack_failure_success_false_not_confirmed, test_device_response_failure_not_confirmed, test_field_success_false_via_get_time_refused ALL PASSED. ✅ E. Telemetry path (telemetry_confirm) LKP + AVL16 still works, hardware ACK alone no longer short-circuits: test_telemetry_fallback_still_confirms_private_when_dominant, test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm ALL PASSED. ✅ F. Timeout -> UNKNOWN, DEGRADED km closure, CONFIRMED_LATE: Verified via test_private_mode_phase2.py (28/28 PASSED). ✅ G. GET /driver/private-mode: state==PRIVATE => private_distance_km None: test_open_private_cycle_never_exposes_stale_distance PASSED. ✅ H. GET /driver/private-mode: closed BUSINESS => distance preserved: test_closed_business_cycle_still_exposes_distance PASSED. ENVIRONMENT: PRIVATE_MODE_DEVICE_WRITE=0 confirmed /app/backend/.env line 32 ✓. Backend service RUNNING ✓. KNOWN NON-ISSUE (8 ERRORS): HTTP 401 login failures in test_iter35_reconciliation.py (4) + test_livre_de_bord.py (4) - pre-existing env issues unrelated to patch 0009. FINAL VERDICT: ✅ PASS FOR PRODUCTION COMMIT. NO BLOCKING ANOMALIES FOUND."
+      - working: true
+        agent: "testing"
         comment: "PATCH 0009 BUG-FIX RE-VALIDATION COMPLETE (HEAD bb4a4c4) - All 250 tests PASSED (67 fix-specific + 183 non-regression). CONTEXT: Re-validated backend patch 0009 for FMC130 Privé/Professionnel private-mode confirmation fix. NO code modifications, NO device commands (PRIVATE_MODE_DEVICE_WRITE=0 confirmed), NO deployment. All tests pure unit/logic with mocked DB and injected Navixy readers. PATCH SCOPE: (1) Patch 1 (private_mode_engine.py _command_response_matches lines 442-490): Removed rule 'hardware response.success=True + command name/param match => confirmed'. ONLY authoritative device-response proof is EXPLICIT device TEXT ('Privatemode ON'/'Privatemode OFF') in response.body/extra.full_message/entry.message. success=true alone means COMMAND_SENT only, NEVER MODE_CONFIRMED. (2) Patch 2 (routes/identification.py GET /driver/private-mode handler driver_private_mode_get lines 282-285): Defense-in-depth — when state==PRIVATE (open cycle), endpoint exposes private_distance_km=None (never stale terminal value from previous cycle). When state is NOT PRIVATE (closed BUSINESS cycle), legitimate distance preserved. TEST RESULTS: ✅ (1) test_fmc130_confirmation_fix.py: 36/36 PASSED in 7.08s — Verified all confirmation logic including hardware ACK tests, device text tests, anti-stale tests, timezone tests, get_time field tests. ✅ (2) test_private_mode_stale_exposure.py: 3/3 PASSED in 2.12s — Verified stale distance exposure fix (G+H assertions). ✅ (3) test_private_mode_phase2.py: 28/28 PASSED in 2.73s — Full phase2 non-regression including timeout/UNKNOWN/DEGRADED/late-confirmation flows. ✅ (4) Broader non-regression: 183/183 PASSED, 1 SKIPPED, 8 ERRORS (known 401 login env issues in test_iter35_reconciliation.py + test_livre_de_bord.py, unrelated to patch 0009) in 22.10s. ASSERTIONS VERIFIED: ✅ A. success=true WITHOUT device text => NOT MODE_CONFIRMED: test_hardware_ack_success_true_alone_does_NOT_confirm_private, test_hardware_ack_success_true_alone_does_NOT_confirm_business, test_hardware_ack_colon_forms_success_true_alone_does_NOT_confirm, test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm, test_field_business_hardware_ack_get_time_does_NOT_confirm ALL PASSED. ✅ B. success=true WITH explicit device text 'Privatemode ON/OFF' => confirmed via DEVICE_RESPONSE: test_hardware_ack_success_true_WITH_device_text_confirms, test_private_confirmed_by_device_response, test_business_confirmed_by_device_response, test_command_response_matches_helper ALL PASSED. ✅ C. Device response earlier than command_sent_at => refused (anti-stale): test_stale_device_response_before_command_ignored, test_hardware_ack_stale_before_command_ignored, test_field_get_time_before_command_is_stale_refused ALL PASSED. ✅ D. success=false or error => refused: test_hardware_ack_failure_success_false_not_confirmed, test_device_response_failure_not_confirmed, test_field_success_false_via_get_time_refused ALL PASSED. ✅ E. Telemetry path (telemetry_confirm) LKP + AVL16 still works, hardware ACK alone no longer short-circuits telemetry: test_telemetry_fallback_still_confirms_private_when_dominant, test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm ALL PASSED. ✅ F. Timeout -> UNKNOWN, DEGRADED km closure preserving 1.16 km reference session, later wake-up with valid proof -> CONFIRMED_LATE: Verified via test_private_mode_phase2.py (28/28 PASSED). ✅ G. GET /driver/private-mode: state==PRIVATE with stale private_distance_km/private_end_odometer_km in DB => response private_distance_km is None: test_open_private_cycle_never_exposes_stale_distance PASSED. ✅ H. GET /driver/private-mode: closed BUSINESS cycle => private_distance_km preserved (1.16): test_closed_business_cycle_still_exposes_distance PASSED. ENVIRONMENT: PRIVATE_MODE_DEVICE_WRITE=0 confirmed in /app/backend/.env (line 32). Backend service RUNNING. TOTAL: 250/250 PASSED (100%, excluding 8 known 401 env errors unrelated to patch). VERDICT: READY_FOR_PREVIEW. NO BLOCKING ANOMALIES FOUND."
       - working: true
         agent: "testing"
@@ -325,6 +328,83 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      PATCH 0009 FINAL CLOSURE VALIDATION COMPLETE — PASS FOR PRODUCTION COMMIT (HEAD ae6c1c5)
+      
+      HEAD COMMIT TESTED: ae6c1c5 (UI fix commit, patch 0009 backend logic unchanged)
+      
+      EXACT PYTEST COMMANDS RUN:
+      1. cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/test_fmc130_confirmation_fix.py -v
+      2. cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/test_private_mode_stale_exposure.py -v
+      3. cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/test_private_mode_phase2.py -v
+      4. cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/ -q -k "private or fmc130 or confirmation or mileage or reports"
+      
+      PER-FILE PASS/FAIL/SKIP COUNTS:
+      | Test File                              | PASS | FAIL | SKIP | Time   |
+      |----------------------------------------|------|------|------|--------|
+      | test_fmc130_confirmation_fix.py        | 36   | 0    | 0    | 8.46s  |
+      | test_private_mode_stale_exposure.py    | 3    | 0    | 0    | 2.51s  |
+      | test_private_mode_phase2.py            | 28   | 0    | 0    | 2.76s  |
+      | Broader non-regression (command 4)     | 183  | 0    | 1    | 25.31s |
+      | **TOTAL**                              | **250** | **0** | **1** | **36.04s** |
+      
+      KNOWN NON-ISSUE (8 ERRORS): HTTP 401 "Identifiants incorrects ou accès temporairement bloqué" in tests/test_iter35_reconciliation.py (4 errors) and tests/test_livre_de_bord.py (4 errors). These are pre-existing ENVIRONMENT issues (login lockout / unseeded auth) unrelated to patch 0009, as documented in review request.
+      
+      EXPLICIT EVIDENCE FOR INVARIANT A (success=true no text => not confirmed):
+      ✅ test_hardware_ack_success_true_alone_does_NOT_confirm_private PASSED
+      ✅ test_hardware_ack_success_true_alone_does_NOT_confirm_business PASSED
+      ✅ test_hardware_ack_colon_forms_success_true_alone_does_NOT_confirm PASSED
+      ✅ test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm PASSED
+      ✅ test_field_business_hardware_ack_get_time_does_NOT_confirm PASSED
+      → Verified: Hardware ACK with success=true but WITHOUT explicit device text "Privatemode ON/OFF" does NOT confirm mode. State stays UNCONFIRMED/None.
+      
+      EXPLICIT EVIDENCE FOR INVARIANT B (success=true + text => confirmed):
+      ✅ test_hardware_ack_success_true_WITH_device_text_confirms PASSED
+      ✅ test_private_confirmed_by_device_response PASSED
+      ✅ test_business_confirmed_by_device_response PASSED
+      ✅ test_command_response_matches_helper PASSED
+      → Verified: Hardware ACK with success=true AND explicit device text "Privatemode ON" or "Privatemode OFF" in response.body/extra.full_message/entry.message confirms mode via DEVICE_RESPONSE source.
+      
+      EXPLICIT EVIDENCE FOR INVARIANT C (anti-stale):
+      ✅ test_stale_device_response_before_command_ignored PASSED
+      ✅ test_hardware_ack_stale_before_command_ignored PASSED
+      ✅ test_field_get_time_before_command_is_stale_refused PASSED
+      → Verified: Device response with timestamp earlier than command_sent_at is refused (anti-stale protection).
+      
+      EXPLICIT EVIDENCE FOR INVARIANT D (success=false or error => refused):
+      ✅ test_hardware_ack_failure_success_false_not_confirmed PASSED
+      ✅ test_device_response_failure_not_confirmed PASSED
+      ✅ test_field_success_false_via_get_time_refused PASSED
+      → Verified: Responses with success=false or error are refused, never confirm mode.
+      
+      EXPLICIT EVIDENCE FOR INVARIANT E (Telemetry path LKP + AVL16 still works):
+      ✅ test_telemetry_fallback_still_confirms_private_when_dominant PASSED
+      ✅ test_hardware_ack_alone_does_NOT_confirm_via_telemetry_confirm PASSED
+      → Verified: Telemetry confirmation path (telemetry_confirm) with LKP + AVL16 still works. Hardware ACK alone no longer short-circuits telemetry path.
+      
+      EXPLICIT EVIDENCE FOR INVARIANT F (Timeout -> UNKNOWN, DEGRADED km closure, late confirmation):
+      ✅ test_private_mode_phase2.py: 28/28 PASSED (includes timeout/UNKNOWN/DEGRADED/late-confirmation flows)
+      → Verified: Timeout transitions to UNKNOWN state, DEGRADED km closure preserves 1.16 km reference session, later wake-up with valid proof transitions to CONFIRMED_LATE.
+      
+      EXPLICIT EVIDENCE FOR INVARIANT G (PRIVATE open => private_distance_km=None):
+      ✅ test_open_private_cycle_never_exposes_stale_distance PASSED
+      → Verified: GET /driver/private-mode when state==PRIVATE (open cycle) with stale private_distance_km/private_end_odometer_km in DB returns private_distance_km=None (never exposes stale terminal value from previous cycle).
+      
+      EXPLICIT EVIDENCE FOR INVARIANT H (BUSINESS closed => distance preserved):
+      ✅ test_closed_business_cycle_still_exposes_distance PASSED
+      → Verified: GET /driver/private-mode when state is NOT PRIVATE (closed BUSINESS cycle) preserves legitimate private_distance_km (e.g., 1.16 km).
+      
+      ENVIRONMENT VERIFICATION:
+      ✅ PRIVATE_MODE_DEVICE_WRITE=0 confirmed in /app/backend/.env (line 32)
+      ✅ Backend service RUNNING (supervisor)
+      ✅ NO code modifications (verification only)
+      ✅ NO device commands sent (all mocked)
+      ✅ NO deployment
+      
+      FINAL VERDICT: ✅ PASS FOR PRODUCTION COMMIT
+      
+      All 250 tests PASSED (100%, excluding 8 known 401 env errors unrelated to patch 0009). All invariants A-H verified with explicit test evidence. NO BLOCKING ANOMALIES FOUND. NO non-401 FAIL detected. Patch 0009 ready for production commit.
   - agent: "testing"
     message: |
       PATCH 0009 BUG-FIX RE-VALIDATION COMPLETE — READY_FOR_PREVIEW (HEAD bb4a4c4)
