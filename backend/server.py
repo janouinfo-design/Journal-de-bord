@@ -95,6 +95,9 @@ async def on_startup():
         partialFilterExpression={"active_driver": True})
     await raw.driver_sessions.create_index([("tenant_id", 1), ("vehicle_id", 1), ("status", 1)])
     await raw.driver_sessions.create_index([("tenant_id", 1), ("driver_id", 1), ("started_at", -1)])
+    # Affectations conducteur <-> véhicule (Lot 1) : index uniques partiels tenant-scopés.
+    from app.vehicle_assignment import ensure_indexes as _va_ensure_indexes
+    await _va_ensure_indexes(raw)
     await raw.ble_detections.create_index([("tenant_id", 1), ("driver_id", 1), ("ts", -1)])
     await raw.drivers.create_index([("tenant_id", 1), ("ble_id_norm", 1)])
     await raw.reconciliation_alert_candidates.create_index(
