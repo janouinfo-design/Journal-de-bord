@@ -279,3 +279,199 @@ def test_production_simulation_impossible(monkeypatch):
     # restore dev for other tests
     monkeypatch.setenv("APP_ENV", "development")
     importlib.reload(pm)
+
+
+# ---------- Régression terrain : réponse device autoritative ----------
+def test_command_success_only_does_not_confirm_private():
+    """success=True + nom/param de commande n'est PAS une preuve d'état device."""
+    entry = {
+        "extra": {
+            "command": {
+                "name": "privatemode",
+                "param": "ON",
+                "response": {"success": True},
+            }
+        }
+    }
+    assert pm._command_response_matches(entry, pm.PRIVATE) is False
+
+
+def test_command_success_only_does_not_confirm_business():
+    entry = {
+        "extra": {
+            "command": {
+                "name": "privatemode OFF",
+                "response": {"success": True},
+            }
+        }
+    }
+    assert pm._command_response_matches(entry, pm.BUSINESS) is False
+
+
+def test_explicit_device_text_confirms_on_and_off():
+    on = {
+        "extra": {
+            "command": {
+                "response": {
+                    "success": True,
+                    "body": "Privatemode ON",
+                }
+            }
+        }
+    }
+    off = {
+        "extra": {
+            "command": {
+                "response": {
+                    "body": "Privatemode OFF",
+                }
+            }
+        }
+    }
+    assert pm._command_response_matches(on, pm.PRIVATE) is True
+    assert pm._command_response_matches(off, pm.BUSINESS) is True
+    assert pm._command_response_matches(on, pm.BUSINESS) is False
+    assert pm._command_response_matches(off, pm.PRIVATE) is False
+
+
+def test_explicit_error_never_confirms_even_with_matching_body():
+    entry = {
+        "extra": {
+            "command": {
+                "response": {
+                    "success": False,
+                    "body": "Privatemode ON",
+                }
+            }
+        }
+    }
+    assert pm._command_response_matches(entry, pm.PRIVATE) is False
+
+
+def test_device_response_get_time_is_accepted_and_anti_stale_kept():
+    """Régression terrain 18.09 : Navixy peut porter l'instant dans get_time."""
+    sent = datetime.now(timezone.utc)
+
+    async def fresh(_tenant, _tracker, _since):
+        return [{
+            "get_time": _iso(sent + timedelta(seconds=1)),
+            "extra": {
+                "command": {
+                    "response": {
+                        "body": "Privatemode ON",
+                        "success": True,
+                    }
+                }
+            },
+        }]
+
+    state, src = _run(pm._device_response_confirm(
+        "default",
+        781479,
+        pm.PRIVATE,
+        _iso(sent),
+        fetch_command_responses=fresh,
+    ))
+    assert state == pm.PRIVATE
+    assert src == pm.SRC_DEVICE_RESPONSE
+
+    async def stale(_tenant, _tracker, _since):
+        return [{
+            "get_time": _iso(sent - timedelta(seconds=pm.ANTI_STALE_SKEW_S + 10)),
+            "extra": {
+                "command": {
+                    "response": {
+                        "body": "Privatemode ON",
+                        "success": True,
+                    }
+                }
+            },
+        }]
+
+    state, src = _run(pm._device_response_confirm(
+        "default",
+        781479,
+        pm.PRIVATE,
+        _iso(sent),
+        fetch_command_responses=stale,
+    ))
+    assert state is None
+    assert src == pm.SRC_UNCONFIRMED
+
+
+def test_new_private_cycle_clears_previous_end_and_result_fields(monkeypatch):
+    """Un ancien end/distance/timeout ne doit jamais contaminer un nouveau PRIVATE."""
+    _full_pilot_env(monkeypatch)
+    db = _DB()
+
+    _run(db.vehicles.update_one(
+        {"id": "vA"},
+        {"$set": {
+            "id": "vA",
+            "tenant_id": "default",
+            "model": "telfmb003_fmc003",
+            "navixy_tracker_id": 3657864,
+            "private_mode_pilot": True,
+        }},
+        upsert=True,
+    ))
+    _run(pm.upsert_vehicle_capability(db, FMC003_VC))
+    _run(db.private_mode_state.update_one(
+        {"vehicle_id": "vA"},
+        {"$set": {
+            "vehicle_id": "vA",
+            "tenant_id": "default",
+            "tracker_id": 3657864,
+            "state": pm.UNKNOWN,
+            "requested_target": pm.BUSINESS,
+            "last_command": "privatemode OFF",
+            "command_sent_at": "2026-09-18T09:01:42+00:00",
+            "pending_timeout_at": "2026-09-18T09:06:46+00:00",
+            "transition_result": pm.TRANSITION_TIMEOUT,
+            "private_end_time": "2026-09-18T09:01:42+00:00",
+            "private_end_odometer_km": 57175.96,
+            "private_distance_km": 1.68,
+            "private_gps_anchor_lat": 1.23,
+            "private_gps_anchor_lng": 4.56,
+        }},
+        upsert=True,
+    ))
+
+    async def no_gps(_tenant, _tracker):
+        return None
+
+    async def real_send(_tracker, command):
+        return {
+            "applied": True,
+            "mode": "REAL",
+            "command": command,
+            "navixy_command_id": "new-cycle",
+        }
+
+    async def odo_start(_tracker):
+        return 57308.13
+
+    monkeypatch.setattr(pm, "_fetch_gps_state", no_gps)
+
+    res = _run(pm.request_mode(
+        db,
+        "d1",
+        pm.PRIVATE,
+        "driver@example.test",
+        resolve_session=_session_ok,
+        tenant_id="default",
+        send_command=real_send,
+        read_odo_km=odo_start,
+    ))
+
+    assert res["state"] == pm.PENDING_CONFIRMATION
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["requested_target"] == pm.PRIVATE
+    assert st["last_command"] == "privatemode ON"
+    assert st["pending_timeout_at"] is None
+    assert st["transition_result"] is None
+    assert st["private_end_time"] is None
+    assert st["private_end_odometer_km"] is None
+    assert st["private_distance_km"] is None
+    assert st["private_gps_anchor_lat"] is None
+    assert st["private_gps_anchor_lng"] is None
