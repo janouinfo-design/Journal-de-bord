@@ -330,16 +330,16 @@ def _hw_ack(time_iso, cmd_name, success=True):
                                                "error": None, "success": success}}}}
 
 
-def test_hardware_ack_confirms_private_without_body():
-    """ACK hardware 'privatemode ON' (success True, body None) -> PRIVATE / DEVICE_RESPONSE."""
+def test_hardware_ack_success_true_alone_does_NOT_confirm_private():
+    """success=True SANS texte device -> PAS confirme (envoi != execution)."""
     e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode ON")
-    assert pm._command_response_matches(e, pm.PRIVATE) is True
+    assert pm._command_response_matches(e, pm.PRIVATE) is False
     assert pm._command_response_matches(e, pm.BUSINESS) is False
 
 
 def test_hardware_ack_confirms_business_without_body():
     e = _hw_ack("2026-09-10T12:00:20+00:00", "privatemode OFF")
-    assert pm._command_response_matches(e, pm.BUSINESS) is True
+    assert pm._command_response_matches(e, pm.BUSINESS) is False
     assert pm._command_response_matches(e, pm.PRIVATE) is False
 
 
@@ -374,10 +374,8 @@ def test_hardware_ack_colon_forms_confirm_with_success_true():
     on["extra"]["command"]["param"] = "privatemode:1"
     off = _hw_ack("2026-09-10T12:00:20+00:00", "setparam", success=True)
     off["extra"]["command"]["param"] = "privatemode:0"
-    assert pm._command_response_matches(on, pm.PRIVATE) is True
-    assert pm._command_response_matches(on, pm.BUSINESS) is False
-    assert pm._command_response_matches(off, pm.BUSINESS) is True
-    assert pm._command_response_matches(off, pm.PRIVATE) is False
+    assert pm._command_response_matches(on, pm.PRIVATE) is False
+    assert pm._command_response_matches(off, pm.BUSINESS) is False
 
 
 def test_hardware_ack_colon_forms_success_none_not_confirmed():
@@ -417,7 +415,7 @@ def test_hardware_ack_end_to_end_confirms_private_via_telemetry_confirm():
         return [_hw_ack("2026-09-10T12:00:15+00:00", "privatemode ON")]
     state, src = _run(pm.telemetry_confirm(
         "default", 781479, pm.PRIVATE, sent, _cap(), fetch_command_responses=_resp))
-    assert state == pm.PRIVATE and src == pm.SRC_DEVICE_RESPONSE
+    assert state is None and src == pm.SRC_UNCONFIRMED
 
 
 def test_hardware_ack_stale_before_command_ignored():
