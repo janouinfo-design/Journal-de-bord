@@ -479,10 +479,10 @@ function ModeCard({ label, active, disabled, loading, color, onPress, testID }: 
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: spacing.md, paddingBottom: spacing.xxl },
+  content: { paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: spacing.xxl },
   screenTitle: {
     color: colors.text, fontSize: font.size.xxl, fontWeight: '700',
-    marginBottom: spacing.xs, marginTop: spacing.xs,
+    marginBottom: spacing.xs, marginTop: 0,
   },
   sectionLabel: {
     color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase',

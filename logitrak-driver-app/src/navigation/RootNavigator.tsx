@@ -60,6 +60,10 @@ function MainTabs() {
         component={DriverScreen}
         options={{
           title: 'Conduite',
+          // L'écran Conduite affiche déjà son propre titre "Conduite" (screenTitle)
+          // + gère l'espacement via SafeAreaView edges={['top']}. On masque donc le
+          // header de navigation pour éviter le TITRE EN DOUBLE et l'espace vide en haut.
+          headerShown: false,
           tabBarIcon: ({ color }) => <TabIcon symbol="🚚" color={color} />,
         }}
       />
