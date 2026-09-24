@@ -272,4 +272,140 @@ describe('usePrivateMode', () => {
     expect(ref.current?.pending).toBe(false);
     tree.unmount();
   });
+
+  // --- Blocage d'une NOUVELLE commande pendant PENDING (règle terrain) ---
+  it('PENDING -> requestMode bloqué (aucune nouvelle commande device envoyée)', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
+      requested_target: 'PRIVATE', command_sent_at: new Date().toISOString(),
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pending).toBe(true);
+    // le chauffeur tente de re-basculer pendant PENDING -> IGNORÉ (aucun POST)
+    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
+    await flush();
+    expect(api.setPrivateMode).not.toHaveBeenCalled();
+    tree.unmount();
+  });
+
+  it('PRIVATE_REQUESTED (transitoire) -> requestMode bloqué', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
+    // le POST reste en attente : on force l'état transitoire PRIVATE_REQUESTED
+    let resolveSet: (v: any) => void = () => {};
+    (api.setPrivateMode as jest.Mock).mockImplementation(() => new Promise((res) => { resolveSet = res; }));
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    await act(async () => { ref.current!.requestMode('PRIVATE'); await Promise.resolve(); });
+    expect(ref.current?.status.state).toBe('PRIVATE_REQUESTED');
+    // une 2e tentative pendant la transition ne doit RIEN envoyer de plus
+    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
+    expect(api.setPrivateMode).toHaveBeenCalledTimes(1);
+    // on résout pour un teardown propre
+    await act(async () => { resolveSet({ ok: true, state: 'PENDING_CONFIRMATION' }); await Promise.resolve(); });
+    await flush();
+    tree.unmount();
+  });
+
+  // --- Phases UX d'attente (90 s / 180 s) dérivées de command_sent_at ---
+  it('phase normale (<90 s) : pendingPhase=normal + message télémétrie', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
+      requested_target: 'PRIVATE', command_sent_at: new Date(Date.now() - 10_000).toISOString(),
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pendingPhase).toBe('normal');
+    expect(ref.current?.pendingMessage).toMatch(/télémétrie|Confirmation du mode Privé/i);
+    tree.unmount();
+  });
+
+  it('phase longue (>=90 s) : pendingPhase=long + message « faites rouler »', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
+      requested_target: 'BUSINESS', command_sent_at: new Date(Date.now() - 95_000).toISOString(),
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pendingPhase).toBe('long');
+    expect((ref.current?.pendingMessage ?? '').toLowerCase()).toContain('roule');
+    tree.unmount();
+  });
+
+  it('phase très longue (>=180 s) : pendingPhase=verylong + invite à actualiser', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
+      requested_target: 'PRIVATE', command_sent_at: new Date(Date.now() - 190_000).toISOString(),
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pendingPhase).toBe('verylong');
+    expect((ref.current?.pendingMessage ?? '').toLowerCase()).toContain('actualiser');
+    tree.unmount();
+  });
+
+  it('non PENDING -> pendingPhase=none et pendingMessage=null', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pendingPhase).toBe('none');
+    expect(ref.current?.pendingMessage).toBeNull();
+    tree.unmount();
+  });
+
+  // --- refreshState : relit le backend, JAMAIS de commande device ---
+  it('refreshState relit l\'état backend sans envoyer de commande', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true, requested_target: 'BUSINESS' });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    (api.getPrivateMode as jest.Mock).mockClear();
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
+    await act(async () => { await ref.current!.refreshState(); });
+    await flush();
+    expect(api.getPrivateMode).toHaveBeenCalled();
+    expect(api.setPrivateMode).not.toHaveBeenCalled();  // aucune commande device
+    expect(ref.current?.status.state).toBe('BUSINESS');
+    tree.unmount();
+  });
+
+  it('timeout serveur : transition_result=TIMEOUT -> timedOut=true, jamais PRIVATE/BUSINESS', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'UNKNOWN', allowed: true, vehicle_id: 'vA', transition_result: 'TIMEOUT',
+      requested_target: 'BUSINESS',
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.timedOut).toBe(true);
+    expect(ref.current?.pending).toBe(false);
+    expect(ref.current?.status.state).toBe('UNKNOWN');
+    tree.unmount();
+  });
+
+  it('pendingTarget reflète requested_target du backend', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true, requested_target: 'PRIVATE',
+    });
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pendingTarget).toBe('PRIVATE');
+    tree.unmount();
+  });
 });

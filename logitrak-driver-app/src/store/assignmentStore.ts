@@ -206,17 +206,22 @@ export function endServiceGate(pm: PrivateModeStatus | null | undefined, pmError
   const target = pm.requested_target;
 
   if (state === 'BUSINESS') {
-    return { allowed: true, message: null };                     // ✅ seul cas autorisé
+    return { allowed: true, message: null };                     // ✅ SEUL cas autorisé
   }
   if (state === 'PRIVATE') {
     return { allowed: false, message: 'Repassez en Professionnel avant de terminer votre service.' };
   }
-  // Transitions PENDING : bloquées jusqu'à confirmation télémétrique.
+  // Transitions PENDING : bloquées jusqu'à confirmation télémétrique (jamais sur success=true).
   if (state === 'PENDING_CONFIRMATION' || state === 'PRIVATE_REQUESTED' || state === 'BUSINESS_REQUESTED') {
     if (target === 'BUSINESS' || state === 'BUSINESS_REQUESTED') {
       return { allowed: false, message: 'Passage en Professionnel en cours de confirmation. Attendez la confirmation avant de terminer votre service.' };
     }
     return { allowed: false, message: 'Changement de mode en cours. Attendez la confirmation avant de terminer votre service.' };
+  }
+  // Timeout serveur : commande envoyée mais mode NON confirmé (transition_result=TIMEOUT).
+  // On ne conclut jamais BUSINESS -> END bloquée + message d'action clair.
+  if (pm.transition_result === 'TIMEOUT') {
+    return { allowed: false, message: 'Le mode n\'a pas été confirmé. Repassez en Professionnel (faites rouler le véhicule) avant de terminer votre service.' };
   }
   // UNKNOWN / FAILED / autre -> BLOQUÉ (fail-closed).
   return { allowed: false, message: 'Impossible de vérifier le mode du véhicule. Réessayez avant de terminer votre service.' };

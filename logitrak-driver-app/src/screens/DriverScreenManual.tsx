@@ -216,9 +216,11 @@ export default function DriverScreenManual() {
   const st = privateMode.status.state;
   const isPrivate = st === 'PRIVATE';
   const isBusiness = st === 'BUSINESS';
-  const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
+  const isPending = privateMode.pending;
   const hasVehicle = !!assignment;
-  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
+  // Pendant une transition PENDING : NON bloquant pour la navigation, mais AUCUNE
+  // nouvelle commande PRO/PRIVÉ tant que la confirmation télémétrique n'est pas résolue.
+  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy && !isPending;
 
   // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
   const proKm = km.proKm;
@@ -355,7 +357,7 @@ export default function DriverScreenManual() {
             label="Professionnel"
             active={isBusiness}
             disabled={!canToggle || isBusiness}
-            loading={isPending && !isPrivate}
+            loading={isPending && privateMode.pendingTarget === 'BUSINESS'}
             color={colors.pro}
             onPress={() => privateMode.requestMode('BUSINESS')}
             testID="manual-mode-pro"
@@ -364,14 +366,14 @@ export default function DriverScreenManual() {
             label="Privé"
             active={isPrivate}
             disabled={!canToggle || isPrivate}
-            loading={isPending && !isBusiness}
+            loading={isPending && privateMode.pendingTarget === 'PRIVATE'}
             color={colors.perso}
             onPress={() => privateMode.requestMode('PRIVATE')}
             testID="manual-mode-private"
           />
         </View>
 
-        {hasVehicle && privateMode.status.allowed ? (
+        {hasVehicle && privateMode.status.allowed && !isPending ? (
           <Text style={styles.helpText} testID="manual-mode-help">
             {isPrivate
               ? (privateMode.privateOdometerSupported
@@ -379,19 +381,68 @@ export default function DriverScreenManual() {
                   : 'Mode Privé actif. La position du véhicule est masquée.')
               : isBusiness
               ? 'Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels.'
-              : isPending
-              ? (privateMode.sentMessage || privateMode.status.pending_message || 'Commande envoyée.')
               : 'Sélectionnez votre mode.'}
           </Text>
+        ) : null}
+
+        {/* ---- ATTENTE DE CONFIRMATION (NON bloquant) : badge persistant + guidage ---- */}
+        {hasVehicle && isPending ? (
+          <View
+            style={[
+              styles.pendingCard,
+              privateMode.pendingPhase === 'long' && styles.pendingCardWarn,
+              privateMode.pendingPhase === 'verylong' && styles.pendingCardWarn,
+            ]}
+            testID="manual-mode-pending"
+          >
+            <View style={styles.pendingHeader}>
+              <ActivityIndicator size="small" color={colors.warning} />
+              <Text style={styles.pendingBadge} testID="manual-mode-pending-badge">
+                Confirmation en cours
+              </Text>
+            </View>
+            <Text style={styles.pendingText} testID="manual-mode-pending-text">
+              {privateMode.pendingMessage
+                || privateMode.sentMessage
+                || privateMode.status.pending_message
+                || 'Confirmation du mode en cours…'}
+            </Text>
+            {/* « Actualiser l'état » : relit le backend, NE renvoie AUCUNE commande device. */}
+            {privateMode.pendingPhase === 'verylong' ? (
+              <TouchableOpacity
+                style={styles.pendingRefreshBtn}
+                onPress={() => privateMode.refreshState()}
+                testID="manual-mode-refresh"
+                accessibilityRole="button"
+                accessibilityLabel="Actualiser l'état du mode"
+              >
+                <Text style={styles.pendingRefreshText}>Actualiser l'état</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : null}
 
         {privateMode.error ? (
           <Text style={styles.errorText} testID="manual-mode-error">{privateMode.error}</Text>
         ) : null}
-        {privateMode.timedOut && !isPending ? (
-          <Text style={styles.errorText} testID="manual-mode-timeout">
-            Commande envoyée mais état non confirmé. Vérifiez l’état du véhicule.
-          </Text>
+        {/* Timeout serveur : commande envoyée mais mode NON confirmé. Message d'action clair
+            + « Actualiser l'état ». Jamais présenté comme un mode « actif ». */}
+        {privateMode.timedOut && !isPending && !isBusiness && !isPrivate ? (
+          <View style={styles.pendingCard} testID="manual-mode-timeout">
+            <Text style={styles.pendingText}>
+              Le mode n'a pas encore été confirmé. Faites rouler le véhicule pour qu'une nouvelle
+              position soit transmise, puis actualisez l'état.
+            </Text>
+            <TouchableOpacity
+              style={styles.pendingRefreshBtn}
+              onPress={() => privateMode.refreshState()}
+              testID="manual-mode-timeout-refresh"
+              accessibilityRole="button"
+              accessibilityLabel="Actualiser l'état du mode"
+            >
+              <Text style={styles.pendingRefreshText}>Actualiser l'état</Text>
+            </TouchableOpacity>
+          </View>
         ) : null}
 
         {/* ============ KILOMÈTRES ============ */}
@@ -685,6 +736,21 @@ const styles = StyleSheet.create({
   modeState: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
   helpText: { color: colors.textMuted, fontSize: font.size.sm, marginTop: spacing.md, lineHeight: 20 },
   errorText: { color: colors.danger, fontSize: font.size.sm, marginTop: spacing.sm },
+
+  // Attente de confirmation (NON bloquant) : bandeau persistant + guidage.
+  pendingCard: {
+    marginTop: spacing.md, backgroundColor: colors.warningSoft, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.warningBorder, padding: spacing.md,
+  },
+  pendingCardWarn: { borderColor: colors.warning },
+  pendingHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
+  pendingBadge: { color: colors.warning, fontSize: font.size.sm, fontWeight: '700' },
+  pendingText: { color: colors.text, fontSize: font.size.sm, lineHeight: 20 },
+  pendingRefreshBtn: {
+    marginTop: spacing.md, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.warning,
+    borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+  },
+  pendingRefreshText: { color: colors.warning, fontWeight: '700', fontSize: font.size.sm },
 
   periodCaption: {
     color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.sm, marginLeft: 2,

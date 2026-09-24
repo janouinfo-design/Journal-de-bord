@@ -1,135 +1,131 @@
-<analysis>**original_problem_statement**: The user is finalizing the LOGITRAK mobile driver app and backend. The session included fixing Private Mode state timeout bugs, developing V2 of the mobile app (Navigation, real Documents with OCR, real Vehicle Inspections), isolating the EAS OTA pilot channel, and fixing the FMC130 BUSINESS mode confirmation bug. The current problem statement is to investigate and fix the FMC130 PRIVATE mode confirmation bug by first fetching read-only telemetry data from Navixy to understand how the tracker behaves during a real Privatemode ON event.
+<analysis>**original_problem_statement**: The user is finalizing the LOGITRAK mobile driver app and backend. Previously, the focus was on implementing Lot 1: Persistent Vehicle Assignments in the backend and Lot 2 in the mobile app, alongside Patch 0009 which enforces that Private Mode is ONLY confirmed via hardware telemetry (LKP + AVL16), never just by a  API acknowledgment. After deploying the backend and building the APK, the user conducted field tests. The user reported that while the backend engine works perfectly, the mobile app's UI gets stuck during mode transitions (showing Commande envoyée mais état non confirmé, infinite spinners, or falling back to Impossible de vérifier le mode). 
 
-**User's preferred language**: French (INSTRUCT next agent to respond in French).
+PRODUCT REQUIREMENTS:
+- **Audit and fix the mobile app's state management during mode transitions** (, ).
+- Identify why the app shows pending/unconfirmed states when the command was successfully sent.
+- Enforce strict UX rules: Fin de service (End Service) MUST be completely blocked unless the vehicle is in a fully telemetry-confirmed  state. It must be blocked during , , , or API errors.
+- Do NOT modify the backend Private Mode engine (). The backend is considered perfectly validated. The issue is purely frontend polling/state interpretation.
 
-**what currently exists?**: A mature FastAPI backend and React Native mobile application. V2 features (Documents, Inspections, updated Navigation) and several FMC130 fixes (timeout states, BUSINESS mode recovery) are fully implemented and verified via unit tests, but the final FMC130 PRIVATE mode confirmation logic is blocked pending real telemetry data analysis.
+**User's preferred language**: French (You MUST respond in French only)
+
+**what currently exists?**: 
+A mature FastAPI backend with a fully validated, telemetry-driven Private Mode engine (Patch 0009). The backend uses persistent vehicle assignments ( collection). The React Native mobile app connects to these new endpoints but suffers from state synchronization/polling issues during the  phase of a mode switch, leading to confusing UX and spinner locks.
 
 **Last working item**: 
-    - Last item agent was working: The user requested a READ-ONLY diagnostic script to be executed on the VPS to capture real Navixy telemetry data (, , ,  for AVL16) around a specific time window () for tracker . This is needed to establish a reliable, fail-closed rule for confirming PRIVATE mode when the vehicle is stationary.
-    - Status: NOT STARTED (Agent needs to write and output this script).
+    - Last item agent was working: The agent just received a detailed field-test report from the user with screenshots showing the mobile app stuck during the  transition between PRO and PRIVE modes. The agent was instructed to audit the React Native flow (, polling frequency,  dependencies, and ) to find the root cause of the UI desynchronization.
+    - Status: NOT STARTED
     - Agent Testing Done: N
-    - Which testing method agent to use: python -c / backend testing agent (once rule is formulated).
-    - User Testing Done: N
+    - Which testing method agent to use? Frontend testing agent
+    - User Testing Done: Y
 
-**All Pending/In progress Issue list**:
-  Issue 1: Establish PRIVATE Mode Confirmation Rule (P0)
-     - Attempted fixes: The BUSINESS recovery was fixed in branch . The PRIVATE side remains unfixed because when the vehicle is stationary, AVL16 data drops or stops updating, preventing the current LKP (Last Known Position) logic from confirming.
-     - Next debug checklist: Provide the user with the requested read-only diagnostic script to fetch Navixy telemetry. Analyze the output to define a rule (e.g., checking  vs ).
-     - Why fix this issue and what will be achieved with the fix?: To allow drivers to successfully enter Private Mode without the app timing out and returning to an UNKNOWN state.
-     - Status: IN PROGRESS
+**All Pending/In progress Issue list**: 
+  Issue 1: Mobile UI stuck/desynchronized during Mode Privé transitions (P0)
+     - Attempted fixes: None yet for this specific field-test feedback.
+     - Next debug checklist: Audit  and . Check polling frequency, timeout handling, race conditions, and how , , and  are evaluated during . Check  flow for race conditions.
+     - Why fix this issue and what will be achieved with the fix? The driver needs clear UX during the 1-2 minutes it takes for the hardware telemetry to confirm the mode switch. Currently, the app shows errors or spins indefinitely.
+     - Status: NOT STARTED
      - Is recurring issue? N
-     - Should Test frontend/backend/both after fix?: backend
-     - Blocked on other issue: Blocked on user providing the output of the read-only script.
+     - Should Test frontend/backend/both after fix?: Frontend
+     - Blocked on other issue: None
 
 **In progress Task List**:
-  Task 1: Combine and Deploy FMC130 Confirmations (PRIVATE + BUSINESS)
-     - Where to resume: Once the PRIVATE mode confirmation rule is defined and coded in , combine it with the already validated BUSINESS fix.
-     - What will be achieved with this?: Complete resolution of the FMC130 Private/Business toggle bugs.
-     - Status: BLOCKED (Waiting on PRIVATE telemetry data).
-     - Should Test frontend/backend/both after fix?: backend
-     - Blocked on something: Task 1 (Issue 1).
+  Task 1: Enforce Fin de service Security Gate (P0)
+     - Where to resume:  (or ) and .
+     - What will be achieved with this?: Fin de service will only be allowed if  (telemetry confirmed). It will be explicitly blocked with contextual messages for , , , , or API errors.
+     - Status: NOT STARTED
+     - Should Test frontend/backend/both after fix?: Frontend
+     - Blocked on something: None
 
 **Upcoming and Future Tasks**:
     Upcoming Tasks:
-    - Deploy FMC130 combined confirmation fix via Git bundle.
-    - Build and release V2 APK and OTA updates for the driver app (handled by user on their VPS/EAS environment).
+    - Add comprehensive Jest tests for the mobile app covering 20+ specific scenarios requested by the user (e.g., BUSINESS confirmed -> END allowed; PRIVATE -> END blocked; PENDING -> END blocked; double-click prevention). (P0)
     
     Future Tasks:
-    - Weekly/Monthly driver reports (noted as missing in this repository earlier in the session, likely requires a separate feature branch).
+    - Integrate driver-uploaded documents into the separate FLEET ADMIN web application. (An API contract  was created in this repo, but the actual frontend integration belongs to another repo: ). (P2)
 
 **Completed work in this session**:
-- Mobile app P0/P1 fixes ( migration) (DONE)
-- FMC130 initial Private Mode fixes (AVL16 canonical reader, UNKNOWN timeout) (DONE)
-- Driver V2 Phase 1: Navigation 5 tabs, compact SOS (DONE)
-- Driver V2 Phase 2: Vehicle Documents with OCR reuse (DONE)
-- Driver V2 Phase 3: Vehicle Inspections (DONE)
-- Git bundles for V2 modules and tests (DONE)
-- EAS Pilot OTA channel isolation in  (DONE)
-- FMC130 BUSINESS mode confirmation fix (standstill recovery) (DONE - resides in branch )
+- Patch 0009: Removed  as a confirmation mechanism for hardware commands; Private Mode is now strictly telemetry-confirmed via LKP+AVL16. (DONE)
+- Lot 1 Backend: Created persistent  and  with partial unique indexes and a background reconciler. (DONE)
+- Lot 2 Mobile: Migrated mobile app to use assignment endpoints, fixed an initial infinite spinner bug caused by unstable Zustand selectors. (DONE)
+- Admin Federation: Created  endpoint to expose mobile-uploaded docs to fleet managers. (DONE)
 
 **Earlier issues found/mentioned but not fixed**:
-   Issue 1: Weekly and Monthly Driver Reports missing
-   - Debug checklist: Search for  or scheduler tasks.
-   - Why to solve this issue and what will be achieved with this?: Feature was mentioned as missing from this specific workspace fork during the initial Git audit.
-   - Should Test frontend/backend/both after fix: backend
+   Issue 1: Fleet Admin Web UI lacks Document/Inspection views.
+   - Debug checklist: Requires accessing a separate repository ().
+   - Why to solve this issue and what will be achieved with this?: Managers cannot currently see driver uploads.
+   - Should Test frontend/backend/both after fix: Both (in the other repo)
    - Is recurring issue? N
 
 **Known issue recurrence from previous fork**:
-  - Issue recurrence in previous fork: None explicitly noted in this fork context.
-  - Recurrence count: 0
-  - Status: NOT STARTED
+  - Issue recurrence in previous fork: Zustand selector infinite loops. (In previous steps,  returning the whole object caused infinite  loops. Ensure all new Zustand hooks use stable atomic selectors ).
+  - Recurrence count: 1
+  - Status: RESOLVED
 
 **Code Architecture**:
-- : Core logic for switching and confirming PRO/PRIVATE modes.
--  & : Interactions with Navixy API.
--  & : V2 Mobile endpoints.
-- : React Native frontend. Uses Zustand stores and React Navigation.
+- : Core telemetry confirmation engine (DO NOT TOUCH).
+- : Persistent assignment logic.
+- : Manages polling and state for the Private/Business switch.
+- : Main driver UI.
 
 **Key Technical Concepts**:
-React Native, Expo (EAS), FastAPI, MongoDB, Navixy Telematics API, Gemini Vision (OCR via ), Pytest for isolated backend testing.
+React Native, Zustand, FastAPI, MongoDB (Standalone, no transactions, using atomic updates with partial unique indexes), Hardware Telemetry (FMC130).
 
 **key DB schema**:
   - : 
-  - : 
-  - : 
+  - : Append-only history of assignments.
+  - : Volatile state of the tracker (, , ).
 
 **changes in tech stack**:
-  - Added  to the mobile app dependencies.
+  - Transitioned from transient BLE sessions () to persistent DB assignments () for determining the active vehicle.
 
 **All files of reference**:
-  -  (Heavily modified for state timeouts and BUSINESS confirmation)
-  -  (Created)
-  -  (Created)
-  -  (Created)
-  -  (Created)
-  -  (Created)
-  -  (Created as a strict technical freeze contract for driver/Navixy sync)
+  -  (Target for polling audit)
+  -  (Target for UI fix)
+  -  (Target for END-safety logic)
+  -  (Target for new tests)
+  -  (Created for external repo handover)
 
 **Areas that need refactoring**:
-None specifically identified, code is rigorously tested.
+- Mobile app polling and state derivation in  to prevent UI desync during the 1-2 minute telemetry confirmation window.
 
 **key api endpoints**:
 - 
 - 
-- 
 
 **Critical Info for New Agent**:
-- **SECURITY GATES**:  and  MUST remain at . Never activate them or write real Navixy/Teltonika commands. 
-- **ENVIRONMENT ISOLATION**: You do NOT have SSH or Git access to the user's VPS. You cannot execute commands on their production server. You must provide  or  scripts for the user to copy/paste into their VPS, and wait for them to paste the output back to you.
-- **NO DEPLOYMENTS**: Do not deploy, push to GitHub, or build APKs. Create Git patches or  files for the user to download or fetch.
-- **CURRENT BRANCH**: The BUSINESS fix is currently safely isolated on  (Base: ). Keep it there. The immediate next task is purely analytical (generating a read-only script).
+- **CRITICAL**: DO NOT modify the backend . The backend validation logic is considered perfectly stable and validated by field tests. The bug is entirely in the React Native frontend's interpretation of the backend's  /  states and its polling mechanism.
+- Fin de service (End Service) is a highly sensitive action. It must be strictly gated. If the backend reports , , or , the frontend must block the Fin de service button and tell the driver to switch back to Professionnel first.
 
 **documents and test reports created in this job**:
   - 
+  -  (Various patches generated during previous steps)
 
 **Last 10 User Messages and any pending HUMAN messages**:
-1. User asked for a diagnostic script to check the VPS for EAS prechecks.
-2. User provided EAS output showing the Android keystore couldn't be verified interactively.
-3. User provided Expo Dashboard screenshots proving the build was successful.
-4. Agent verified the build and provided Android test checklist.
-5. User tested clicking Private in the vehicle (engine off).
-6. Agent explained it's stuck in PENDING because the vehicle wasn't moving (LKP rule).
-7. User reported trying again with the engine on, but got a 503 Temporarily Unavailable error.
-8. Agent requested logs to diagnose the 503 error.
-9. User provided logs proving that PRIVATE and BUSINESS commands *are* successfully sent, but confirmation via telemetry fails.
-10. **PENDING HUMAN MESSAGE**: User requested a READ-ONLY script to extract Navixy data around the timestamp  (, , , ) to figure out what data is actually available during a Privatemode ON event to formulate a reliable PRIVATE confirmation rule.
+1. User confirmed Lot 1 and Lot 2 deployment.
+2. User tested the new APK in the field.
+3. User provided screenshots showing the app successfully switching to Professionnel Actif.
+4. User provided screenshots showing the app successfully sending the Privé command, but the app getting stuck with a spinner and Commande envoyée mais état non confirmé.
+5. Agent analyzed backend logs and confirmed the backend correctly registered  because the vehicle was stationary (telemetry requires movement to confirm).
+6. User noticed UI spacing issues (duplicate Conduite header). Agent fixed it in code.
+7. User asked where Fleet Managers view documents. Agent investigated and realized the Fleet Admin UI is in a separate repository.
+8. Agent and User prepared a handover document () for the separate Fleet Admin repository.
+9. User formally requested to close the backend audit and prepared to move to the other repository.
+10. **PENDING HUMAN MESSAGE**: User pivots back to  Lot 2 Mobile. User explicitly states that field testing revealed the app gets stuck in bad UI states during mode changes. User demands a strict audit of the React Native polling/state flow, strict enforcement of the Fin de service security gate, and comprehensive Jest testing. User explicitly forbids modifying the backend Private Mode engine.
 
-**Project Health Check**:
-Healthy. All backend/frontend tests passing in the workspace.
+**Project Health Check:**
+Frontend Mobile: Broken (Desync during hardware polling). Backend: Healthy.
 
 **3rd Party Integrations**:
-- OpenAI/Gemini (OCR Engine) — uses 
-- Navixy (Telematics/GPS API) — requires User Navixy Hash/Credentials
-- Emergent Object Storage — uses 
+- Navixy (Telematics/GPS API) — requires User Navixy Hash/Credentials (Handled securely in backend, frontend never sees secrets).
 
 **Testing status**:
-  - Testing agent used after significant changes: YES (Extensively used  for 163/163 backend tests).
+  - Testing agent used after significant changes: YES
   - Troubleshoot agent used after agent stuck in loop: NO
   - Test files created: , , 
-  - Known regressions: None.
+  - Known regressions: None backend-side. Mobile UI sync issues identified.
 
-**Credentials to test flow**:
-None currently required for the immediate analytical task.
+**Credentials to test flow:**
+Not provided in plain text. (Tokens are generated via internal backend endpoints for testing).
 
 **What agent forgot to execute**:
-The agent just received the prompt to write the Navixy data extraction script and needs to provide it in the next response. Ensure the script strictly adheres to the READ-ONLY constraints and asks the user to run it on their VPS.</analysis>
+The previous agent successfully completed the backend tasks and was about to transition to a different repository, but the user interrupted with new critical field-test bug reports for the React Native mobile app. The agent has not yet started auditing  as requested in the final message.</analysis>

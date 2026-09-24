@@ -78,5 +78,5 @@ Doit retourner la ligne `content-security-policy: frame-ancestors …`.
 Configuré via `craco.config.js` → `devServer.headers`. Déjà actif :
 
 ```bash
-curl -sI https://fmc130-telemetry.preview.emergentagent.com/ | grep -i content-security
+curl -sI https://driver-ui-desync.preview.emergentagent.com/ | grep -i content-security
 ```

@@ -73,6 +73,31 @@ describe('endServiceGate — Fin de service ↔ Mode Privé', () => {
     // 3. TELEMETRY_CONFIRMED -> BUSINESS -> END autorisée
     expect(endServiceGate(pm({ state: 'BUSINESS' })).allowed).toBe(true);
   });
+
+  test('timeout serveur (UNKNOWN + transition_result=TIMEOUT) → END BLOQUÉE + message d\'action', () => {
+    const g = endServiceGate(pm({ state: 'UNKNOWN', transition_result: 'TIMEOUT', requested_target: 'BUSINESS' }));
+    expect(g.allowed).toBe(false);
+    expect(g.message).toMatch(/n'a pas été confirmé/i);
+    expect(g.message).toMatch(/rouler/i);
+  });
+
+  test('success=true à l\'envoi ne débloque PAS END (état PENDING reste bloquant)', () => {
+    // Simule le retour d'un POST « ok » mais état device NON prouvé (PENDING).
+    const g = endServiceGate(pm({ state: 'PENDING_CONFIRMATION', requested_target: 'PRIVATE' }));
+    expect(g.allowed).toBe(false);
+  });
+
+  test('FAILED → END BLOQUÉE (fail-closed)', () => {
+    const g = endServiceGate(pm({ state: 'FAILED' as any }));
+    expect(g.allowed).toBe(false);
+    expect(g.message).toMatch(/Impossible de vérifier/i);
+  });
+
+  test('BUSINESS confirmé APRÈS timeout (promotion tardive) → END AUTORISÉE', () => {
+    // Le backend a fini par confirmer BUSINESS (télémétrie tardive). state=BUSINESS prime.
+    const g = endServiceGate(pm({ state: 'BUSINESS', transition_result: 'TIMEOUT' as any }));
+    expect(g.allowed).toBe(true);
+  });
 });
 
 describe('reasonToMessage — conflits affectation', () => {
