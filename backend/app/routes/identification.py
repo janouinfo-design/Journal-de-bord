@@ -429,11 +429,14 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         pending_message = pm._command_sent_message(rt) if rt in (pm.PRIVATE, pm.BUSINESS) else None
 
     # --- DEFENSE EN PROFONDEUR anti-stale (exposition) ---
-    # state==PRIVATE (cycle ouvert) -> ne jamais exposer de valeur terminale.
-    if state_now == pm.PRIVATE:
-        exposed_private_distance_km = None
-    else:
-        exposed_private_distance_km = st.get("private_distance_km")
+    # Une distance privée est TERMINALE : elle n'est exposée que lorsque le retour
+    # BUSINESS est confirmé. PRIVATE / PENDING / UNKNOWN ne doivent jamais ressortir
+    # une valeur d'un cycle précédent.
+    exposed_private_distance_km = (
+        st.get("private_distance_km")
+        if state_now == pm.BUSINESS
+        else None
+    )
     return {
         "state": state_now,
         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
@@ -653,8 +656,14 @@ async def driver_km_summary(
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
-    sess = await ble_engine.get_current_session(db, driver_id)
-    vehicle_id = sess.get("vehicle_id") if sess else None
+    # Source de vérité du véhicule actif = affectation persistante (mode manuel).
+    # Fallback session BLE pour rétro-compat. C'est la même résolution que le Mode Privé ;
+    # sinon l'app peut afficher "En service" tout en recevant available=false ici.
+    from app import vehicle_assignment as va
+    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        vehicle_id = sess.get("vehicle_id") if sess else None
 
     # Instant courant en heure locale chauffeur (Europe/Zurich).
     _TZ = ZoneInfo("Europe/Zurich")
