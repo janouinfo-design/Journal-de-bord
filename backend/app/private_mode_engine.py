@@ -403,8 +403,12 @@ def _samples_show_movement(samples) -> bool:
 
 async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
                              since_iso: Optional[str]) -> list[dict]:
-    """Lit plusieurs points GPS récents (READ-ONLY) via `track/read` avec le credential du tenant.
-    Retour liste [{lat,lng,time}]. [] si indisponible. Ne logge/expose jamais le credential."""
+    """Lit plusieurs points GPS recents (READ-ONLY) via `track/read`.
+
+    track/read attend des datetimes sans offset interpretees dans le fuseau du
+    compte Navixy. On convertit donc explicitement la fenetre UTC vers le fuseau
+    du compte (ex. Europe/Zurich) avant formatage. Sans fuseau connu -> [] fail-closed.
+    """
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
@@ -414,13 +418,34 @@ async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     start = _parse(since_iso) or (now - timedelta(minutes=30))
-    fmt = "%Y-%m-%d %H:%M:%S"
-    body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
-            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
-            "simplify": False, "point_limit": 200}
     import httpx
     try:
         async with httpx.AsyncClient(timeout=25) as c:
+            tz_name = _NAVIXY_TZ_CACHE.get(str(tenant_id))
+            if not tz_name:
+                ur = await c.post(f"{base}/user/get_info",
+                                  json={"hash": cred["credential"]})
+                ui = (ur.json() or {}).get("user_info") or {}
+                candidate = ui.get("time_zone")
+                if candidate:
+                    try:
+                        ZoneInfo(str(candidate))
+                        tz_name = str(candidate)
+                        _NAVIXY_TZ_CACHE[str(tenant_id)] = tz_name
+                    except Exception:
+                        tz_name = None
+            if not tz_name:
+                return []
+            account_tz = ZoneInfo(tz_name)
+            fmt = "%Y-%m-%d %H:%M:%S"
+            body = {
+                "hash": cred["credential"],
+                "tracker_id": int(tracker_id),
+                "from": start.astimezone(account_tz).strftime(fmt),
+                "to": (now + timedelta(minutes=1)).astimezone(account_tz).strftime(fmt),
+                "simplify": False,
+                "point_limit": 200,
+            }
             r = await c.post(f"{base}/track/read", json=body)
             data = r.json() or {}
     except Exception:
