@@ -637,7 +637,7 @@ async def driver_km_summary(
         week  = lundi 00:00 -> maintenant
         month = 1er du mois 00:00 -> maintenant
       Les bornes locales sont converties en UTC pour interroger `trips` (start_time ISO UTC).
-    - Scoping strict : véhicule de la session active du chauffeur + son tenant.
+    - Scoping strict : véhicule de l’affectation ACTIVE Lot 2 (fallback session legacy) + son tenant.
     - Si pas de véhicule actif -> valeurs None (l'app affiche « — », jamais une fausse valeur).
     Retour : {period, period_label, vehicle_id, pro_km, private_km, available}.
 
@@ -653,8 +653,13 @@ async def driver_km_summary(
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
-    sess = await ble_engine.get_current_session(db, driver_id)
-    vehicle_id = sess.get("vehicle_id") if sess else None
+    # Source Lot 2 prioritaire : affectation persistante ACTIVE.
+    # Fallback BLE/session conservé uniquement pour rétro-compatibilité.
+    from app import vehicle_assignment as va
+    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        vehicle_id = sess.get("vehicle_id") if sess else None
 
     # Instant courant en heure locale chauffeur (Europe/Zurich).
     _TZ = ZoneInfo("Europe/Zurich")
@@ -724,10 +729,10 @@ async def driver_vehicle_odometer(
     """Lecture READ-ONLY de l'odomètre matériel du véhicule (audit odomètre).
 
     Sécurité :
-    - tenant scoping ('default') ;
-    - anti-IDOR : si `vehicle_id` est fourni, il doit correspondre au véhicule de
-      la session en cours du chauffeur (un chauffeur ne lit pas un véhicule tiers) ;
-    - sinon, on utilise le véhicule de la session courante.
+    - tenant scoping issu de l'utilisateur authentifié ;
+    - anti-IDOR : si `vehicle_id` est fourni, il doit correspondre au véhicule actif
+      résolu côté backend (affectation Lot 2, fallback session legacy) ;
+    - sinon, on utilise le véhicule actif résolu côté backend.
 
     Honnêteté des données :
     - jamais de 0 km fictif ; si indisponible -> {odometer_km: null, status: "UNAVAILABLE"}.
@@ -736,25 +741,31 @@ async def driver_vehicle_odometer(
     from app.odometer_audit import read_vehicle_odometer
 
     db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
-    # Véhicule de la session courante (source de vérité pour ce chauffeur).
-    sess = await ble_engine.get_current_session(db, driver_id)
-    current_vehicle_id = sess.get("vehicle_id") if sess else None
+    # Source Lot 2 prioritaire : affectation persistante ACTIVE.
+    # Fallback BLE/session conservé uniquement pour rétro-compatibilité.
+    from app import vehicle_assignment as va
+    current_vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not current_vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        current_vehicle_id = sess.get("vehicle_id") if sess else None
+
+    # Anti-IDOR fail-closed : un vehicle_id explicite doit être EXACTEMENT
+    # le véhicule actif du chauffeur. Sans véhicule actif, aucun ID arbitraire accepté.
+    if vehicle_id and vehicle_id != current_vehicle_id:
+        raise HTTPException(403, "Accès refusé à ce véhicule")
 
     target_vehicle_id = vehicle_id or current_vehicle_id
     if not target_vehicle_id:
         return {"vehicle_id": None, "odometer_km": None, "source": None,
                 "status": "UNAVAILABLE", "reason": "no_active_vehicle"}
 
-    # Anti-IDOR : refuser un véhicule qui n'est pas celui de la session du chauffeur.
-    if vehicle_id and current_vehicle_id and vehicle_id != current_vehicle_id:
-        raise HTTPException(403, "Accès refusé à ce véhicule")
-
     vehicle = await db.vehicles.find_one(
-        {"id": target_vehicle_id, "tenant_id": "default"}, {"_id": 0})
+        {"id": target_vehicle_id, "tenant_id": tenant_id}, {"_id": 0})
     if not vehicle:
         raise HTTPException(404, "Véhicule introuvable")
 
