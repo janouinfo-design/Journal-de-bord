@@ -1,0 +1,595 @@
+diff --git a/logitrak-driver-app/src/__tests__/endServiceGate.test.ts b/logitrak-driver-app/src/__tests__/endServiceGate.test.ts
+index e461185..7b07d14 100644
+--- a/logitrak-driver-app/src/__tests__/endServiceGate.test.ts
++++ b/logitrak-driver-app/src/__tests__/endServiceGate.test.ts
+@@ -73,6 +73,31 @@ describe('endServiceGate — Fin de service ↔ Mode Privé', () => {
+     // 3. TELEMETRY_CONFIRMED -> BUSINESS -> END autorisée
+     expect(endServiceGate(pm({ state: 'BUSINESS' })).allowed).toBe(true);
+   });
++
++  test('timeout serveur (UNKNOWN + transition_result=TIMEOUT) → END BLOQUÉE + message d\'action', () => {
++    const g = endServiceGate(pm({ state: 'UNKNOWN', transition_result: 'TIMEOUT', requested_target: 'BUSINESS' }));
++    expect(g.allowed).toBe(false);
++    expect(g.message).toMatch(/n'a pas été confirmé/i);
++    expect(g.message).toMatch(/rouler/i);
++  });
++
++  test('success=true à l\'envoi ne débloque PAS END (état PENDING reste bloquant)', () => {
++    // Simule le retour d'un POST « ok » mais état device NON prouvé (PENDING).
++    const g = endServiceGate(pm({ state: 'PENDING_CONFIRMATION', requested_target: 'PRIVATE' }));
++    expect(g.allowed).toBe(false);
++  });
++
++  test('FAILED → END BLOQUÉE (fail-closed)', () => {
++    const g = endServiceGate(pm({ state: 'FAILED' as any }));
++    expect(g.allowed).toBe(false);
++    expect(g.message).toMatch(/Impossible de vérifier/i);
++  });
++
++  test('BUSINESS confirmé APRÈS timeout (promotion tardive) → END AUTORISÉE', () => {
++    // Le backend a fini par confirmer BUSINESS (télémétrie tardive). state=BUSINESS prime.
++    const g = endServiceGate(pm({ state: 'BUSINESS', transition_result: 'TIMEOUT' as any }));
++    expect(g.allowed).toBe(true);
++  });
+ });
+ 
+ describe('reasonToMessage — conflits affectation', () => {
+diff --git a/logitrak-driver-app/src/__tests__/usePrivateMode.test.tsx b/logitrak-driver-app/src/__tests__/usePrivateMode.test.tsx
+index 25dac95..a213219 100644
+--- a/logitrak-driver-app/src/__tests__/usePrivateMode.test.tsx
++++ b/logitrak-driver-app/src/__tests__/usePrivateMode.test.tsx
+@@ -272,4 +272,140 @@ describe('usePrivateMode', () => {
+     expect(ref.current?.pending).toBe(false);
+     tree.unmount();
+   });
++
++  // --- Blocage d'une NOUVELLE commande pendant PENDING (règle terrain) ---
++  it('PENDING -> requestMode bloqué (aucune nouvelle commande device envoyée)', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({
++      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
++      requested_target: 'PRIVATE', command_sent_at: new Date().toISOString(),
++    });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.pending).toBe(true);
++    // le chauffeur tente de re-basculer pendant PENDING -> IGNORÉ (aucun POST)
++    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
++    await flush();
++    expect(api.setPrivateMode).not.toHaveBeenCalled();
++    tree.unmount();
++  });
++
++  it('PRIVATE_REQUESTED (transitoire) -> requestMode bloqué', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
++    // le POST reste en attente : on force l'état transitoire PRIVATE_REQUESTED
++    let resolveSet: (v: any) => void = () => {};
++    (api.setPrivateMode as jest.Mock).mockImplementation(() => new Promise((res) => { resolveSet = res; }));
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    await act(async () => { ref.current!.requestMode('PRIVATE'); await Promise.resolve(); });
++    expect(ref.current?.status.state).toBe('PRIVATE_REQUESTED');
++    // une 2e tentative pendant la transition ne doit RIEN envoyer de plus
++    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
++    expect(api.setPrivateMode).toHaveBeenCalledTimes(1);
++    // on résout pour un teardown propre
++    await act(async () => { resolveSet({ ok: true, state: 'PENDING_CONFIRMATION' }); await Promise.resolve(); });
++    await flush();
++    tree.unmount();
++  });
++
++  // --- Phases UX d'attente (90 s / 180 s) dérivées de command_sent_at ---
++  it('phase normale (<90 s) : pendingPhase=normal + message télémétrie', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({
++      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
++      requested_target: 'PRIVATE', command_sent_at: new Date(Date.now() - 10_000).toISOString(),
++    });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.pendingPhase).toBe('normal');
++    expect(ref.current?.pendingMessage).toMatch(/télémétrie|Confirmation du mode Privé/i);
++    tree.unmount();
++  });
++
++  it('phase longue (>=90 s) : pendingPhase=long + message « faites rouler »', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({
++      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
++      requested_target: 'BUSINESS', command_sent_at: new Date(Date.now() - 95_000).toISOString(),
++    });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.pendingPhase).toBe('long');
++    expect((ref.current?.pendingMessage ?? '').toLowerCase()).toContain('roule');
++    tree.unmount();
++  });
++
++  it('phase très longue (>=180 s) : pendingPhase=verylong + invite à actualiser', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({
++      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
++      requested_target: 'PRIVATE', command_sent_at: new Date(Date.now() - 190_000).toISOString(),
++    });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.pendingPhase).toBe('verylong');
++    expect((ref.current?.pendingMessage ?? '').toLowerCase()).toContain('actualiser');
++    tree.unmount();
++  });
++
++  it('non PENDING -> pendingPhase=none et pendingMessage=null', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.pendingPhase).toBe('none');
++    expect(ref.current?.pendingMessage).toBeNull();
++    tree.unmount();
++  });
++
++  // --- refreshState : relit le backend, JAMAIS de commande device ---
++  it('refreshState relit l\'état backend sans envoyer de commande', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true, requested_target: 'BUSINESS' });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    (api.getPrivateMode as jest.Mock).mockClear();
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({ state: 'BUSINESS', allowed: true, vehicle_id: 'vA' });
++    await act(async () => { await ref.current!.refreshState(); });
++    await flush();
++    expect(api.getPrivateMode).toHaveBeenCalled();
++    expect(api.setPrivateMode).not.toHaveBeenCalled();  // aucune commande device
++    expect(ref.current?.status.state).toBe('BUSINESS');
++    tree.unmount();
++  });
++
++  it('timeout serveur : transition_result=TIMEOUT -> timedOut=true, jamais PRIVATE/BUSINESS', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({
++      state: 'UNKNOWN', allowed: true, vehicle_id: 'vA', transition_result: 'TIMEOUT',
++      requested_target: 'BUSINESS',
++    });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.timedOut).toBe(true);
++    expect(ref.current?.pending).toBe(false);
++    expect(ref.current?.status.state).toBe('UNKNOWN');
++    tree.unmount();
++  });
++
++  it('pendingTarget reflète requested_target du backend', async () => {
++    (api.getPrivateMode as jest.Mock).mockResolvedValue({
++      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true, requested_target: 'PRIVATE',
++    });
++    const { ref, Probe } = makeHarness();
++    let tree: any;
++    await act(async () => { tree = create(<Probe />); });
++    await flush();
++    expect(ref.current?.pendingTarget).toBe('PRIVATE');
++    tree.unmount();
++  });
+ });
+diff --git a/logitrak-driver-app/src/hooks/usePrivateMode.ts b/logitrak-driver-app/src/hooks/usePrivateMode.ts
+index 3a7406d..dee5b8e 100644
+--- a/logitrak-driver-app/src/hooks/usePrivateMode.ts
++++ b/logitrak-driver-app/src/hooks/usePrivateMode.ts
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useRef, useState } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { AppState, AppStateStatus } from 'react-native';
+ import {
+   getPrivateMode,
+@@ -9,15 +9,36 @@ import {
+ /**
+  * Phase 2 — Machine à états Privé/Professionnel côté app (backend = source de vérité).
+  *
+- * Règles :
++ * Règles (validées terrain, cf. Patch 0009) :
+  * - JAMAIS de changement optimiste : l'état affiché vient du backend (autoritaire).
+- * - Pendant une transition (SWITCHING_*), le contrôle est verrouillé (`busy`), un seul appel.
+- * - Au montage / retour foreground / après réseau : on récupère l'état RÉEL (jamais supposé).
+- * - Retour Professionnel jamais anticipé : si incertain, on reste "confidentialité active".
+- * - En cas d'échec : message honnête (sans jargon), possibilité de réessayer.
+- * - Changement de véhicule : l'état est ré-évalué (aucune contamination inter-véhicule).
++ * - Un `success=true` à l'envoi n'est JAMAIS une confirmation de mode.
++ * - PENDING (attente confirmation télémétrique) : NON bloquant. L'app reste navigable,
++ *   le polling continue en arrière-plan, MAIS on interdit une nouvelle commande.
++ * - L'état PENDING ne dépend PAS de l'état React local : au remount/relaunch, on relit
++ *   le backend (qui conserve PENDING_CONFIRMATION jusqu'à preuve ou timeout serveur).
++ * - Confirmation UNIQUEMENT sur preuve télémétrique -> BUSINESS / PRIVATE.
++ * - Pas de preuve : UNKNOWN/UNCONFIRMED (transition_result=TIMEOUT). JAMAIS « actif ».
++ * - Repères UX (affichage seulement, seuils indépendants du timeout serveur) :
++ *     90 s  -> avertissement « confirmation plus longue, faites rouler le véhicule ».
++ *     180 s -> message renforcé + proposer « Actualiser l'état » (jamais de renvoi commande).
++ * - Le bouton « Actualiser l'état » relit le backend ; il NE renvoie AUCUNE commande device.
+  */
+-export function usePrivateMode(pollMs = 15000) {
++
++/** Repères UX (ms). Indépendants du PENDING_TIMEOUT_S serveur (résolution d'état réelle). */
++export const PENDING_WARN_MS = 90_000;   // 90 s : confirmation plus longue que prévu
++export const PENDING_LONG_MS = 180_000;  // 180 s : message renforcé + Actualiser
++
++export type PendingPhase = 'none' | 'normal' | 'long' | 'verylong';
++
++/** Cadence de polling : rapide pendant une transition, sobre au repos. */
++const POLL_ACTIVE_MS = 5_000;   // transition en cours -> relire vite
++const POLL_IDLE_MS_DEFAULT = 15_000;
++
++function isTransientState(s: PrivateModeStatus['state']): boolean {
++  return s === 'PENDING_CONFIRMATION' || s === 'PRIVATE_REQUESTED' || s === 'BUSINESS_REQUESTED';
++}
++
++export function usePrivateMode(pollMs = POLL_IDLE_MS_DEFAULT) {
+   const [status, setStatus] = useState<PrivateModeStatus>({
+     state: 'UNKNOWN',
+     allowed: false,
+@@ -26,29 +47,43 @@ export function usePrivateMode(pollMs = 15000) {
+   const [error, setError] = useState<string | null>(null);
+   const [sentMessage, setSentMessage] = useState<string | null>(null);
+   const [lastDistanceKm, setLastDistanceKm] = useState<number | null>(null);
++  // `nowTs` : horloge légère pour recalculer les phases UX pendant PENDING (granularité poll).
++  const [nowTs, setNowTs] = useState<number>(() => Date.now());
+   const inFlight = useRef(false);
+   const lastVehicleId = useRef<string | null | undefined>(undefined);
++  // Horodatage LOCAL de la dernière commande envoyée (repère UX de secours si le backend
++  // ne renvoie pas encore command_sent_at). Le backend reste prioritaire.
++  const localCommandSentAt = useRef<number | null>(null);
+ 
+   const refresh = useCallback(async () => {
+     try {
+       const s = await getPrivateMode();
+       const newVid = s.vehicle_id ?? null;
+       // Changement de véhicule -> reset des données volatiles (pas de contamination).
+-      // (comparaison normalisée : évite un faux positif null/undefined)
+       if (lastVehicleId.current !== undefined && lastVehicleId.current !== newVid) {
+         setLastDistanceKm(null);
++        localCommandSentAt.current = null;
+       }
+       lastVehicleId.current = newVid;
++      // Confirmation atteinte OU timeout serveur -> plus de repère de commande local.
++      if (!isTransientState(s.state)) {
++        localCommandSentAt.current = null;
++      }
+       setStatus(s);
++      setNowTs(Date.now());
+     } catch {
+       // pas d'écrasement optimiste : si on ne peut pas lire -> UNKNOWN (jamais BUSINESS supposé)
+       setStatus((prev) => ({ ...prev, state: 'UNKNOWN' }));
+     }
+   }, []);
+ 
++  /** Alias explicite pour l'UI (« Actualiser l'état ») : relit le backend, ZÉRO commande device. */
++  const refreshState = refresh;
++
+   const requestMode = useCallback(
+     async (mode: 'PRIVATE' | 'BUSINESS') => {
+-      if (inFlight.current) return; // anti double-tap / concurrence
++      if (inFlight.current) return;               // anti double-tap / concurrence
++      if (isTransientState(status.state)) return; // transition en cours -> aucune nouvelle commande
+       if (!status.allowed) {
+         setError(reasonToMessage(status.reason));
+         return;
+@@ -57,16 +92,18 @@ export function usePrivateMode(pollMs = 15000) {
+       setBusy(true);
+       setError(null);
+       setSentMessage(null);
+-      // état transitoire local (SWITCHING_*) — informatif, PAS un succès
++      localCommandSentAt.current = Date.now();
++      // état transitoire local (informatif, PAS un succès)
+       setStatus((prev) => ({
+         ...prev,
+         state: mode === 'PRIVATE' ? 'PRIVATE_REQUESTED' : 'BUSINESS_REQUESTED',
+       }));
++      setNowTs(Date.now());
+       try {
+         const res = await setPrivateMode(mode);
+         if (res.ok && res.state === 'PENDING_CONFIRMATION') {
+           // Commande envoyée, confirmation device en cours (télémétrie async).
+-          // PAS un succès "actif" : on affiche « Commande X envoyée » et on continue à relire.
++          // PAS un succès « actif » : on reste PENDING et on continue à relire le backend.
+           setStatus((prev) => ({ ...prev, state: 'PENDING_CONFIRMATION' }));
+           setSentMessage(res.message ?? `Commande ${mode === 'PRIVATE' ? 'Privé' : 'Professionnel'} envoyée`);
+         } else if (res.ok) {
+@@ -78,6 +115,7 @@ export function usePrivateMode(pollMs = 15000) {
+         } else {
+           // non confirmé / refusé -> message honnête (code HTTP prioritaire, sinon reason)
+           setError(reasonToMessage(res.reason, res.http_status));
++          localCommandSentAt.current = null;
+           // Retour Pro non confirmé : on NE bascule PAS optimiste vers Professionnel.
+         }
+         await refresh(); // resynchronise avec la vérité backend (résout aussi le PENDING)
+@@ -85,22 +123,31 @@ export function usePrivateMode(pollMs = 15000) {
+         // réseau/timeout/5xx inattendu : état incertain -> UNKNOWN, jamais de fausse confirmation.
+         setStatus((prev) => ({ ...prev, state: 'UNKNOWN' }));
+         setError('Impossible de confirmer le changement. Vérifiez votre connexion et réessayez.');
++        localCommandSentAt.current = null;
+       } finally {
+         setBusy(false);
+         inFlight.current = false;
+       }
+     },
+-    [refresh, status.allowed, status.reason],
++    [refresh, status.allowed, status.reason, status.state],
+   );
+ 
+-  // Montage + polling léger.
++  // Montage + polling ADAPTATIF : rapide pendant une transition, sobre au repos.
++  // Le polling continue en arrière-plan même si l'écran n'est pas au premier plan
++  // (l'app doit pouvoir naviguer pendant PENDING sans perdre la confirmation).
++  const pending = isTransientState(status.state);
+   useEffect(() => {
+     refresh();
+-    const id = setInterval(refresh, pollMs);
++  }, [refresh]);
++  useEffect(() => {
++    const interval = pending ? POLL_ACTIVE_MS : pollMs;
++    const id = setInterval(() => {
++      refresh();
++    }, interval);
+     return () => clearInterval(id);
+-  }, [refresh, pollMs]);
++  }, [refresh, pollMs, pending]);
+ 
+-  // Retour au premier plan -> re-lecture de l'état serveur réel (jamais d'état obsolète).
++  // Retour au premier plan (app entière) -> re-lecture immédiate de l'état serveur réel.
+   useEffect(() => {
+     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+       if (next === 'active') {
+@@ -110,19 +157,73 @@ export function usePrivateMode(pollMs = 15000) {
+     return () => sub.remove();
+   }, [refresh]);
+ 
++  // Repère de temps écoulé depuis l'envoi de la commande (backend prioritaire).
++  // `nowTs` est inclus volontairement : il force la relecture de la ref locale
++  // `localCommandSentAt` à chaque tick de poll (la ref seule ne déclenche pas de recompute).
++  const commandSentMs = useMemo(() => {
++    const fromBackend = status.command_sent_at ? Date.parse(status.command_sent_at) : NaN;
++    if (!Number.isNaN(fromBackend)) return fromBackend;
++    return localCommandSentAt.current;
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [status.command_sent_at, nowTs]);
++
++  const pendingElapsedMs = useMemo(() => {
++    if (!pending || !commandSentMs) return 0;
++    return Math.max(0, nowTs - commandSentMs);
++  }, [pending, commandSentMs, nowTs]);
++
++  const pendingPhase: PendingPhase = useMemo(() => {
++    if (!pending) return 'none';
++    if (pendingElapsedMs >= PENDING_LONG_MS) return 'verylong';
++    if (pendingElapsedMs >= PENDING_WARN_MS) return 'long';
++    return 'normal';
++  }, [pending, pendingElapsedMs]);
++
++  const target: 'PRIVATE' | 'BUSINESS' | null = useMemo(() => {
++    if (status.requested_target === 'PRIVATE' || status.requested_target === 'BUSINESS') {
++      return status.requested_target;
++    }
++    if (status.state === 'PRIVATE_REQUESTED') return 'PRIVATE';
++    if (status.state === 'BUSINESS_REQUESTED') return 'BUSINESS';
++    return null;
++  }, [status.requested_target, status.state]);
++
++  // Message d'attente CLAIR et non alarmant (aucun jargon technique).
++  const pendingMessage: string | null = useMemo(() => {
++    if (!pending) return null;
++    const cible = target === 'PRIVATE' ? 'Privé' : target === 'BUSINESS' ? 'Professionnel' : null;
++    const base = cible
++      ? `Confirmation du mode ${cible} en cours…`
++      : 'Confirmation du mode en cours…';
++    if (pendingPhase === 'verylong') {
++      return `${base} Le véhicule doit rouler pour transmettre une nouvelle position. Vous pouvez actualiser l'état.`;
++    }
++    if (pendingPhase === 'long') {
++      return `${base} Confirmation plus longue que prévu — assurez-vous que le véhicule roule.`;
++    }
++    return `${base} Le véhicule doit transmettre une nouvelle télémétrie.`;
++  }, [pending, target, pendingPhase]);
++
+   return {
+     status,
+     busy,
+     error,
+     sentMessage,
+     lastDistanceKm,
+-    pending: status.state === 'PENDING_CONFIRMATION',
+-    // Timeout de confirmation : commande envoyée mais état device NON prouvé.
+-    // L'UI doit réactiver les boutons et afficher un message honnête (jamais un faux PRO/PRIVÉ).
++    pending,
++    // Cible demandée pendant la transition (pour messages contextuels côté UI).
++    pendingTarget: target,
++    // Repères UX d'attente (ne changent PAS la source de vérité backend).
++    pendingElapsedMs,
++    pendingPhase,
++    pendingMessage,
++    // Timeout serveur : commande envoyée mais état device NON prouvé (transition_result=TIMEOUT).
++    // L'UI réactive les boutons et affiche un message honnête (jamais un faux PRO/PRIVÉ).
+     timedOut: status.transition_result === 'TIMEOUT',
+     privateOdometerSupported: !!status.private_odometer_supported,
+     requestMode,
+     refresh,
++    refreshState,
+   };
+ }
+ 
+diff --git a/logitrak-driver-app/src/screens/DriverScreenManual.tsx b/logitrak-driver-app/src/screens/DriverScreenManual.tsx
+index e1c4058..c5735b1 100644
+--- a/logitrak-driver-app/src/screens/DriverScreenManual.tsx
++++ b/logitrak-driver-app/src/screens/DriverScreenManual.tsx
+@@ -216,9 +216,11 @@ export default function DriverScreenManual() {
+   const st = privateMode.status.state;
+   const isPrivate = st === 'PRIVATE';
+   const isBusiness = st === 'BUSINESS';
+-  const isPending = st === 'PENDING_CONFIRMATION' || st === 'PRIVATE_REQUESTED' || st === 'BUSINESS_REQUESTED';
++  const isPending = privateMode.pending;
+   const hasVehicle = !!assignment;
+-  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy;
++  // Pendant une transition PENDING : NON bloquant pour la navigation, mais AUCUNE
++  // nouvelle commande PRO/PRIVÉ tant que la confirmation télémétrique n'est pas résolue.
++  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy && !isPending;
+ 
+   // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
+   const proKm = km.proKm;
+@@ -355,7 +357,7 @@ export default function DriverScreenManual() {
+             label="Professionnel"
+             active={isBusiness}
+             disabled={!canToggle || isBusiness}
+-            loading={isPending && !isPrivate}
++            loading={isPending && privateMode.pendingTarget === 'BUSINESS'}
+             color={colors.pro}
+             onPress={() => privateMode.requestMode('BUSINESS')}
+             testID="manual-mode-pro"
+@@ -364,14 +366,14 @@ export default function DriverScreenManual() {
+             label="Privé"
+             active={isPrivate}
+             disabled={!canToggle || isPrivate}
+-            loading={isPending && !isBusiness}
++            loading={isPending && privateMode.pendingTarget === 'PRIVATE'}
+             color={colors.perso}
+             onPress={() => privateMode.requestMode('PRIVATE')}
+             testID="manual-mode-private"
+           />
+         </View>
+ 
+-        {hasVehicle && privateMode.status.allowed ? (
++        {hasVehicle && privateMode.status.allowed && !isPending ? (
+           <Text style={styles.helpText} testID="manual-mode-help">
+             {isPrivate
+               ? (privateMode.privateOdometerSupported
+@@ -379,19 +381,68 @@ export default function DriverScreenManual() {
+                   : 'Mode Privé actif. La position du véhicule est masquée.')
+               : isBusiness
+               ? 'Mode Professionnel actif. Les nouveaux trajets seront enregistrés comme professionnels.'
+-              : isPending
+-              ? (privateMode.sentMessage || privateMode.status.pending_message || 'Commande envoyée.')
+               : 'Sélectionnez votre mode.'}
+           </Text>
+         ) : null}
+ 
++        {/* ---- ATTENTE DE CONFIRMATION (NON bloquant) : badge persistant + guidage ---- */}
++        {hasVehicle && isPending ? (
++          <View
++            style={[
++              styles.pendingCard,
++              privateMode.pendingPhase === 'long' && styles.pendingCardWarn,
++              privateMode.pendingPhase === 'verylong' && styles.pendingCardWarn,
++            ]}
++            testID="manual-mode-pending"
++          >
++            <View style={styles.pendingHeader}>
++              <ActivityIndicator size="small" color={colors.warning} />
++              <Text style={styles.pendingBadge} testID="manual-mode-pending-badge">
++                Confirmation en cours
++              </Text>
++            </View>
++            <Text style={styles.pendingText} testID="manual-mode-pending-text">
++              {privateMode.pendingMessage
++                || privateMode.sentMessage
++                || privateMode.status.pending_message
++                || 'Confirmation du mode en cours…'}
++            </Text>
++            {/* « Actualiser l'état » : relit le backend, NE renvoie AUCUNE commande device. */}
++            {privateMode.pendingPhase === 'verylong' ? (
++              <TouchableOpacity
++                style={styles.pendingRefreshBtn}
++                onPress={() => privateMode.refreshState()}
++                testID="manual-mode-refresh"
++                accessibilityRole="button"
++                accessibilityLabel="Actualiser l'état du mode"
++              >
++                <Text style={styles.pendingRefreshText}>Actualiser l'état</Text>
++              </TouchableOpacity>
++            ) : null}
++          </View>
++        ) : null}
++
+         {privateMode.error ? (
+           <Text style={styles.errorText} testID="manual-mode-error">{privateMode.error}</Text>
+         ) : null}
+-        {privateMode.timedOut && !isPending ? (
+-          <Text style={styles.errorText} testID="manual-mode-timeout">
+-            Commande envoyée mais état non confirmé. Vérifiez l’état du véhicule.
+-          </Text>
++        {/* Timeout serveur : commande envoyée mais mode NON confirmé. Message d'action clair
++            + « Actualiser l'état ». Jamais présenté comme un mode « actif ». */}
++        {privateMode.timedOut && !isPending && !isBusiness && !isPrivate ? (
++          <View style={styles.pendingCard} testID="manual-mode-timeout">
++            <Text style={styles.pendingText}>
++              Le mode n'a pas encore été confirmé. Faites rouler le véhicule pour qu'une nouvelle
++              position soit transmise, puis actualisez l'état.
++            </Text>
++            <TouchableOpacity
++              style={styles.pendingRefreshBtn}
++              onPress={() => privateMode.refreshState()}
++              testID="manual-mode-timeout-refresh"
++              accessibilityRole="button"
++              accessibilityLabel="Actualiser l'état du mode"
++            >
++              <Text style={styles.pendingRefreshText}>Actualiser l'état</Text>
++            </TouchableOpacity>
++          </View>
+         ) : null}
+ 
+         {/* ============ KILOMÈTRES ============ */}
+@@ -686,6 +737,21 @@ const styles = StyleSheet.create({
+   helpText: { color: colors.textMuted, fontSize: font.size.sm, marginTop: spacing.md, lineHeight: 20 },
+   errorText: { color: colors.danger, fontSize: font.size.sm, marginTop: spacing.sm },
+ 
++  // Attente de confirmation (NON bloquant) : bandeau persistant + guidage.
++  pendingCard: {
++    marginTop: spacing.md, backgroundColor: colors.warningSoft, borderRadius: radius.lg,
++    borderWidth: 1, borderColor: colors.warningBorder, padding: spacing.md,
++  },
++  pendingCardWarn: { borderColor: colors.warning },
++  pendingHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
++  pendingBadge: { color: colors.warning, fontSize: font.size.sm, fontWeight: '700' },
++  pendingText: { color: colors.text, fontSize: font.size.sm, lineHeight: 20 },
++  pendingRefreshBtn: {
++    marginTop: spacing.md, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.warning,
++    borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
++  },
++  pendingRefreshText: { color: colors.warning, fontWeight: '700', fontSize: font.size.sm },
++
+   periodCaption: {
+     color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.sm, marginLeft: 2,
+   },
+diff --git a/logitrak-driver-app/src/store/assignmentStore.ts b/logitrak-driver-app/src/store/assignmentStore.ts
+index 2a11e86..c76fbb6 100644
+--- a/logitrak-driver-app/src/store/assignmentStore.ts
++++ b/logitrak-driver-app/src/store/assignmentStore.ts
+@@ -206,18 +206,23 @@ export function endServiceGate(pm: PrivateModeStatus | null | undefined, pmError
+   const target = pm.requested_target;
+ 
+   if (state === 'BUSINESS') {
+-    return { allowed: true, message: null };                     // ✅ seul cas autorisé
++    return { allowed: true, message: null };                     // ✅ SEUL cas autorisé
+   }
+   if (state === 'PRIVATE') {
+     return { allowed: false, message: 'Repassez en Professionnel avant de terminer votre service.' };
+   }
+-  // Transitions PENDING : bloquées jusqu'à confirmation télémétrique.
++  // Transitions PENDING : bloquées jusqu'à confirmation télémétrique (jamais sur success=true).
+   if (state === 'PENDING_CONFIRMATION' || state === 'PRIVATE_REQUESTED' || state === 'BUSINESS_REQUESTED') {
+     if (target === 'BUSINESS' || state === 'BUSINESS_REQUESTED') {
+       return { allowed: false, message: 'Passage en Professionnel en cours de confirmation. Attendez la confirmation avant de terminer votre service.' };
+     }
+     return { allowed: false, message: 'Changement de mode en cours. Attendez la confirmation avant de terminer votre service.' };
+   }
++  // Timeout serveur : commande envoyée mais mode NON confirmé (transition_result=TIMEOUT).
++  // On ne conclut jamais BUSINESS -> END bloquée + message d'action clair.
++  if (pm.transition_result === 'TIMEOUT') {
++    return { allowed: false, message: 'Le mode n\'a pas été confirmé. Repassez en Professionnel (faites rouler le véhicule) avant de terminer votre service.' };
++  }
+   // UNKNOWN / FAILED / autre -> BLOQUÉ (fail-closed).
+   return { allowed: false, message: 'Impossible de vérifier le mode du véhicule. Réessayez avant de terminer votre service.' };
+ }
