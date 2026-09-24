@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_roles
 from app.db import get_db
 from app.routes._helpers import resolve_driver_id_for_user
 from app.vehicle_access import assert_vehicle_authorized
@@ -281,3 +281,98 @@ async def archive_vehicle_document(doc_id: str, user=Depends(get_current_user)):
                                   "updated_by": user.get("email")}})
     await _audit(db, "vehicle_document.archived", doc_id, user)
     return {"archived": True, "id": doc_id}
+
+
+# ===========================================================================
+# GESTIONNAIRE (admin/manager) — Proposition A : FÉDÉRATION des documents
+# ajoutés par les CHAUFFEURS (app mobile) vers le module Documents FLEET ADMIN.
+# Classés PAR VÉHICULE, avec la note « ajouté par [chauffeur] ». READ-ONLY côté
+# métier (le gestionnaire consulte/télécharge ; il valide via l'endpoint dédié).
+# Tenant issu du contexte serveur (jamais du client). Aucun storage_path exposé.
+# ===========================================================================
+async def _driver_label(db, driver_id: Optional[str], created_by: Optional[str]) -> str:
+    """Nom lisible du chauffeur (ou email fallback) pour la note « ajouté par »."""
+    if driver_id:
+        drv = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "name": 1, "email": 1})
+        if drv and (drv.get("name") or drv.get("email")):
+            return drv.get("name") or drv.get("email")
+    return created_by or "Chauffeur"
+
+
+def _admin_doc_dto(doc: dict, driver_label: str) -> dict:
+    """DTO gestionnaire — inclut la provenance (mobile chauffeur) + « ajouté par »."""
+    return {
+        "id": doc.get("id"),
+        "vehicle_id": doc.get("vehicle_id"),
+        "type": doc.get("type"),                      # carte_grise|assurance|leasing|controle_technique|autre
+        "filename": doc.get("filename"),
+        "content_type": doc.get("content_type"),
+        "size_bytes": doc.get("size_bytes"),
+        "status": _effective_status(doc),             # a_traiter|valide|expire
+        "document_date": doc.get("document_date"),
+        "expiry_date": doc.get("expiry_date"),
+        "created_at": doc.get("created_at"),
+        "created_by": doc.get("created_by"),          # email (traçabilité)
+        "added_by_label": driver_label,               # « ajouté par [chauffeur] » (affichage)
+        "source": "MOBILE_DRIVER",                    # provenance explicite (app chauffeur)
+        "download_url": f"/api/livre/admin/vehicle-documents/{doc.get('id')}/download",
+    }
+
+
+@router.get("/admin/vehicle-documents")
+async def admin_list_vehicle_documents(
+    vehicle_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),            # filtre optionnel: a_traiter|valide|expire
+    user=Depends(require_roles("admin", "manager")),
+):
+    """Documents chauffeurs (mobile) du tenant, GROUPÉS PAR VÉHICULE, avec « ajouté par ».
+    Consommé par le module Documents FLEET ADMIN (fédération, Proposition A)."""
+    db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
+    q: dict = {"archived": {"$ne": True}}
+    if vehicle_id:
+        q["vehicle_id"] = vehicle_id
+    docs = await db.vehicle_documents.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    if status:
+        docs = [d for d in docs if _effective_status(d) == status]
+
+    # Regroupement par véhicule (avec plaque/modèle pour l'affichage FLEET ADMIN).
+    groups: dict = {}
+    for d in docs:
+        vid = d.get("vehicle_id")
+        if vid not in groups:
+            veh = await db.vehicles.find_one(
+                {"id": vid, "tenant_id": tenant_id}, {"_id": 0, "plate": 1, "model": 1, "label": 1}) or {}
+            groups[vid] = {
+                "vehicle_id": vid,
+                "vehicle_plate": veh.get("plate"),
+                "vehicle_model": veh.get("model"),
+                "vehicle_label": veh.get("label"),
+                "documents": [],
+            }
+        label = await _driver_label(db, d.get("driver_id"), d.get("created_by"))
+        groups[vid]["documents"].append(_admin_doc_dto(d, label))
+
+    out = sorted(groups.values(), key=lambda g: (g.get("vehicle_plate") or ""))
+    return {"count": len(docs), "vehicles": out}
+
+
+@router.get("/admin/vehicle-documents/{doc_id}/download")
+async def admin_download_vehicle_document(doc_id: str,
+                                          user=Depends(require_roles("admin", "manager"))):
+    """Téléchargement gestionnaire d'un document chauffeur (tenant-scopé, aucun secret exposé)."""
+    db = get_db()
+    doc = await db.vehicle_documents.find_one({"id": doc_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Document introuvable")
+    from app.object_storage import get_object
+    got = await get_object(doc["storage_path"])
+    if got is None:
+        raise HTTPException(410, "Le fichier n'est plus disponible.")
+    content, ct = got
+    await _audit(db, "vehicle_document.admin_download", doc_id, user)
+    return Response(
+        content=content,
+        media_type=doc.get("content_type") or ct,
+        headers={"Content-Disposition": f'attachment; filename="{doc["filename"]}"'},
+    )
