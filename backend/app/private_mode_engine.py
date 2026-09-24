@@ -20,6 +20,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Callable, Awaitable
+from zoneinfo import ZoneInfo
 
 from app.odometer_capability import (
     resolve_model, get_capability, VehicleOdometerCapability,
@@ -119,6 +120,37 @@ def _parse(ts):
     if d.tzinfo is None:
         d = d.replace(tzinfo=timezone.utc)
     return d
+
+
+def _parse_navixy_time(ts, timezone_name: Optional[str]):
+    """Parse un timestamp Navixy en timezone compte puis le normalise en UTC.
+
+    tracker/get_state gps.updated est renvoye dans le fuseau du compte Navixy.
+    Un timestamp naif n'est donc jamais traite comme UTC. Si le fuseau du compte
+    est indisponible ou invalide, on echoue ferme (None).
+    """
+    if not ts:
+        return None
+    raw = str(ts).strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(raw)
+    except Exception:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                d = datetime.strptime(raw[:19], fmt)
+                break
+            except Exception:
+                d = None
+        if d is None:
+            return None
+    if d.tzinfo is None:
+        if not timezone_name:
+            return None
+        try:
+            d = d.replace(tzinfo=ZoneInfo(str(timezone_name)))
+        except Exception:
+            return None
+    return d.astimezone(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +329,23 @@ LKP_NOSAMPLE_MIN_DELTA_KM = float(
 LKP_NOSAMPLE_MAX_RADIUS_M = float(
     os.environ.get("PRIVATE_LKP_NOSAMPLE_MAX_RADIUS_M", "50")
 )
+
+# Terrain FMC130 781479 (24.09.2026): en PRIVATE, get_state peut continuer
+# a mettre a jour speed/gps.updated tout en gardant exactement les memes
+# coordonnees, et track/read peut rester vide. L'ancre pre-commande n'est
+# donc pas une preuve suffisante a elle seule.
+LKP_PERSIST_MIN_OBSERVATIONS = int(
+    os.environ.get("PRIVATE_LKP_PERSIST_MIN_OBSERVATIONS", "3")
+)
+LKP_PERSIST_MIN_SPAN_S = int(
+    os.environ.get("PRIVATE_LKP_PERSIST_MIN_SPAN_S", "10")
+)
+LKP_PERSIST_MIN_ODO_DELTA_KM = float(
+    os.environ.get("PRIVATE_LKP_PERSIST_MIN_ODO_DELTA_KM", "0.03")
+)
+
+_NAVIXY_TZ_CACHE: dict[str, str] = {}
+
 # Marge de skew d'horloge pour l'anti-stale de la réponse device (secondes).
 ANTI_STALE_SKEW_S = int(os.environ.get("PRIVATE_DEVICE_RESP_SKEW_S", "5"))
 
@@ -354,8 +403,12 @@ def _samples_show_movement(samples) -> bool:
 
 async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
                              since_iso: Optional[str]) -> list[dict]:
-    """Lit plusieurs points GPS récents (READ-ONLY) via `track/read` avec le credential du tenant.
-    Retour liste [{lat,lng,time}]. [] si indisponible. Ne logge/expose jamais le credential."""
+    """Lit plusieurs points GPS recents (READ-ONLY) via `track/read`.
+
+    track/read attend des datetimes sans offset interpretees dans le fuseau du
+    compte Navixy. On convertit donc explicitement la fenetre UTC vers le fuseau
+    du compte (ex. Europe/Zurich) avant formatage. Sans fuseau connu -> [] fail-closed.
+    """
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
@@ -365,13 +418,34 @@ async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     start = _parse(since_iso) or (now - timedelta(minutes=30))
-    fmt = "%Y-%m-%d %H:%M:%S"
-    body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
-            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
-            "simplify": False, "point_limit": 200}
     import httpx
     try:
         async with httpx.AsyncClient(timeout=25) as c:
+            tz_name = _NAVIXY_TZ_CACHE.get(str(tenant_id))
+            if not tz_name:
+                ur = await c.post(f"{base}/user/get_info",
+                                  json={"hash": cred["credential"]})
+                ui = (ur.json() or {}).get("user_info") or {}
+                candidate = ui.get("time_zone")
+                if candidate:
+                    try:
+                        ZoneInfo(str(candidate))
+                        tz_name = str(candidate)
+                        _NAVIXY_TZ_CACHE[str(tenant_id)] = tz_name
+                    except Exception:
+                        tz_name = None
+            if not tz_name:
+                return []
+            account_tz = ZoneInfo(tz_name)
+            fmt = "%Y-%m-%d %H:%M:%S"
+            body = {
+                "hash": cred["credential"],
+                "tracker_id": int(tracker_id),
+                "from": start.astimezone(account_tz).strftime(fmt),
+                "to": (now + timedelta(minutes=1)).astimezone(account_tz).strftime(fmt),
+                "simplify": False,
+                "point_limit": 200,
+            }
             r = await c.post(f"{base}/track/read", json=body)
             data = r.json() or {}
     except Exception:
@@ -385,8 +459,12 @@ async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
 
 
 async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
-    """Lit l'état GPS transmis (READ-ONLY) via le credential du tenant. None si indispo.
-    Ne logge/expose jamais le credential."""
+    """Lit l'etat GPS transmis (READ-ONLY) via le credential du tenant.
+
+    Navixy renvoie gps.updated dans le fuseau du compte, sans offset. On resout
+    ce fuseau via user/get_info (cache process) et on normalise en ISO UTC avant
+    toute comparaison anti-stale/fraicheur. Aucun secret n'est expose.
+    """
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
@@ -394,20 +472,34 @@ async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
     import httpx
     base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
             or "https://api.navixy.com/v2").rstrip("/")
+    tz_name = _NAVIXY_TZ_CACHE.get(str(tenant_id))
     try:
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.post(f"{base}/tracker/get_state",
                              json={"hash": cred["credential"], "tracker_id": int(tracker_id)})
             st = (r.json() or {}).get("state") or {}
+            if not tz_name:
+                ur = await c.post(f"{base}/user/get_info",
+                                  json={"hash": cred["credential"]})
+                ui = (ur.json() or {}).get("user_info") or {}
+                candidate = ui.get("time_zone")
+                if candidate:
+                    try:
+                        ZoneInfo(str(candidate))
+                        tz_name = str(candidate)
+                        _NAVIXY_TZ_CACHE[str(tenant_id)] = tz_name
+                    except Exception:
+                        tz_name = None
     except Exception:
         return None
     gps = st.get("gps") or {}
     loc = gps.get("location") or {}
+    updated = _parse_navixy_time(gps.get("updated"), tz_name)
     return {
         "connection_status": st.get("connection_status"),
         "movement_status": st.get("movement_status"),
         "ignition": bool(st.get("ignition")),
-        "gps_updated": gps.get("updated"),
+        "gps_updated": updated.isoformat() if updated else None,
         "speed": gps.get("speed"),
         "lat": loc.get("lat"), "lng": loc.get("lng"),
     }
@@ -418,6 +510,85 @@ def _is_zero(lat, lng) -> bool:
         return lat is not None and lng is not None and abs(float(lat)) < 1e-6 and abs(float(lng)) < 1e-6
     except (TypeError, ValueError):
         return False
+
+
+async def _persistent_lkp_private_probe(
+    db, *, tenant_id: str, vehicle_id: str, tracker_id: int,
+    state_doc: dict, read_odo_km
+) -> tuple[bool, dict]:
+    """Preuve PRIVATE FMC130 quand track/read est vide mais get_state reste vivant.
+
+    Exige plusieurs observations GPS post-commande distinctes dans le temps,
+    toutes dans un petit rayon, pendant qu'AVL16 augmente reellement.
+    La distance a l'ancre pre-PRIVATE n'entre pas dans la decision.
+    """
+    gps = await _fetch_gps_state(tenant_id, int(tracker_id))
+    if not gps:
+        return False, state_doc
+
+    lat, lng = gps.get("lat"), gps.get("lng")
+    if lat is None or lng is None or _is_zero(lat, lng):
+        return False, state_doc
+
+    gps_mark = gps.get("gps_updated")
+    gps_dt = _parse(gps_mark)
+    sent = _parse(state_doc.get("command_sent_at"))
+    if not gps_dt or not sent or gps_dt <= sent:
+        return False, state_doc
+
+    odo_now, _status = await _read_odometer_snapshot(
+        db, tenant_id, vehicle_id, tracker_id, read_odo_km)
+    if odo_now is None:
+        return False, state_doc
+
+    probe_lat = state_doc.get("private_lkp_probe_lat")
+    probe_lng = state_doc.get("private_lkp_probe_lng")
+    probe_first_gps = _parse(state_doc.get("private_lkp_probe_first_gps_at"))
+    probe_start_odo = state_doc.get("private_lkp_probe_start_odometer_km")
+    probe_last_gps = state_doc.get("private_lkp_probe_last_gps_at")
+    probe_count = int(state_doc.get("private_lkp_probe_count") or 0)
+
+    distance = None
+    if probe_lat is not None and probe_lng is not None:
+        distance = _haversine_m(probe_lat, probe_lng, lat, lng)
+
+    if distance is None or distance > LKP_DOMINANT_RADIUS_M:
+        patch = {
+            "private_lkp_probe_lat": lat,
+            "private_lkp_probe_lng": lng,
+            "private_lkp_probe_first_gps_at": gps_mark,
+            "private_lkp_probe_last_gps_at": gps_mark,
+            "private_lkp_probe_start_odometer_km": odo_now,
+            "private_lkp_probe_count": 1,
+        }
+        updated = {**state_doc, **patch}
+        await _save_mode_state(db, updated)
+        return False, updated
+
+    if probe_last_gps == gps_mark:
+        return False, state_doc
+
+    try:
+        odo_delta = float(odo_now) - float(probe_start_odo)
+    except (TypeError, ValueError):
+        odo_delta = None
+
+    count = probe_count + 1
+    patch = {
+        "private_lkp_probe_last_gps_at": gps_mark,
+        "private_lkp_probe_count": count,
+    }
+    updated = {**state_doc, **patch}
+    await _save_mode_state(db, updated)
+
+    if not probe_first_gps or odo_delta is None or odo_delta < LKP_PERSIST_MIN_ODO_DELTA_KM:
+        return False, updated
+
+    span_s = (gps_dt - probe_first_gps).total_seconds()
+    if count < LKP_PERSIST_MIN_OBSERVATIONS or span_s < LKP_PERSIST_MIN_SPAN_S:
+        return False, updated
+
+    return True, updated
 
 
 # Fraîcheur max d'une position GPS pour prouver une REPRISE business à l'arrêt (secondes).
@@ -906,6 +1077,12 @@ async def request_mode(
         base["navixy_command_id"] = None
         base["private_gps_anchor_lat"] = None
         base["private_gps_anchor_lng"] = None
+        base["private_lkp_probe_lat"] = None
+        base["private_lkp_probe_lng"] = None
+        base["private_lkp_probe_first_gps_at"] = None
+        base["private_lkp_probe_last_gps_at"] = None
+        base["private_lkp_probe_start_odometer_km"] = None
+        base["private_lkp_probe_count"] = 0
         odo_start, snap_status = await _read_odometer_snapshot(
             db, tid, vehicle_id, tracker_id, read_odo_km)
         base["private_start_time"] = _now()
@@ -1119,14 +1296,33 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         tid, int(tracker_id), requested, st.get("command_sent_at"), vc,
         state_doc=st, read_odo_km=_effective_read_odo, **_extra)
 
+    if (
+        confirmed != requested
+        and requested == PRIVATE
+        and _model_supports_telemetry_confirm(vc)
+        and _confirm_strategy(vc) == CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+    ):
+        probe_ok, st = await _persistent_lkp_private_probe(
+            db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=int(tracker_id),
+            state_doc=st, read_odo_km=read_odo_km)
+        if probe_ok:
+            confirmed, source = PRIVATE, SRC_TELEMETRY
+
     if confirmed == requested:
         # Promotion tardive (Option B) : si on était en UNKNOWN/TIMEOUT en attente async,
         # on marque CONFIRMED_LATE (traçabilité) ; sinon confirmation normale.
         _tr = TRANSITION_CONFIRMED_LATE if _awaiting_late else TRANSITION_CONFIRMED
         new_doc = {**st, "state": requested, "confirmation_source": source,
                    "confirmed_at": _now(), "transition_result": _tr,
-                   "awaiting_async_confirm": False, "pending_timeout_at": None}
-        new_doc.pop("requested_target", None)
+                   "awaiting_async_confirm": False, "pending_timeout_at": None,
+                   "requested_target": None}
+        for _k in (
+            "private_lkp_probe_lat", "private_lkp_probe_lng",
+            "private_lkp_probe_first_gps_at", "private_lkp_probe_last_gps_at",
+            "private_lkp_probe_start_odometer_km",
+        ):
+            new_doc[_k] = None
+        new_doc["private_lkp_probe_count"] = 0
         # distance privée au retour Business (jamais inventée)
         if requested == BUSINESS and st.get("private_start_odometer_km") is not None:
             odo_end, _ = await _read_odometer_snapshot(
@@ -1165,8 +1361,8 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
                                exc_info=False)
         # Nettoyage des coordonnées d'ancre (usage interne de confirmation uniquement).
         if requested == BUSINESS:
-            new_doc.pop("private_gps_anchor_lat", None)
-            new_doc.pop("private_gps_anchor_lng", None)
+            new_doc["private_gps_anchor_lat"] = None
+            new_doc["private_gps_anchor_lng"] = None
         await _save_mode_state(db, new_doc)
         await _audit(db, {"vehicle_id": vehicle_id, "tracker_id": tracker_id, "tenant_id": tid,
                           "requested_mode": requested, "resulting_state": requested,
