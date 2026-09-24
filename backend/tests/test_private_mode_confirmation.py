@@ -8,6 +8,7 @@ Aucun appel réseau réel : télémétrie MOCKÉE via _fetch_gps_state.
 import asyncio
 import os
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -15,6 +16,7 @@ from app import private_mode_engine as pm
 from app.odometer_capability import (
     VehicleOdometerCapability, SOURCE_TELTONIKA_TOTAL_ODOMETER,
     AVL_TOTAL_ODOMETER, SCALE_VERIFIED,
+    CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
 )
 
 
@@ -68,6 +70,15 @@ FMC130_VC = VehicleOdometerCapability(
     navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
     runtime_verified=True, cumulative_verified=True,
     private_increment_verified=True, field_validated=True)  # validé odo mais PAS terrain privé
+
+
+FMC130_LKP_VC = VehicleOdometerCapability(
+    vehicle_id="vB", tracker_id=781479, device_model="FMC130",
+    private_distance_source=SOURCE_TELTONIKA_TOTAL_ODOMETER, raw_avl_id=AVL_TOTAL_ODOMETER,
+    navixy_input="avl_io_16", scale_status=SCALE_VERIFIED,
+    runtime_verified=True, cumulative_verified=True,
+    private_increment_verified=True, field_validated=True,
+    private_confirmation_strategy=CONFIRM_STRATEGY_LAST_KNOWN_POSITION)
 
 
 def _iso(dt):
@@ -279,3 +290,205 @@ def test_production_simulation_impossible(monkeypatch):
     # restore dev for other tests
     monkeypatch.setenv("APP_ENV", "development")
     importlib.reload(pm)
+
+
+# ---------- régression terrain FMC130 / timezone Navixy ----------
+def test_parse_navixy_naive_time_uses_account_timezone():
+    tz = ZoneInfo("Europe/Zurich")
+    got = pm._parse_navixy_datetime("2026-09-24 08:27:35", tz)
+    assert got == datetime(2026, 9, 24, 6, 27, 35, tzinfo=timezone.utc)
+
+
+def test_fetch_gps_samples_converts_window_and_filters_pre_command(monkeypatch):
+    """Régression terrain : UTC envoyé comme heure locale récupérait des points pré-commande."""
+    from app import integrations
+    import httpx
+
+    monkeypatch.setattr(
+        integrations,
+        "get_integration_credential",
+        lambda tenant_id=None, provider="NAVIXY": {
+            "credential": "X",
+            "source": "TENANT",
+            "api_url": "https://example.invalid/v2",
+        },
+    )
+
+    tz = ZoneInfo("Europe/Zurich")
+    sent = datetime(2026, 9, 24, 6, 27, 35, tzinfo=timezone.utc)
+
+    async def fake_tz(tenant_id, base, credential, client):
+        return tz
+
+    monkeypatch.setattr(pm, "_navixy_account_timezone", fake_tz)
+
+    captured = {}
+
+    class _Response:
+        def json(self):
+            return {
+                "success": True,
+                "list": [
+                    {
+                        "lat": 46.1,
+                        "lng": 6.1,
+                        "get_time": "2026-09-24 08:27:20",  # 15 s avant commande
+                    },
+                    {
+                        "lat": 46.2,
+                        "lng": 6.2,
+                        "get_time": "2026-09-24 08:27:40",  # 5 s après commande
+                    },
+                ],
+            }
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["body"] = dict(json)
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    samples = _run(pm._fetch_gps_samples("default", 781479, _iso(sent)))
+
+    assert captured["body"]["from"] == "2026-09-24 08:27:35"
+    assert len(samples) == 1
+    assert samples[0]["lat"] == 46.2
+    assert pm._parse(samples[0]["time"]) == sent + timedelta(seconds=5)
+
+
+def test_fetch_gps_state_normalizes_naive_account_time_to_utc(monkeypatch):
+    from app import integrations
+    import httpx
+
+    monkeypatch.setattr(
+        integrations,
+        "get_integration_credential",
+        lambda tenant_id=None, provider="NAVIXY": {
+            "credential": "X",
+            "source": "TENANT",
+            "api_url": "https://example.invalid/v2",
+        },
+    )
+
+    async def fake_tz(tenant_id, base, credential, client):
+        return ZoneInfo("Europe/Zurich")
+
+    monkeypatch.setattr(pm, "_navixy_account_timezone", fake_tz)
+
+    class _Response:
+        def json(self):
+            return {
+                "success": True,
+                "state": {
+                    "connection_status": "active",
+                    "movement_status": "parked",
+                    "ignition": True,
+                    "gps": {
+                        "updated": "2026-09-24 08:27:40",
+                        "speed": 0,
+                        "location": {"lat": 46.2, "lng": 6.2},
+                    },
+                },
+            }
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json):
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    st = _run(pm._fetch_gps_state("default", 781479))
+    assert st is not None
+    assert pm._parse(st["gps_updated"]) == datetime(
+        2026, 9, 24, 6, 27, 40, tzinfo=timezone.utc
+    )
+
+
+def test_fmc130_lkp_private_confirms_after_avl16_progress(monkeypatch):
+    sent = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+    async def fake_state(tenant, tracker):
+        return {
+            "connection_status": "active",
+            "movement_status": "moving",
+            "ignition": True,
+            "gps_updated": _iso(sent + timedelta(seconds=10)),
+            "speed": 0,
+            "lat": 46.2,
+            "lng": 6.2,
+        }
+
+    async def fake_samples(tenant, tracker, since):
+        # Position dominante/gelée post-commande.
+        return [
+            {"lat": 46.2, "lng": 6.2, "time": _iso(sent + timedelta(seconds=i))}
+            for i in (5, 8, 11, 14, 17)
+        ]
+
+    async def fake_odo(tracker):
+        return 57309.29
+
+    async def no_command_response(tenant, tracker, since):
+        return []
+
+    monkeypatch.setattr(pm, "_fetch_gps_state", fake_state)
+
+    state, src = _run(pm.telemetry_confirm(
+        "default",
+        781479,
+        pm.PRIVATE,
+        _iso(sent),
+        FMC130_LKP_VC,
+        state_doc={"private_start_odometer_km": 57308.13},
+        read_odo_km=fake_odo,
+        fetch_samples=fake_samples,
+        fetch_command_responses=no_command_response,
+    ))
+
+    assert state == pm.PRIVATE
+    assert src == pm.SRC_TELEMETRY
+
+
+def test_device_response_explicit_text_with_get_time_confirms():
+    sent = datetime.now(timezone.utc)
+
+    async def fetch(tenant, tracker, since):
+        return [{
+            "get_time": _iso(sent + timedelta(seconds=1)),
+            "extra": {
+                "command": {
+                    "response": {
+                        "success": True,
+                        "body": "Privatemode ON",
+                    }
+                }
+            },
+        }]
+
+    state, src = _run(pm._device_response_confirm(
+        "default", 781479, pm.PRIVATE, _iso(sent),
+        fetch_command_responses=fetch,
+    ))
+
+    assert state == pm.PRIVATE
+    assert src == pm.SRC_DEVICE_RESPONSE
