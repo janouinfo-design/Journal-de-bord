@@ -352,66 +352,205 @@ def _samples_show_movement(samples) -> bool:
     return False
 
 
+_NAVIXY_TZ_CACHE: dict[tuple[str, str], object] = {}
+
+
+async def _navixy_account_timezone(tenant_id: str, base: str, credential: str, client):
+    """Fuseau du compte Navixy utilisé par les endpoints à dates locales.
+
+    `track/read` échange des dates sans offset. On lit donc le fuseau du compte via
+    `user/settings/read` et on le met en cache par tenant/base. Si le fuseau n'est pas
+    disponible ou invalide, on échoue fermé pour la preuve temporelle (jamais d'UTC
+    supposé silencieusement).
+    """
+    from zoneinfo import ZoneInfo
+
+    key = (str(tenant_id), str(base))
+    cached = _NAVIXY_TZ_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        r = await client.post(
+            f"{base}/user/settings/read",
+            json={"hash": credential},
+        )
+        data = r.json() or {}
+    except Exception:
+        return None
+
+    if data.get("success") is False:
+        return None
+
+    zone_name = (data.get("settings") or {}).get("time_zone")
+    if not zone_name:
+        return None
+
+    try:
+        tz = ZoneInfo(str(zone_name))
+    except Exception:
+        logger.warning("Navixy time_zone invalide tenant=%s", tenant_id)
+        return None
+
+    _NAVIXY_TZ_CACHE[key] = tz
+    return tz
+
+
+def _parse_navixy_datetime(value, account_tz):
+    """Normalise une date Navixy vers UTC aware.
+
+    - timestamp avec offset/Z : l'offset fourni fait foi ;
+    - date naive : elle est interprétée dans le fuseau du compte Navixy ;
+    - sans fuseau connu : None (fail-closed, jamais UTC inventé).
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        d = value
+    elif isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    else:
+        s = str(value).strip()
+        if not s:
+            return None
+        try:
+            d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            d = None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    d = datetime.strptime(s[:19], fmt)
+                    break
+                except Exception:
+                    d = None
+            if d is None:
+                return None
+
+    if d.tzinfo is None:
+        if account_tz is None:
+            return None
+        d = d.replace(tzinfo=account_tz)
+
+    return d.astimezone(timezone.utc)
+
+
 async def _fetch_gps_samples(tenant_id: str, tracker_id: int,
                              since_iso: Optional[str]) -> list[dict]:
-    """Lit plusieurs points GPS récents (READ-ONLY) via `track/read` avec le credential du tenant.
-    Retour liste [{lat,lng,time}]. [] si indisponible. Ne logge/expose jamais le credential."""
+    """Lit les points GPS POST-COMMANDE via `track/read` (READ-ONLY).
+
+    Navixy attend des dates locales sans offset pour `track/read`. La fenêtre est donc
+    convertie dans le fuseau réel du compte, puis chaque sample retourné est renormalisé
+    en UTC et filtré anti-stale. Ainsi des points pré-commande ne peuvent plus contaminer
+    la preuve LAST_KNOWN_POSITION du FMC130.
+    """
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
         return []
+
     base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
             or "https://api.navixy.com/v2").rstrip("/")
-    from datetime import datetime, timezone, timedelta
+
+    from datetime import timedelta
+    import httpx
+
     now = datetime.now(timezone.utc)
     start = _parse(since_iso) or (now - timedelta(minutes=30))
-    fmt = "%Y-%m-%d %H:%M:%S"
-    body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
-            "from": start.strftime(fmt), "to": (now + timedelta(minutes=1)).strftime(fmt),
-            "simplify": False, "point_limit": 200}
-    import httpx
+    threshold = start - timedelta(seconds=ANTI_STALE_SKEW_S)
+
     try:
-        async with httpx.AsyncClient(timeout=25) as c:
-            r = await c.post(f"{base}/track/read", json=body)
+        async with httpx.AsyncClient(timeout=25) as client:
+            account_tz = await _navixy_account_timezone(
+                tenant_id, base, cred["credential"], client
+            )
+            if account_tz is None:
+                return []
+
+            fmt = "%Y-%m-%d %H:%M:%S"
+            body = {
+                "hash": cred["credential"],
+                "tracker_id": int(tracker_id),
+                "from": start.astimezone(account_tz).strftime(fmt),
+                "to": (now + timedelta(minutes=1)).astimezone(account_tz).strftime(fmt),
+                "simplify": False,
+                "point_limit": 200,
+            }
+            r = await client.post(f"{base}/track/read", json=body)
             data = r.json() or {}
     except Exception:
         return []
+
+    if data.get("success") is False:
+        return []
+
     out = []
     for p in (data.get("list") or []):
-        if isinstance(p, dict):
-            out.append({"lat": p.get("lat"), "lng": p.get("lng"),
-                        "time": p.get("get_time") or p.get("time")})
+        if not isinstance(p, dict):
+            continue
+        raw_time = p.get("get_time") or p.get("time")
+        point_time = _parse_navixy_datetime(raw_time, account_tz)
+        # Anti-stale strict : un point sans instant exploitable, ou trop ancien,
+        # ne participe jamais à une confirmation de mode.
+        if point_time is None or point_time < threshold:
+            continue
+        out.append({
+            "lat": p.get("lat"),
+            "lng": p.get("lng"),
+            "time": point_time.isoformat(),
+        })
     return out
 
 
 async def _fetch_gps_state(tenant_id: str, tracker_id: int) -> Optional[dict]:
-    """Lit l'état GPS transmis (READ-ONLY) via le credential du tenant. None si indispo.
-    Ne logge/expose jamais le credential."""
+    """Lit l'état GPS transmis et normalise `gps.updated` en UTC (READ-ONLY).
+
+    Le fuseau du compte est requis uniquement pour une date naive. Si sa résolution
+    échoue, la position reste lisible mais `gps_updated=None` empêche toute fausse
+    confirmation temporelle.
+    """
     from app.integrations import get_integration_credential
     cred = get_integration_credential(tenant_id, "NAVIXY")
     if not cred or not cred.get("credential"):
         return None
+
     import httpx
+
     base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
             or "https://api.navixy.com/v2").rstrip("/")
+
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{base}/tracker/get_state",
-                             json={"hash": cred["credential"], "tracker_id": int(tracker_id)})
-            st = (r.json() or {}).get("state") or {}
+        async with httpx.AsyncClient(timeout=20) as client:
+            account_tz = await _navixy_account_timezone(
+                tenant_id, base, cred["credential"], client
+            )
+            r = await client.post(
+                f"{base}/tracker/get_state",
+                json={"hash": cred["credential"], "tracker_id": int(tracker_id)},
+            )
+            data = r.json() or {}
+            if data.get("success") is False:
+                return None
+            st = data.get("state") or {}
     except Exception:
         return None
+
     gps = st.get("gps") or {}
     loc = gps.get("location") or {}
+    gps_updated = _parse_navixy_datetime(gps.get("updated"), account_tz)
+
     return {
         "connection_status": st.get("connection_status"),
         "movement_status": st.get("movement_status"),
         "ignition": bool(st.get("ignition")),
-        "gps_updated": gps.get("updated"),
+        "gps_updated": gps_updated.isoformat() if gps_updated else None,
         "speed": gps.get("speed"),
-        "lat": loc.get("lat"), "lng": loc.get("lng"),
+        "lat": loc.get("lat"),
+        "lng": loc.get("lng"),
     }
-
 
 def _is_zero(lat, lng) -> bool:
     try:
