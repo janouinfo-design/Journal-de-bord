@@ -148,8 +148,25 @@ def test_closed_business_cycle_still_exposes_distance():
         restore()
 
 
-def test_unknown_state_exposes_none_distance():
-    db, restore = _seed({"state": pm.UNKNOWN})
+def test_unknown_state_exposes_none_distance_even_if_stale_value_exists():
+    db, restore = _seed({
+        "state": pm.UNKNOWN,
+        "private_distance_km": 1.68,
+        "private_end_odometer_km": 57175.96,
+    })
+    try:
+        out = _get()
+        assert out["private_distance_km"] is None
+    finally:
+        restore()
+
+
+def test_requested_state_never_exposes_previous_cycle_distance():
+    db, restore = _seed({
+        "state": pm.PRIVATE_REQUESTED,
+        "private_distance_km": 1.68,
+        "private_end_odometer_km": 57175.96,
+    })
     try:
         out = _get()
         assert out["private_distance_km"] is None
