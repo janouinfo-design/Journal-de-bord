@@ -180,6 +180,48 @@ def test_not_confirmed_stays_requested_or_failed():
     assert res["state"] != pm.PRIVATE  # jamais PRIVATE sans confirmation
 
 
+def test_new_private_cycle_clears_previous_terminal_fields():
+    """Un nouveau PRIVATE ne réutilise jamais distance/end/confirmation d'un ancien cycle."""
+    db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
+    _run(db.private_mode_state.update_one(
+        {"vehicle_id": "vA"},
+        {"$set": {
+            "vehicle_id": "vA",
+            "state": pm.BUSINESS,
+            "private_end_time": "old-end",
+            "private_end_odometer_km": 57175.96,
+            "private_distance_km": 1.68,
+            "odometer_end_candidate_km": 57175.96,
+            "business_command_sent_at": "old-business-command",
+            "confirmation_source": pm.SRC_TELEMETRY,
+            "requested_target": pm.BUSINESS,
+            "last_command": "privatemode OFF",
+            "command_sent_at": "old-command",
+            "navixy_command_id": "old-id",
+        }},
+        upsert=True,
+    ))
+
+    res = _run(pm.request_mode(
+        db, "d1", pm.PRIVATE, "d1@x",
+        resolve_session=_session_ok,
+        send_command=_mock_command(),
+        confirm=_mock_confirm("ok"),
+        read_odo_km=_mock_odo([57308.13]),
+    ))
+
+    assert res["state"] == pm.PRIVATE
+    st = _run(pm.get_mode_state(db, "vA"))
+    assert st["private_start_odometer_km"] == 57308.13
+    assert st.get("private_end_time") is None
+    assert st.get("private_end_odometer_km") is None
+    assert st.get("private_distance_km") is None
+    assert st.get("odometer_end_candidate_km") is None
+    assert st.get("business_command_sent_at") is None
+    assert st.get("requested_target") is None
+    assert st.get("navixy_command_id") is None
+
+
 def test_private_distance_via_avl16_only():
     """Distance privée = AVL16_end - AVL16_start (pas de GPS). Cycle complet."""
     db = _db_with_vehicle(capability=FIELD_VALIDATED_VC)
