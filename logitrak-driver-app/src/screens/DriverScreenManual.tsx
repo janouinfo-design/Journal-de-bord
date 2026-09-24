@@ -86,6 +86,22 @@ export default function DriverScreenManual() {
   const odo = useOdometer(vehicleFromAssignment?.id);
   const tripsStore = useTripsStore();
 
+  // Une transition Privé/Pro peut créer/fermer une session kilométrique AVL16.
+  // Rafraîchir les cartes quand le backend atteint un état terminal (ou timeout
+  // dégradé) évite de laisser « — »/une ancienne valeur jusqu'au prochain pull-to-refresh.
+  useEffect(() => {
+    const state = privateMode.status.state;
+    const timedOut = privateMode.status.transition_result === 'TIMEOUT';
+    if (state === 'BUSINESS' || (state === 'UNKNOWN' && timedOut)) {
+      km.refresh();
+    }
+  }, [
+    privateMode.status.state,
+    privateMode.status.transition_result,
+    privateMode.status.last_transition_at,
+    km.refresh,
+  ]);
+
   useEffect(() => {
     tripsStore.load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
