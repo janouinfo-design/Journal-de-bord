@@ -178,24 +178,38 @@ def test_get_does_not_retry_unknown_timeout_business_when_window_closed(monkeypa
     assert out["transition_result"] == pm.TRANSITION_TIMEOUT
 
 
-def test_get_never_retries_unknown_private_timeout(monkeypatch):
-    """Timeout PRIVATE reste fail-closed : pas de promotion tardive via GET."""
-    state = {
+def test_get_retries_unknown_private_timeout_via_engine(monkeypatch):
+    """PR26 : GET relance le moteur pour PRIVATE/TIMEOUT ; le moteur garde la preuve stricte."""
+    before = {
         "state": pm.UNKNOWN,
         "requested_target": pm.PRIVATE,
         "transition_result": pm.TRANSITION_TIMEOUT,
-        "awaiting_async_confirm": True,
+        "awaiting_async_confirm": False,
         "confirmation_source": pm.SRC_UNCONFIRMED,
+        "command_sent_at": "2026-09-25T14:49:31+00:00",
     }
+    calls = []
 
-    async def _forbidden(*args, **kwargs):
-        raise AssertionError("PRIVATE timeout must not use late BUSINESS recovery")
+    async def _resolve(_db, vehicle_id, tenant_id):
+        calls.append((vehicle_id, tenant_id))
+        return {
+            **before,
+            "state": pm.PRIVATE,
+            "requested_target": None,
+            "transition_result": pm.TRANSITION_CONFIRMED_LATE,
+            "confirmation_source": pm.SRC_DEVICE_RESPONSE,
+            "confirmed_at": "2026-09-25T14:55:29+00:00",
+        }
 
-    _install_common(monkeypatch, state, resolver=_forbidden)
+    _install_common(monkeypatch, before, resolver=_resolve)
     out = _get()
 
-    assert out["state"] == pm.UNKNOWN
-    assert out["requested_target"] == pm.PRIVATE
+    assert calls == [(VEHICLE_ID, TENANT)]
+    assert out["state"] == pm.PRIVATE
+    assert out["pending"] is False
+    assert out["transition_result"] == pm.TRANSITION_CONFIRMED_LATE
+    assert out["confirmation_source"] == pm.SRC_DEVICE_RESPONSE
+    assert out["requested_target"] is None
 
 
 def test_get_still_resolves_classic_pending_confirmation(monkeypatch):

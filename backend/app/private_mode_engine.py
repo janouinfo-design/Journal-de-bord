@@ -1244,25 +1244,38 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
     Appelable à chaque GET d'état (et/ou par le scheduler). N'envoie AUCUNE commande.
     """
     st = await get_mode_state(db, vehicle_id)
-    # OPTION B : on résout un PENDING classique, ET on retente la promotion tardive d'un
-    # BUSINESS parti en UNKNOWN au timeout (tant que la fenêtre asynchrone n'est pas dépassée).
-    _awaiting_late = (
+    # Récupérations tardives après UNKNOWN/TIMEOUT :
+    # - BUSINESS : comportement PR25 existant, avec télémétrie complète, uniquement
+    #   si awaiting_async_confirm=True.
+    # - PRIVATE : PR26, preuve BEAUCOUP plus stricte. Après timeout on n'accepte
+    #   QUE la réponse textuelle autoritative du device ("Privatemode ON") liée à
+    #   cette commande. Jamais GPS figé, mouvement, AVL16 ou absence de position.
+    _awaiting_late_business = (
         st.get("state") == UNKNOWN
         and st.get("transition_result") == TRANSITION_TIMEOUT
         and st.get("requested_target") == BUSINESS
         and bool(st.get("awaiting_async_confirm"))
     )
+    _awaiting_late_private = (
+        st.get("state") == UNKNOWN
+        and st.get("transition_result") == TRANSITION_TIMEOUT
+        and st.get("requested_target") == PRIVATE
+    )
+    _awaiting_late = _awaiting_late_business or _awaiting_late_private
+
     if _awaiting_late:
-        # Fenêtre asynchrone expirée ? -> on cesse de retenter (reste UNKNOWN, honnête).
+        # Fenêtre asynchrone bornée (même garde temporelle que la récupération
+        # BUSINESS). Une preuve arrivée hors fenêtre n'est plus utilisée.
         _sent = _parse(st.get("command_sent_at"))
-        if _sent:
-            from datetime import datetime as _dt, timezone as _tz
-            if (_dt.now(_tz.utc) - _sent).total_seconds() > ASYNC_CONFIRM_MAX_S:
-                if st.get("awaiting_async_confirm"):
-                    cleared = {**st, "awaiting_async_confirm": False}
-                    await _save_mode_state(db, cleared)
-                    return cleared
-                return st
+        if not _sent:
+            return st
+        from datetime import datetime as _dt, timezone as _tz
+        if (_dt.now(_tz.utc) - _sent).total_seconds() > ASYNC_CONFIRM_MAX_S:
+            if _awaiting_late_business and st.get("awaiting_async_confirm"):
+                cleared = {**st, "awaiting_async_confirm": False}
+                await _save_mode_state(db, cleared)
+                return cleared
+            return st
     elif st.get("state") != PENDING_CONFIRMATION:
         return st
     tid = tenant_id or st.get("tenant_id") or _TENANT
@@ -1271,46 +1284,54 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
     if not tracker_id or requested not in (PRIVATE, BUSINESS):
         return st
 
-    # capability (gate télémétrie : profil field_validated uniquement)
-    vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
-    vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
+    if _awaiting_late_private:
+        # PR26 : après TIMEOUT PRIVATE, preuve autorisée = réponse device textuelle
+        # explicite uniquement. On contourne volontairement telemetry_confirm() afin
+        # qu'aucune preuve GPS/AVL16 ne puisse promouvoir tardivement PRIVATE.
+        confirmed, source = await _device_response_confirm(
+            tid, int(tracker_id), PRIVATE, st.get("command_sent_at"),
+            fetch_command_responses=fetch_command_responses)
+    else:
+        # capability (gate télémétrie : profil field_validated uniquement)
+        vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
+        vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
 
-    # Lecteur odomètre EFFECTIF pour la confirmation LAST_KNOWN_POSITION :
-    #  - test/injection : le read_odo_km fourni est utilisé tel quel ;
-    #  - PROD (lecteur par défaut) : lecture AVL16 CANONIQUE via read_live_avl16_km
-    #    (tenant + vehicle scopés), value_km réel ou None — jamais 0 inventé.
-    async def _effective_read_odo(_tracker_id: int) -> Optional[float]:
-        value_km, _status = await _read_odometer_snapshot(
-            db, tid, vehicle_id, tracker_id, read_odo_km)
-        return value_km
+        # Lecteur odomètre EFFECTIF pour la confirmation LAST_KNOWN_POSITION :
+        #  - test/injection : le read_odo_km fourni est utilisé tel quel ;
+        #  - PROD (lecteur par défaut) : lecture AVL16 CANONIQUE via read_live_avl16_km
+        #    (tenant + vehicle scopés), value_km réel ou None — jamais 0 inventé.
+        async def _effective_read_odo(_tracker_id: int) -> Optional[float]:
+            value_km, _status = await _read_odometer_snapshot(
+                db, tid, vehicle_id, tracker_id, read_odo_km)
+            return value_km
 
-    # Préserve les injections READ-ONLY existantes utilisées par les tests
-    # et la confirmation response/history.
-    _extra: dict = {}
-    if fetch_samples is not None:
-        _extra["fetch_samples"] = fetch_samples
-    if fetch_command_responses is not None:
-        _extra["fetch_command_responses"] = fetch_command_responses
+        # Préserve les injections READ-ONLY existantes utilisées par les tests
+        # et la confirmation response/history.
+        _extra: dict = {}
+        if fetch_samples is not None:
+            _extra["fetch_samples"] = fetch_samples
+        if fetch_command_responses is not None:
+            _extra["fetch_command_responses"] = fetch_command_responses
 
-    confirmed, source = await telemetry_confirm(
-        tid, int(tracker_id), requested, st.get("command_sent_at"), vc,
-        state_doc=st, read_odo_km=_effective_read_odo, **_extra)
+        confirmed, source = await telemetry_confirm(
+            tid, int(tracker_id), requested, st.get("command_sent_at"), vc,
+            state_doc=st, read_odo_km=_effective_read_odo, **_extra)
 
-    if (
-        confirmed != requested
-        and requested == PRIVATE
-        and _model_supports_telemetry_confirm(vc)
-        and _confirm_strategy(vc) == CONFIRM_STRATEGY_LAST_KNOWN_POSITION
-    ):
-        probe_ok, st = await _persistent_lkp_private_probe(
-            db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=int(tracker_id),
-            state_doc=st, read_odo_km=read_odo_km)
-        if probe_ok:
-            confirmed, source = PRIVATE, SRC_TELEMETRY
+        if (
+            confirmed != requested
+            and requested == PRIVATE
+            and _model_supports_telemetry_confirm(vc)
+            and _confirm_strategy(vc) == CONFIRM_STRATEGY_LAST_KNOWN_POSITION
+        ):
+            probe_ok, st = await _persistent_lkp_private_probe(
+                db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=int(tracker_id),
+                state_doc=st, read_odo_km=read_odo_km)
+            if probe_ok:
+                confirmed, source = PRIVATE, SRC_TELEMETRY
 
     if confirmed == requested:
-        # Promotion tardive (Option B) : si on était en UNKNOWN/TIMEOUT en attente async,
-        # on marque CONFIRMED_LATE (traçabilité) ; sinon confirmation normale.
+        # Promotion tardive : BUSINESS (PR25) ou PRIVATE par réponse device (PR26)
+        # sont tracés CONFIRMED_LATE ; un PENDING classique reste CONFIRMED.
         _tr = TRANSITION_CONFIRMED_LATE if _awaiting_late else TRANSITION_CONFIRMED
         new_doc = {**st, "state": requested, "confirmation_source": source,
                    "confirmed_at": _now(), "transition_result": _tr,
@@ -1369,9 +1390,9 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
                           "result": "confirmed_async", "confirmation_source": source})
         return new_doc
 
-    # Déjà en attente asynchrone (Option B) et toujours pas de preuve -> on reste UNKNOWN,
-    # sans re-déclencher la logique de timeout (elle a déjà été jouée). On continuera à
-    # retenter aux prochains GET tant que la fenêtre ASYNC_CONFIRM_MAX_S n'est pas dépassée.
+    # Déjà en récupération tardive et toujours pas de preuve -> on reste UNKNOWN,
+    # sans re-déclencher la logique de timeout (elle a déjà été jouée). Pour PRIVATE,
+    # les prochains GET ne retenteront QUE la réponse device explicite.
     if _awaiting_late:
         return st
 

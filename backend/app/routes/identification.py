@@ -626,12 +626,13 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     st = await pm.get_mode_state(db, vehicle_id)
     # Résolution automatique READ-ONLY :
     # - PENDING_CONFIRMATION classique ;
-    # - récupération tardive BUSINESS après timeout (UNKNOWN/TIMEOUT) tant que
-    #   le moteur garde awaiting_async_confirm=True.
+    # - récupération tardive BUSINESS après timeout (PR25), uniquement si
+    #   awaiting_async_confirm=True ;
+    # - récupération tardive PRIVATE après timeout (PR26). Dans ce dernier cas,
+    #   le moteur n'accepte QUE la réponse device textuelle autoritative
+    #   "Privatemode ON" liée à la commande ; jamais une preuve GPS/AVL16.
     #
-    # Le moteur porte déjà toute la logique fail-closed et la fenêtre asynchrone.
-    # La route doit simplement le rappeler dans ces deux cas ; jamais pour un
-    # UNKNOWN générique ni pour un timeout PRIVATE.
+    # La route ne fait qu'invoquer le moteur : aucune commande device n'est envoyée.
     should_resolve = (
         st.get("state") == pm.PENDING_CONFIRMATION
         or (
@@ -639,6 +640,11 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
             and st.get("transition_result") == pm.TRANSITION_TIMEOUT
             and st.get("requested_target") == pm.BUSINESS
             and bool(st.get("awaiting_async_confirm"))
+        )
+        or (
+            st.get("state") == pm.UNKNOWN
+            and st.get("transition_result") == pm.TRANSITION_TIMEOUT
+            and st.get("requested_target") == pm.PRIVATE
         )
     )
     if should_resolve:
