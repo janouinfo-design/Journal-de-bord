@@ -149,7 +149,7 @@ export function usePrivateMode(pollMs = POLL_IDLE_MS_DEFAULT) {
         inFlight.current = false;
       }
     },
-    [refresh, status.allowed, status.reason, status.state],
+    [refresh, status.allowed, status.reason, status.requested_target, status.state],
   );
 
   // Montage + polling ADAPTATIF : rapide pendant une transition, sobre au repos.
