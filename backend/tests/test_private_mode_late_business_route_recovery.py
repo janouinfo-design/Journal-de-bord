@@ -27,7 +27,21 @@ TENANT = "default"
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    """Run async helpers without closing the process-wide default event loop.
+
+    Several legacy backend tests still use asyncio.get_event_loop().
+    asyncio.run() would close/unset that loop and make following test modules
+    fail depending on execution order.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 class _Vehicles:
