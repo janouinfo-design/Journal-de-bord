@@ -353,7 +353,7 @@ describe('usePrivateMode', () => {
     await act(async () => { tree = create(<Probe />); });
     await flush();
     expect(ref.current?.pendingPhase).toBe('normal');
-    expect(ref.current?.pendingMessage).toMatch(/télémétrie|Confirmation du mode Privé/i);
+    expect(ref.current?.pendingMessage).toMatch(/Commande Privé envoyée|attente du véhicule/i);
     tree.unmount();
   });
 
