@@ -224,10 +224,10 @@ export default function DriverScreenManual() {
   const canToggleBase = hasVehicle && privateMode.status.allowed && !privateMode.busy;
   const canRequestBusiness = canToggleBase
     && !isBusiness
-    && (!isPending || privateMode.pendingTarget === 'PRIVATE');
+    && (!isPending || (st === 'PENDING_CONFIRMATION' && privateMode.pendingTarget === 'PRIVATE'));
   const canRequestPrivate = canToggleBase
     && !isPrivate
-    && (!isPending || privateMode.pendingTarget === 'BUSINESS');
+    && (!isPending || (st === 'PENDING_CONFIRMATION' && privateMode.pendingTarget === 'BUSINESS'));
 
   // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
   const proKm = km.proKm;
