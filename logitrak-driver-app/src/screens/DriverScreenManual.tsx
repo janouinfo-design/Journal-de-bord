@@ -218,9 +218,16 @@ export default function DriverScreenManual() {
   const isBusiness = st === 'BUSINESS';
   const isPending = privateMode.pending;
   const hasVehicle = !!assignment;
-  // Pendant une transition PENDING : NON bloquant pour la navigation, mais AUCUNE
-  // nouvelle commande PRO/PRIVÉ tant que la confirmation télémétrique n'est pas résolue.
-  const canToggle = hasVehicle && privateMode.status.allowed && !privateMode.busy && !isPending;
+  // Pendant PENDING, la MÊME cible reste bloquée (anti-spam), mais la cible OPPOSÉE
+  // reste disponible. Le backend gère le supersede : on peut donc revenir rapidement
+  // en Professionnel si une demande Privé tarde à se confirmer, et inversement.
+  const canToggleBase = hasVehicle && privateMode.status.allowed && !privateMode.busy;
+  const canRequestBusiness = canToggleBase
+    && !isBusiness
+    && (!isPending || (st === 'PENDING_CONFIRMATION' && privateMode.pendingTarget === 'PRIVATE'));
+  const canRequestPrivate = canToggleBase
+    && !isPrivate
+    && (!isPending || (st === 'PENDING_CONFIRMATION' && privateMode.pendingTarget === 'BUSINESS'));
 
   // Total + répartition Pro/Privé (jamais de division par zéro ; jamais de valeur inventée).
   const proKm = km.proKm;
@@ -356,7 +363,7 @@ export default function DriverScreenManual() {
           <ModeCard
             label="Professionnel"
             active={isBusiness}
-            disabled={!canToggle || isBusiness}
+            disabled={!canRequestBusiness}
             loading={isPending && privateMode.pendingTarget === 'BUSINESS'}
             color={colors.pro}
             onPress={() => privateMode.requestMode('BUSINESS')}
@@ -365,7 +372,7 @@ export default function DriverScreenManual() {
           <ModeCard
             label="Privé"
             active={isPrivate}
-            disabled={!canToggle || isPrivate}
+            disabled={!canRequestPrivate}
             loading={isPending && privateMode.pendingTarget === 'PRIVATE'}
             color={colors.perso}
             onPress={() => privateMode.requestMode('PRIVATE')}
@@ -398,7 +405,7 @@ export default function DriverScreenManual() {
             <View style={styles.pendingHeader}>
               <ActivityIndicator size="small" color={colors.warning} />
               <Text style={styles.pendingBadge} testID="manual-mode-pending-badge">
-                Confirmation en cours
+                {privateMode.pendingPhase === 'normal' ? 'Commande envoyée' : 'Confirmation en cours'}
               </Text>
             </View>
             <Text style={styles.pendingText} testID="manual-mode-pending-text">
