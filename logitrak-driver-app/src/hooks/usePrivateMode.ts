@@ -13,7 +13,9 @@ import {
  * - JAMAIS de changement optimiste : l'état affiché vient du backend (autoritaire).
  * - Un `success=true` à l'envoi n'est JAMAIS une confirmation de mode.
  * - PENDING (attente confirmation télémétrique) : NON bloquant. L'app reste navigable,
- *   le polling continue en arrière-plan, MAIS on interdit une nouvelle commande.
+ *   le polling continue en arrière-plan. Une répétition de la MÊME cible est bloquée,
+ *   mais la cible OPPOSÉE reste disponible pour permettre une récupération rapide
+ *   (ex. revenir en Professionnel pendant une attente Privé).
  * - L'état PENDING ne dépend PAS de l'état React local : au remount/relaunch, on relit
  *   le backend (qui conserve PENDING_CONFIRMATION jusqu'à preuve ou timeout serveur).
  * - Confirmation UNIQUEMENT sur preuve télémétrique -> BUSINESS / PRIVATE.
@@ -31,7 +33,7 @@ export const PENDING_LONG_MS = 180_000;  // 180 s : message renforcé + Actualis
 export type PendingPhase = 'none' | 'normal' | 'long' | 'verylong';
 
 /** Cadence de polling : rapide pendant une transition, sobre au repos. */
-const POLL_ACTIVE_MS = 5_000;   // transition en cours -> relire vite
+const POLL_ACTIVE_MS = 2_000;   // transition en cours -> relire vite sans surcharger au repos
 const POLL_IDLE_MS_DEFAULT = 15_000;
 
 function isTransientState(s: PrivateModeStatus['state']): boolean {
@@ -82,8 +84,26 @@ export function usePrivateMode(pollMs = POLL_IDLE_MS_DEFAULT) {
 
   const requestMode = useCallback(
     async (mode: 'PRIVATE' | 'BUSINESS') => {
-      if (inFlight.current) return;               // anti double-tap / concurrence
-      if (isTransientState(status.state)) return; // transition en cours -> aucune nouvelle commande
+      if (inFlight.current) return; // POST encore en vol : aucune concurrence locale
+
+      // Pendant PENDING, le backend sait "supersede" une cible par la cible opposée
+      // (ex. PRIVATE en attente -> BUSINESS immédiat). On bloque uniquement :
+      // - les états REQUESTED locaux tant que le POST n'est pas stabilisé ;
+      // - une répétition de la MÊME cible (anti-spam).
+      if (isTransientState(status.state)) {
+        const inProgressTarget =
+          status.requested_target === 'PRIVATE' || status.requested_target === 'BUSINESS'
+            ? status.requested_target
+            : status.state === 'PRIVATE_REQUESTED'
+              ? 'PRIVATE'
+              : status.state === 'BUSINESS_REQUESTED'
+                ? 'BUSINESS'
+                : null;
+
+        if (status.state !== 'PENDING_CONFIRMATION') return;
+        if (!inProgressTarget || inProgressTarget === mode) return;
+      }
+
       if (!status.allowed) {
         setError(reasonToMessage(status.reason));
         return;
@@ -195,13 +215,16 @@ export function usePrivateMode(pollMs = POLL_IDLE_MS_DEFAULT) {
     const base = cible
       ? `Confirmation du mode ${cible} en cours…`
       : 'Confirmation du mode en cours…';
+    const sent = cible
+      ? `Commande ${cible} envoyée — attente du véhicule…`
+      : 'Commande envoyée — attente du véhicule…';
     if (pendingPhase === 'verylong') {
       return `${base} Le véhicule doit rouler pour transmettre une nouvelle position. Vous pouvez actualiser l'état.`;
     }
     if (pendingPhase === 'long') {
       return `${base} Confirmation plus longue que prévu — assurez-vous que le véhicule roule.`;
     }
-    return `${base} Le véhicule doit transmettre une nouvelle télémétrie.`;
+    return sent;
   }, [pending, target, pendingPhase]);
 
   return {
