@@ -273,8 +273,8 @@ describe('usePrivateMode', () => {
     tree.unmount();
   });
 
-  // --- Blocage d'une NOUVELLE commande pendant PENDING (règle terrain) ---
-  it('PENDING -> requestMode bloqué (aucune nouvelle commande device envoyée)', async () => {
+  // --- PENDING : anti-spam sur même cible, supersede autorisé vers cible opposée ---
+  it('PENDING PRIVATE -> répétition PRIVATE bloquée (aucune commande en double)', async () => {
     (api.getPrivateMode as jest.Mock).mockResolvedValue({
       state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
       requested_target: 'PRIVATE', command_sent_at: new Date().toISOString(),
@@ -284,10 +284,41 @@ describe('usePrivateMode', () => {
     await act(async () => { tree = create(<Probe />); });
     await flush();
     expect(ref.current?.pending).toBe(true);
-    // le chauffeur tente de re-basculer pendant PENDING -> IGNORÉ (aucun POST)
-    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
+    await act(async () => { await ref.current!.requestMode('PRIVATE'); });
     await flush();
     expect(api.setPrivateMode).not.toHaveBeenCalled();
+    tree.unmount();
+  });
+
+  it('PENDING PRIVATE -> BUSINESS autorisé pour récupération rapide (supersede)', async () => {
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'PENDING_CONFIRMATION', allowed: true, vehicle_id: 'vA', pending: true,
+      requested_target: 'PRIVATE', command_sent_at: new Date().toISOString(),
+    });
+    (api.setPrivateMode as jest.Mock).mockResolvedValue({
+      ok: true, state: 'PENDING_CONFIRMATION', pending: true,
+      message: 'Commande Professionnel envoyée',
+    });
+
+    const { ref, Probe } = makeHarness();
+    let tree: any;
+    await act(async () => { tree = create(<Probe />); });
+    await flush();
+    expect(ref.current?.pendingTarget).toBe('PRIVATE');
+
+    // Le backend confirme BUSINESS au refresh qui suit le POST supersede.
+    (api.getPrivateMode as jest.Mock).mockResolvedValue({
+      state: 'BUSINESS', allowed: true, vehicle_id: 'vA', pending: false,
+      requested_target: null, transition_result: 'CONFIRMED',
+    });
+
+    await act(async () => { await ref.current!.requestMode('BUSINESS'); });
+    await flush();
+
+    expect(api.setPrivateMode).toHaveBeenCalledTimes(1);
+    expect(api.setPrivateMode).toHaveBeenCalledWith('BUSINESS');
+    expect(ref.current?.status.state).toBe('BUSINESS');
+    expect(ref.current?.pending).toBe(false);
     tree.unmount();
   });
 
