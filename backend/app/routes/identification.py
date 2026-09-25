@@ -283,9 +283,78 @@ async def vehicle_assignment_active(user=Depends(get_current_user)):
     return {"assignment": await _assign_with_vehicle(db, tenant_id, a)}
 
 
+async def _assignment_event_for_request(
+    db,
+    tenant_id: str,
+    driver_id: str,
+    request_id: Optional[str],
+) -> Optional[dict]:
+    """Relit un event d'affectation idempotent sans jamais deviner son véhicule."""
+    if not request_id:
+        return None
+    return await db.vehicle_assignment_events.find_one(
+        {
+            "tenant_id": tenant_id,
+            "driver_id": driver_id,
+            "request_id": request_id,
+        },
+        {
+            "_id": 0,
+            "type": 1,
+            "result": 1,
+            "from_vehicle_id": 1,
+            "to_vehicle_id": 1,
+        },
+    )
+
+
+async def _safe_navixy_assignment_claim(
+    db,
+    driver_id: str,
+    vehicle_id: str,
+    *,
+    actor: str,
+) -> dict:
+    """Projection Journal -> Navixy. Jamais autoritaire sur l'état Journal."""
+    try:
+        from app import navixy_driver_sync as nds
+        return await nds.sync_claim(
+            db,
+            driver_id,
+            vehicle_id,
+            actor=actor,
+        )
+    except Exception:
+        return {"status": "error", "error": "HOOK_FAILURE"}
+
+
+async def _safe_navixy_assignment_stop(
+    db,
+    driver_id: str,
+    vehicle_id: str,
+    *,
+    actor: str,
+) -> dict:
+    """Retire le chauffeur Navixy seulement si sync_stop confirme qu'il est encore courant."""
+    try:
+        from app import navixy_driver_sync as nds
+        return await nds.sync_stop(
+            db,
+            driver_id,
+            vehicle_id,
+            actor=actor,
+        )
+    except Exception:
+        return {"status": "error", "error": "HOOK_FAILURE"}
+
+
 @router.post("/driver/vehicle-assignment/take")
 async def vehicle_assignment_take(payload: AssignIn, user=Depends(get_current_user)):
-    """« Prendre ce véhicule » — crée une affectation ACTIVE persistante."""
+    """« Prendre ce véhicule » — crée une affectation ACTIVE persistante.
+
+    Après succès Journal, projette l'affectation vers Navixy. Une panne Navixy
+    n'annule jamais l'affectation Journal, qui reste la source de vérité.
+    """
     from app import vehicle_assignment as va
     db = get_db()
     tenant_id = user.get("tenant_id") or "default"
@@ -295,20 +364,65 @@ async def vehicle_assignment_take(payload: AssignIn, user=Depends(get_current_us
     authorized = await get_authorized_vehicle_ids_for_driver(db, driver_id)
     if payload.vehicle_id not in authorized:
         raise HTTPException(403, "Véhicule non autorisé pour ce chauffeur")
-    res = await va.take(db, tenant_id=tenant_id, driver_id=driver_id,
-                        vehicle_id=payload.vehicle_id, actor_id=user.get("email", "?"),
-                        actor_role=user.get("role", "driver"), request_id=payload.request_id)
+
+    res = await va.take(
+        db,
+        tenant_id=tenant_id,
+        driver_id=driver_id,
+        vehicle_id=payload.vehicle_id,
+        actor_id=user.get("email", "?"),
+        actor_role=user.get("role", "driver"),
+        request_id=payload.request_id,
+    )
+
     if res.get("result") == "conflict":
-        code = 409
-        res["assignment"] = await _assign_with_vehicle(db, tenant_id, res.get("assignment"))
-        return {"ok": False, **res, "http_status": code}
-    res["assignment"] = await _assign_with_vehicle(db, tenant_id, res.get("assignment"))
+        res["assignment"] = await _assign_with_vehicle(
+            db, tenant_id, res.get("assignment")
+        )
+        return {"ok": False, **res, "http_status": 409}
+
+    raw_assignment = res.get("assignment") or {}
+    current_vehicle_id = raw_assignment.get("vehicle_id")
+
+    # Un retry ancien peut revenir "idempotent" alors que le chauffeur a déjà
+    # changé de véhicule depuis. Ne jamais réaffecter Navixy vers l'ancienne cible.
+    if (
+        res.get("idempotent")
+        and current_vehicle_id
+        and current_vehicle_id != payload.vehicle_id
+    ):
+        res["navixy_sync"] = {
+            "status": "skipped",
+            "result": "superseded",
+            "current_vehicle_id": current_vehicle_id,
+        }
+    else:
+        target_vehicle_id = current_vehicle_id or (
+            None if res.get("idempotent") else payload.vehicle_id
+        )
+        if target_vehicle_id:
+            res["navixy_sync"] = await _safe_navixy_assignment_claim(
+                db,
+                driver_id,
+                target_vehicle_id,
+                actor=user.get("email", "?"),
+            )
+
+    res["assignment"] = await _assign_with_vehicle(
+        db, tenant_id, raw_assignment
+    )
     return {"ok": True, **res}
 
 
 @router.post("/driver/vehicle-assignment/change")
 async def vehicle_assignment_change(payload: AssignIn, user=Depends(get_current_user)):
-    """« Changer de véhicule » — mutation atomique A->B (jamais deux ACTIVE)."""
+    """« Changer de véhicule » — mutation atomique A->B (jamais deux ACTIVE).
+
+    Après succès Journal :
+      1) nettoyage sécurisé de l'ancien véhicule dans Navixy ;
+      2) projection du chauffeur sur le véhicule courant.
+    Les deux opérations sont secondaires : l'état Journal n'est jamais rollback.
+    """
     from app import vehicle_assignment as va
     db = get_db()
     tenant_id = user.get("tenant_id") or "default"
@@ -318,27 +432,148 @@ async def vehicle_assignment_change(payload: AssignIn, user=Depends(get_current_
     authorized = await get_authorized_vehicle_ids_for_driver(db, driver_id)
     if payload.vehicle_id not in authorized:
         raise HTTPException(403, "Véhicule non autorisé pour ce chauffeur")
-    res = await va.change(db, tenant_id=tenant_id, driver_id=driver_id,
-                          to_vehicle_id=payload.vehicle_id, actor_id=user.get("email", "?"),
-                          actor_role=user.get("role", "driver"), request_id=payload.request_id)
-    res["assignment"] = await _assign_with_vehicle(db, tenant_id, res.get("assignment"))
+
+    before = await va.get_active(db, tenant_id, driver_id)
+
+    res = await va.change(
+        db,
+        tenant_id=tenant_id,
+        driver_id=driver_id,
+        to_vehicle_id=payload.vehicle_id,
+        actor_id=user.get("email", "?"),
+        actor_role=user.get("role", "driver"),
+        request_id=payload.request_id,
+    )
+
+    raw_assignment = res.get("assignment") or {}
+
     if res.get("result") == "conflict":
+        res["assignment"] = await _assign_with_vehicle(
+            db, tenant_id, raw_assignment
+        )
         return {"ok": False, **res, "http_status": 409}
+
+    current_vehicle_id = raw_assignment.get("vehicle_id")
+    previous_vehicle_id = None
+
+    if res.get("idempotent") and payload.request_id:
+        ev = await _assignment_event_for_request(
+            db, tenant_id, driver_id, payload.request_id
+        )
+        # Si le même request_id est rejoué après un changement plus récent,
+        # l'ancien event est superseded : surtout ne pas toucher Navixy.
+        if (
+            ev
+            and ev.get("result") == "OK"
+            and ev.get("to_vehicle_id")
+            and current_vehicle_id
+            and ev.get("to_vehicle_id") != current_vehicle_id
+        ):
+            res["navixy_sync"] = {
+                "status": "skipped",
+                "result": "superseded",
+                "current_vehicle_id": current_vehicle_id,
+            }
+        elif (
+            ev
+            and ev.get("result") == "OK"
+            and ev.get("to_vehicle_id") == current_vehicle_id
+        ):
+            old = ev.get("from_vehicle_id")
+            if old and old != current_vehicle_id:
+                previous_vehicle_id = old
+    elif before:
+        old = before.get("vehicle_id")
+        if old and old != current_vehicle_id:
+            previous_vehicle_id = old
+
+    if "navixy_sync" not in res:
+        navixy_sync = {}
+
+        # Ordre volontaire : détacher A avant de rattacher B. sync_stop() est
+        # anti-race et refuse de retirer un autre chauffeur devenu courant sur A.
+        if previous_vehicle_id:
+            navixy_sync["previous_vehicle"] = {
+                "vehicle_id": previous_vehicle_id,
+                "sync": await _safe_navixy_assignment_stop(
+                    db,
+                    driver_id,
+                    previous_vehicle_id,
+                    actor=user.get("email", "?"),
+                ),
+            }
+
+        if current_vehicle_id:
+            navixy_sync["current_vehicle"] = {
+                "vehicle_id": current_vehicle_id,
+                "sync": await _safe_navixy_assignment_claim(
+                    db,
+                    driver_id,
+                    current_vehicle_id,
+                    actor=user.get("email", "?"),
+                ),
+            }
+
+        if navixy_sync:
+            res["navixy_sync"] = navixy_sync
+
+    res["assignment"] = await _assign_with_vehicle(
+        db, tenant_id, raw_assignment
+    )
     return {"ok": True, **res}
 
 
 @router.post("/driver/vehicle-assignment/end")
 async def vehicle_assignment_end(payload: AssignEndIn, user=Depends(get_current_user)):
-    """« Fin de service » — libère le véhicule (idempotent)."""
+    """« Fin de service » — libère le véhicule (idempotent).
+
+    La désaffectation Navixy est anti-race : sur retry d'une ancienne requête,
+    on relit l'event d'origine au lieu de toucher un véhicule actif plus récent.
+    """
     from app import vehicle_assignment as va
     db = get_db()
     tenant_id = user.get("tenant_id") or "default"
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
-    res = await va.end(db, tenant_id=tenant_id, driver_id=driver_id,
-                       actor_id=user.get("email", "?"), actor_role=user.get("role", "driver"),
-                       request_id=payload.request_id)
+
+    before = await va.get_active(db, tenant_id, driver_id)
+
+    res = await va.end(
+        db,
+        tenant_id=tenant_id,
+        driver_id=driver_id,
+        actor_id=user.get("email", "?"),
+        actor_role=user.get("role", "driver"),
+        request_id=payload.request_id,
+    )
+
+    if res.get("result") == "ok":
+        vehicle_id = None
+
+        if res.get("idempotent"):
+            ev = await _assignment_event_for_request(
+                db, tenant_id, driver_id, payload.request_id
+            )
+            if (
+                ev
+                and ev.get("result") == "OK"
+                and ev.get("type") == "VEHICLE_RELEASED"
+            ):
+                vehicle_id = ev.get("from_vehicle_id")
+        else:
+            vehicle_id = res.get("vehicle_id") or (
+                before.get("vehicle_id") if before else None
+            )
+
+        if vehicle_id:
+            res["navixy_sync"] = await _safe_navixy_assignment_stop(
+                db,
+                driver_id,
+                vehicle_id,
+                actor=user.get("email", "?"),
+            )
+
     return {"ok": res.get("result") in ("ok", "noop"), **res}
 
 
