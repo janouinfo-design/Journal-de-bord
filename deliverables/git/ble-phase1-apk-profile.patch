@@ -1,0 +1,24 @@
+diff --git a/logitrak-driver-app/eas.json b/logitrak-driver-app/eas.json
+index 774700b..4a7e21f 100644
+--- a/logitrak-driver-app/eas.json
++++ b/logitrak-driver-app/eas.json
+@@ -57,6 +57,19 @@
+         "EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV": "1",
+         "EXPO_PUBLIC_BLE_DEV_ALLOWED_TRACKERS": "781479"
+       }
++    },
++    "pilot-ble-apk": {
++      "distribution": "internal",
++      "channel": "pilot-ble-apk",
++      "android": {
++        "buildType": "apk",
++        "gradleCommand": ":app:assembleRelease"
++      },
++      "env": {
++        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch",
++        "EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV": "1",
++        "EXPO_PUBLIC_BLE_DEV_ALLOWED_TRACKERS": "781479"
++      }
+     }
+   },
+   "submit": {
