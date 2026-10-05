@@ -25,6 +25,7 @@ import {
   NotificationPreferences,
 } from '@/api/notifications';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
+import { PRIVATE_MODE_BLE_DEV } from '@/config/featureFlags';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -167,6 +168,25 @@ export function SettingsScreen() {
           <Row label="Version" value={String(Constants.expoConfig?.version || '0.1.0')} />
           {isDev ? <Row label="Environnement" value="développement" /> : null}
         </Section>
+
+        {/* Outils développeur — DEV uniquement (disparaît en production : flag fail-closed). */}
+        {PRIVATE_MODE_BLE_DEV ? (
+          <Section title="Outils développeur">
+            <TouchableOpacity
+              style={styles.rowBtn}
+              onPress={() => nav.navigate('BlePrivateModeDev')}
+              testID="settings-ble-dev"
+              accessibilityRole="button"
+              accessibilityLabel="Ouvrir l'outil BLE Private Mode (DEV)"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowBtnText}>BLE Private Mode (DEV)</Text>
+                <Text style={styles.rowSub}>Tester la lecture Privé / Pro du FMC130</Text>
+              </View>
+              <Text style={styles.chevron}>›</Text>
+            </TouchableOpacity>
+          </Section>
+        ) : null}
 
         <Text style={styles.legal}>
           © Logitrak 2026 · Données traitées conformément à la nLPD/RGPD.{'\n'}
