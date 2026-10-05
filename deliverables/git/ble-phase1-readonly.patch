@@ -1,0 +1,866 @@
+diff --git a/logitrak-driver-app/eas.json b/logitrak-driver-app/eas.json
+index c38db04..774700b 100644
+--- a/logitrak-driver-app/eas.json
++++ b/logitrak-driver-app/eas.json
+@@ -44,6 +44,19 @@
+       "env": {
+         "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
+       }
++    },
++    "pilot-dev-ble": {
++      "developmentClient": true,
++      "distribution": "internal",
++      "channel": "pilot-dev-ble",
++      "android": {
++        "buildType": "apk"
++      },
++      "env": {
++        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch",
++        "EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV": "1",
++        "EXPO_PUBLIC_BLE_DEV_ALLOWED_TRACKERS": "781479"
++      }
+     }
+   },
+   "submit": {
+diff --git a/logitrak-driver-app/src/__tests__/privateModeBle.test.ts b/logitrak-driver-app/src/__tests__/privateModeBle.test.ts
+new file mode 100644
+index 0000000..6529dbf
+--- /dev/null
++++ b/logitrak-driver-app/src/__tests__/privateModeBle.test.ts
+@@ -0,0 +1,134 @@
++/**
++ * Tests Phase 1 BLE READ-ONLY — logique pure (sans device réel).
++ *
++ * Couvre :
++ * - parsing fail-closed de `privatemode ?` (ON -> PRIVATE, OFF -> PRO, sinon null) ;
++ * - round-trip base64 (encodage commande / décodage réponse) ;
++ * - garantie qu'AUCUN secret n'apparaît dans les logs (redaction).
++ *
++ * Le module ne doit PAS envoyer `privatemode ON/OFF` : on vérifie l'absence d'API d'écriture d'état.
++ */
++import {
++  parsePrivatemodeResponse,
++  asciiToBase64,
++  base64ToAscii,
++  NUS_SERVICE_UUID,
++  NUS_WRITE_UUID,
++  NUS_NOTIFY_UUID,
++} from '@/ble/privateModeBle';
++
++describe('parsePrivatemodeResponse — fail-closed', () => {
++  test('Privatemode ON -> PRIVATE', () => {
++    expect(parsePrivatemodeResponse('Privatemode ON')).toBe('PRIVATE');
++    expect(parsePrivatemodeResponse('privatemode on\r')).toBe('PRIVATE');
++    expect(parsePrivatemodeResponse('  PRIVATEMODE ON  ')).toBe('PRIVATE');
++  });
++
++  test('Privatemode OFF -> PRO', () => {
++    expect(parsePrivatemodeResponse('Privatemode OFF')).toBe('PRO');
++    expect(parsePrivatemodeResponse('privatemode off\r\n')).toBe('PRO');
++  });
++
++  test('variantes :0 / :1', () => {
++    expect(parsePrivatemodeResponse('privatemode:1')).toBe('PRIVATE');
++    expect(parsePrivatemodeResponse('privatemode:0')).toBe('PRO');
++  });
++
++  test('réponse vide / null / bruit -> null (jamais supposé)', () => {
++    expect(parsePrivatemodeResponse(null)).toBeNull();
++    expect(parsePrivatemodeResponse(undefined)).toBeNull();
++    expect(parsePrivatemodeResponse('')).toBeNull();
++    expect(parsePrivatemodeResponse('ERROR: unknown command')).toBeNull();
++    expect(parsePrivatemodeResponse('login ok')).toBeNull();
++    // mention de privatemode sans valeur reconnaissable -> null
++    expect(parsePrivatemodeResponse('privatemode ?')).toBeNull();
++  });
++});
++
++describe('base64 round-trip (ASCII)', () => {
++  test('encode puis décode = identité', () => {
++    const samples = [
++      ':sec_login:KEYWORD123',
++      '@sms_dbg:login secret privatemode ?\r',
++      'Privatemode ON\r',
++      'Privatemode OFF\r',
++      ':cfg_disconnect\r',
++    ];
++    for (const s of samples) {
++      expect(base64ToAscii(asciiToBase64(s))).toBe(s);
++    }
++  });
++
++  test('décode une trame notify simulée', () => {
++    const b64 = asciiToBase64('Privatemode OFF\r');
++    expect(parsePrivatemodeResponse(base64ToAscii(b64))).toBe('PRO');
++  });
++});
++
++describe('UUIDs Nordic UART (Teltonika)', () => {
++  test('service/write/notify conformes à la fiche Teltonika', () => {
++    expect(NUS_SERVICE_UUID).toBe('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
++    expect(NUS_WRITE_UUID).toBe('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
++    expect(NUS_NOTIFY_UUID).toBe('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
++  });
++});
++
++describe('sécurité — pas d\'écriture d\'état en Phase 1', () => {
++  test('le module n\'exporte aucune API ON/OFF', () => {
++    const api = require('@/ble/privateModeBle');
++    const names = Object.keys(api);
++    // Aucune fonction d'écriture d'état exposée (ex: setPrivate, writePrivatemodeOn...).
++    for (const n of names) {
++      expect(/setprivate|privatemodeon|privatemodeoff|writemode|turnon|turnoff/i.test(n)).toBe(false);
++    }
++  });
++});
++
++describe('garde-fous feature flag BLE DEV (logique pure, déterministe)', () => {
++  const ff = require('@/config/featureFlags');
++
++  test('computeBleDevEnabled : seule la valeur exacte "1" active', () => {
++    expect(ff.computeBleDevEnabled('1')).toBe(true);
++    expect(ff.computeBleDevEnabled('0')).toBe(false);   // explicitement verrouillé
++    expect(ff.computeBleDevEnabled(undefined)).toBe(false);
++    expect(ff.computeBleDevEnabled(null)).toBe(false);
++    expect(ff.computeBleDevEnabled('true')).toBe(false);
++    expect(ff.computeBleDevEnabled(' 1 ')).toBe(false); // pas de trim : strict
++  });
++
++  test('parseAllowedTrackers : CSV -> liste normalisée, vide -> []', () => {
++    expect(ff.parseAllowedTrackers('781479')).toEqual(['781479']);
++    expect(ff.parseAllowedTrackers('781479, 123456 ')).toEqual(['781479', '123456']);
++    expect(ff.parseAllowedTrackers('')).toEqual([]);
++    expect(ff.parseAllowedTrackers(undefined)).toEqual([]);
++  });
++
++  test('isTrackerAllowed : allowlist vide -> fail-closed', () => {
++    expect(ff.isTrackerAllowed('781479', [])).toBe(false);
++  });
++
++  test('isTrackerAllowed : exact match, variantes refusées (pas de sous-chaîne)', () => {
++    const allow = ['781479'];
++    expect(ff.isTrackerAllowed('781479', allow)).toBe(true);
++    expect(ff.isTrackerAllowed('17814790', allow)).toBe(false);
++    expect(ff.isTrackerAllowed('781479999', allow)).toBe(false);
++    expect(ff.isTrackerAllowed(' 781479 ', allow)).toBe(true); // trim de l'entrée
++    expect(ff.isTrackerAllowed(null, allow)).toBe(false);
++  });
++
++  test('extractCandidateTrackerIds : découpage déterministe par séparateurs', () => {
++    expect(ff.extractCandidateTrackerIds('FMC-781479-x')).toEqual(['FMC', '781479', 'x']);
++    expect(ff.extractCandidateTrackerIds('17814790')).toEqual(['17814790']);
++    expect(ff.extractCandidateTrackerIds(null)).toEqual([]);
++  });
++
++  test('isBleDeviceAllowed : "FMC-781479-x" OK, "17814790"/"FMC130" refusés', () => {
++    const allow = ['781479'];
++    expect(ff.isBleDeviceAllowed({ name: 'FMC-781479-x' }, allow)).toBe(true);
++    expect(ff.isBleDeviceAllowed({ name: '17814790' }, allow)).toBe(false);
++    expect(ff.isBleDeviceAllowed({ name: 'FMC130' }, allow)).toBe(false);
++    expect(ff.isBleDeviceAllowed({ id: '781479' }, allow)).toBe(true);
++    expect(ff.isBleDeviceAllowed({ name: null, localName: null, id: null }, allow)).toBe(false);
++    expect(ff.isBleDeviceAllowed({ name: '781479' }, [])).toBe(false); // fail-closed
++  });
++});
+diff --git a/logitrak-driver-app/src/ble/privateModeBle.ts b/logitrak-driver-app/src/ble/privateModeBle.ts
+new file mode 100644
+index 0000000..f4f428f
+--- /dev/null
++++ b/logitrak-driver-app/src/ble/privateModeBle.ts
+@@ -0,0 +1,298 @@
++import { BleManager, Device, State, Subscription } from 'react-native-ble-plx';
++import { requestBlePermissions } from '@/utils/permissions';
++import { logger } from '@/utils/logger';
++
++/**
++ * PHASE 1 — BLE READ-ONLY (FMC130 781479).
++ *
++ * Objectif STRICT : prouver la connexion GATT réelle au FMC130 et LIRE l'état
++ * Private/Business via `privatemode ?` (Nordic UART Service). AUCUNE écriture
++ * `privatemode ON/OFF` ici.
++ *
++ * Source Teltonika (firmware 04.02.03.Rev.01) :
++ *   Service : 6e400001-b5a3-f393-e0a9-e50e24dcca9e
++ *   Write   : 6e400002-b5a3-f393-e0a9-e50e24dcca9e  (vers le device)
++ *   Notify  : 6e400003-b5a3-f393-e0a9-e50e24dcca9e  (réponses du device)
++ *   Commandes ASCII terminées par '\r'.
++ *   Workflow : connexion -> activer notify -> :sec_login:<keyword> ->
++ *              @sms_dbg:<login> <password> privatemode ? -> lire "Privatemode ON/OFF"
++ *              -> :cfg_disconnect
++ *
++ * Règles de sécurité (impératives) :
++ * - AUCUN secret (keyword/login/password) n'est jamais écrit dans les logs.
++ * - AUCUN secret n'est persisté ici (les credentials viennent de l'appelant, en mémoire).
++ * - AUCUN secret hardcodé.
++ * - La preuve d'état = réponse réelle du device (fail-closed : sinon UNKNOWN/ERROR).
++ *
++ * NOTE mono-connexion : le FMC130 n'accepte qu'UNE connexion BLE à la fois. L'appelant
++ * DOIT mettre en pause le scan beacon (bleScanner.stop()) avant d'utiliser ce module.
++ */
++
++// ---- UUIDs Nordic UART Service (Teltonika) ----
++export const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
++export const NUS_WRITE_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
++export const NUS_NOTIFY_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
++
++// ---- États techniques exposés à l'UI DEV ----
++export type BlePrivateModeState =
++  | 'UNKNOWN'
++  | 'CONNECTING'
++  | 'PRO'       // Privatemode OFF confirmé par le device
++  | 'PRIVATE'   // Privatemode ON confirmé par le device
++  | 'ERROR';
++
++export interface BleReadResult {
++  state: BlePrivateModeState;
++  /** Ligne brute renvoyée par le device (SANS secret ; sûre à afficher en DEV). */
++  rawResponse?: string | null;
++  error?: string | null;
++}
++
++export interface BleCredentials {
++  /** :sec_login:<deviceKeyword> */
++  deviceKeyword: string;
++  /** @sms_dbg:<smsLogin> <smsPassword> privatemode ? */
++  smsLogin: string;
++  smsPassword: string;
++}
++
++/** Délais (ms) — bornés pour éviter tout spinner infini. */
++const CONNECT_TIMEOUT_MS = 12_000;
++const RESPONSE_TIMEOUT_MS = 8_000;
++const INTER_CMD_DELAY_MS = 400;
++
++const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
++
++// --- base64 minimal (ble-plx exige du base64 ; aucune dépendance ajoutée) ---
++const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
++
++export function asciiToBase64(input: string): string {
++  let out = '';
++  let i = 0;
++  while (i < input.length) {
++    const c1 = input.charCodeAt(i++) & 0xff;
++    const c2 = i < input.length ? input.charCodeAt(i++) & 0xff : NaN;
++    const c3 = i < input.length ? input.charCodeAt(i++) & 0xff : NaN;
++    const e1 = c1 >> 2;
++    const e2 = ((c1 & 3) << 4) | (c2 >> 4);
++    let e3 = ((c2 & 15) << 2) | (c3 >> 6);
++    let e4 = c3 & 63;
++    if (Number.isNaN(c2)) { e3 = 64; e4 = 64; }
++    else if (Number.isNaN(c3)) { e4 = 64; }
++    out += B64.charAt(e1) + B64.charAt(e2) +
++      (e3 === 64 ? '=' : B64.charAt(e3)) +
++      (e4 === 64 ? '=' : B64.charAt(e4));
++  }
++  return out;
++}
++
++export function base64ToAscii(input: string): string {
++  const clean = (input || '').replace(/[^A-Za-z0-9+/=]/g, '');
++  let out = '';
++  let i = 0;
++  while (i < clean.length) {
++    const d1 = B64.indexOf(clean.charAt(i++));
++    const d2 = B64.indexOf(clean.charAt(i++));
++    const d3 = B64.indexOf(clean.charAt(i++));
++    const d4 = B64.indexOf(clean.charAt(i++));
++    const c1 = (d1 << 2) | (d2 >> 4);
++    const c2 = ((d2 & 15) << 4) | (d3 >> 2);
++    const c3 = ((d3 & 3) << 6) | d4;
++    out += String.fromCharCode(c1);
++    if (d3 !== 64 && d3 !== -1) out += String.fromCharCode(c2);
++    if (d4 !== 64 && d4 !== -1) out += String.fromCharCode(c3);
++  }
++  return out;
++}
++
++/**
++ * Interprète une ligne device en état Private/Business.
++ * Fail-closed : toute réponse non reconnue -> null (jamais d'état supposé).
++ * Insensible à la casse / aux espaces. Gère "Privatemode ON", "privatemode:1", etc.
++ */
++export function parsePrivatemodeResponse(raw: string | null | undefined): BlePrivateModeState | null {
++  if (!raw) return null;
++  const t = raw.toLowerCase();
++  // ON -> PRIVATE
++  if (t.includes('privatemode on') || t.includes('privatemode:1') || t.includes('privatemode 1')) {
++    return 'PRIVATE';
++  }
++  // OFF -> PRO
++  if (t.includes('privatemode off') || t.includes('privatemode:0') || t.includes('privatemode 0')) {
++    return 'PRO';
++  }
++  return null;
++}
++
++/** Masque toute trace de secret dans une chaîne destinée aux logs. */
++function redact(line: string): string {
++  // Retire tout ce qui suit @sms_dbg: et :sec_login: (login/password/keyword).
++  return line
++    .replace(/(@sms_dbg:)[^\r\n]*/gi, '$1***')
++    .replace(/(:sec_login:)[^\r\n]*/gi, '$1***');
++}
++
++export class PrivateModeBleReader {
++  private manager: BleManager | null = null;
++  private device: Device | null = null;
++  private notifySub: Subscription | null = null;
++  private buffer = '';
++  private connected = false;
++
++  /** Scanne et retourne les devices dont le nom correspond à `nameFilter` (ex: contient "781479"). */
++  async findDevice(nameFilter: string, timeoutMs = CONNECT_TIMEOUT_MS): Promise<Device | null> {
++    const perm = await requestBlePermissions();
++    if (!perm.granted) throw new Error('Permission Bluetooth refusée');
++    if (!this.manager) this.manager = new BleManager();
++
++    const st = await this.manager.state();
++    if (st !== State.PoweredOn) throw new Error('Bluetooth non activé');
++
++    const filterLower = (nameFilter || '').toLowerCase();
++    return new Promise<Device | null>((resolve, reject) => {
++      let settled = false;
++      const timer = setTimeout(() => {
++        if (settled) return;
++        settled = true;
++        this.manager?.stopDeviceScan();
++        resolve(null);
++      }, timeoutMs);
++
++      this.manager!.startDeviceScan(null, { allowDuplicates: false }, (error, dev) => {
++        if (error) {
++          if (settled) return;
++          settled = true;
++          clearTimeout(timer);
++          this.manager?.stopDeviceScan();
++          reject(new Error(error.message));
++          return;
++        }
++        const name = (dev?.name || dev?.localName || '').toLowerCase();
++        if (dev && filterLower && name.includes(filterLower)) {
++          if (settled) return;
++          settled = true;
++          clearTimeout(timer);
++          this.manager?.stopDeviceScan();
++          resolve(dev);
++        }
++      });
++    });
++  }
++
++  /** Connexion GATT + découverte services + activation des notifications. */
++  async connect(deviceId: string): Promise<void> {
++    if (!this.manager) this.manager = new BleManager();
++    logger.info('ble-pm', `connect -> device ${deviceId}`);
++    const dev = await this.manager.connectToDevice(deviceId, { timeout: CONNECT_TIMEOUT_MS });
++    this.device = dev;
++    await dev.discoverAllServicesAndCharacteristics();
++    this.connected = true;
++
++    // Activer les notifications AVANT tout envoi de commande (exigé par le workflow).
++    this.buffer = '';
++    this.notifySub = dev.monitorCharacteristicForService(
++      NUS_SERVICE_UUID,
++      NUS_NOTIFY_UUID,
++      (err, characteristic) => {
++        if (err) {
++          logger.warn('ble-pm', 'notify error', err.message);
++          return;
++        }
++        const b64 = characteristic?.value;
++        if (!b64) return;
++        const chunk = base64ToAscii(b64);
++        this.buffer += chunk;
++        logger.debug('ble-pm', 'notify chunk', redact(chunk.replace(/\r/g, '\\r')));
++      },
++    );
++  }
++
++  /** Écrit une commande ASCII (terminée par \r) sur la caractéristique Write. */
++  private async writeCommand(ascii: string): Promise<void> {
++    if (!this.device) throw new Error('Non connecté');
++    const payload = asciiToBase64(ascii.endsWith('\r') ? ascii : `${ascii}\r`);
++    logger.debug('ble-pm', 'write', redact(ascii));
++    await this.device.writeCharacteristicWithResponseForService(
++      NUS_SERVICE_UUID,
++      NUS_WRITE_UUID,
++      payload,
++    );
++  }
++
++  /** Attend qu'une réponse reconnaissable (ON/OFF) apparaisse dans le buffer, borné par timeout. */
++  private async waitForPrivatemode(timeoutMs = RESPONSE_TIMEOUT_MS): Promise<string | null> {
++    const start = Date.now();
++    while (Date.now() - start < timeoutMs) {
++      const line = this.extractPrivatemodeLine();
++      if (line) return line;
++      await sleep(150);
++    }
++    return null;
++  }
++
++  /** Cherche dans le buffer une ligne contenant "Privatemode ...". Ne renvoie jamais de secret. */
++  private extractPrivatemodeLine(): string | null {
++    const lines = this.buffer.split(/[\r\n]+/);
++    for (const l of lines) {
++      if (/privatemode/i.test(l) && /(on|off|:0|:1|\s0|\s1)/i.test(l)) {
++        return l.trim();
++      }
++    }
++    return null;
++  }
++
++  /**
++   * Séquence READ-ONLY complète :
++   *   :sec_login:<keyword>  ->  @sms_dbg:<login> <password> privatemode ?  ->  lecture ON/OFF
++   * Retourne l'état confirmé par le device, ou ERROR/UNKNOWN (fail-closed).
++   */
++  async readPrivatemode(creds: BleCredentials): Promise<BleReadResult> {
++    try {
++      // 1) Authentification device (keyword). Secret jamais loggé.
++      await this.writeCommand(`:sec_login:${creds.deviceKeyword}`);
++      await sleep(INTER_CMD_DELAY_MS);
++
++      // 2) Interrogation de l'état réel.
++      await this.writeCommand(`@sms_dbg:${creds.smsLogin} ${creds.smsPassword} privatemode ?`);
++
++      // 3) Attendre une réponse reconnaissable.
++      const line = await this.waitForPrivatemode();
++      if (!line) {
++        return { state: 'UNKNOWN', rawResponse: null, error: 'Aucune réponse du véhicule (timeout).' };
++      }
++      const parsed = parsePrivatemodeResponse(line);
++      if (!parsed) {
++        return { state: 'UNKNOWN', rawResponse: line, error: 'Réponse non reconnue.' };
++      }
++      return { state: parsed, rawResponse: line, error: null };
++    } catch (e: any) {
++      logger.warn('ble-pm', 'readPrivatemode failed', e?.message);
++      return { state: 'ERROR', rawResponse: null, error: e?.message || 'Échec de lecture BLE.' };
++    }
++  }
++
++  /** Fermeture propre : :cfg_disconnect + cancel connexion + libération manager. */
++  async disconnect(): Promise<void> {
++    try {
++      if (this.device && this.connected) {
++        try { await this.writeCommand(':cfg_disconnect'); } catch { /* best-effort */ }
++      }
++    } finally {
++      try { this.notifySub?.remove(); } catch { /* ignore */ }
++      this.notifySub = null;
++      try {
++        if (this.device) await this.manager?.cancelDeviceConnection(this.device.id);
++      } catch { /* ignore */ }
++      this.device = null;
++      this.connected = false;
++      this.buffer = '';
++    }
++  }
++
++  /** Détruit le manager BLE (à appeler au démontage de l'écran DEV). */
++  async destroy(): Promise<void> {
++    await this.disconnect();
++    try { this.manager?.destroy(); } catch { /* ignore */ }
++    this.manager = null;
++  }
++}
+diff --git a/logitrak-driver-app/src/config/featureFlags.ts b/logitrak-driver-app/src/config/featureFlags.ts
+new file mode 100644
+index 0000000..46e958e
+--- /dev/null
++++ b/logitrak-driver-app/src/config/featureFlags.ts
+@@ -0,0 +1,103 @@
++/**
++ * Feature flags côté app chauffeur.
++ *
++ * PHASE 1 BLE — l'écran technique de lecture BLE Private/Business est strictement
++ * réservé au développement, jamais exposé en production.
++ *
++ * Activation DÉTERMINISTE par variable d'environnement Expo publique, injectée
++ * au build EAS (uniquement dans le profil `pilot-dev-ble`) :
++ *   EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV=1
++ *
++ * On NE dépend PLUS de `__DEV__` : son état n'est pas garanti sur un APK
++ * dev-client lancé sans Metro. Le garde-fou « jamais en production » est assuré
++ * par l'ABSENCE de cette variable dans les profils production / pilot-production.
++ * Fail-closed : variable absente ou != '1' -> OFF (seule la valeur exacte "1" active).
++ *
++ * NOTE TEST : `babel-preset-expo` INLINE les EXPO_PUBLIC_* à la compilation. La
++ * LOGIQUE est donc isolée dans des fonctions PURES (paramétrées) — testables de
++ * façon déterministe — et les constantes exportées ne sont que des applications
++ * de ces fonctions à la valeur d'environnement réelle du build.
++ */
++
++// ---------------------------------------------------------------------------
++// LOGIQUE PURE (testable, indépendante de l'inlining EXPO_PUBLIC_*)
++// ---------------------------------------------------------------------------
++
++/** Seule la valeur exacte "1" active la fonction (fail-closed). */
++export function computeBleDevEnabled(raw: string | undefined | null): boolean {
++  return raw === '1';
++}
++
++/** Parse une allowlist CSV en liste normalisée (vide si absente). */
++export function parseAllowedTrackers(csv: string | undefined | null): string[] {
++  return (csv || '').split(',').map((s) => s.trim()).filter(Boolean);
++}
++
++/** Correspondance EXACTE (jamais sous-chaîne) d'un id contre une allowlist. */
++export function isTrackerAllowed(
++  trackerId: string | null | undefined,
++  allowlist: string[],
++): boolean {
++  if (!trackerId) return false;
++  if (!allowlist || allowlist.length === 0) return false; // fail-closed
++  const normalized = String(trackerId).trim();
++  return allowlist.some((allowed) => normalized === allowed.trim());
++}
++
++/**
++ * Extraction DÉTERMINISTE de candidats-identifiants depuis un nom BLE, par
++ * découpage sur séparateurs NON alphanumériques (jamais par sous-chaîne).
++ * Ex : "FMC-781479-x" -> ["FMC","781479","x"] ; "17814790" -> ["17814790"].
++ *
++ * ⚠️ Le format réel du nom BLE annoncé par le FMC130 781479 n'est PAS supposé :
++ * il doit être CONFIRMÉ au premier scan terrain (l'écran DEV journalise le nom
++ * détecté). Si l'exact match échoue, ajuster EXPO_PUBLIC_BLE_DEV_ALLOWED_TRACKERS
++ * avec la valeur réelle. On ne suppose jamais un format non vérifié.
++ */
++export function extractCandidateTrackerIds(bleName: string | null | undefined): string[] {
++  if (!bleName) return [];
++  return String(bleName).split(/[^A-Za-z0-9]+/).map((s) => s.trim()).filter(Boolean);
++}
++
++/**
++ * Un périphérique BLE est-il autorisé vis-à-vis d'une allowlist donnée ? Vérifie,
++ * en EXACT match : les identifiants bruts (name/localName/id) ET les tokens
++ * extraits de name/localName. Fail-closed : rien ne matche -> false.
++ */
++export function isBleDeviceAllowed(
++  d: { name?: string | null; localName?: string | null; id?: string | null },
++  allowlist: string[],
++): boolean {
++  if (!allowlist || allowlist.length === 0) return false;
++  const rawCandidates = [d.name, d.localName, d.id].filter(Boolean) as string[];
++  const tokenCandidates = [
++    ...extractCandidateTrackerIds(d.name),
++    ...extractCandidateTrackerIds(d.localName),
++  ];
++  const all = [...rawCandidates.map((s) => s.trim()), ...tokenCandidates];
++  return all.some((c) => isTrackerAllowed(c, allowlist));
++}
++
++// ---------------------------------------------------------------------------
++// APPLICATION aux variables d'environnement réelles du build (inlinées par EAS)
++// ---------------------------------------------------------------------------
++
++/** true UNIQUEMENT si EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV vaut exactement '1'. */
++export const PRIVATE_MODE_BLE_DEV: boolean =
++  computeBleDevEnabled(process.env.EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV);
++
++/** Allowlist effective (garde-fou pilote). Vide -> fail-closed. */
++export const BLE_DEV_ALLOWED_TRACKERS: string[] =
++  parseAllowedTrackers(process.env.EXPO_PUBLIC_BLE_DEV_ALLOWED_TRACKERS);
++
++/** Exact match d'un id tracker contre l'allowlist effective. */
++export function isTrackerAllowedForBleDev(trackerId: string | null | undefined): boolean {
++  return isTrackerAllowed(trackerId, BLE_DEV_ALLOWED_TRACKERS);
++}
++
++/** Le périphérique réellement détecté est-il autorisé (allowlist effective) ? */
++export function isBleDeviceAllowedForDev(d: {
++  name?: string | null; localName?: string | null; id?: string | null;
++}): boolean {
++  return isBleDeviceAllowed(d, BLE_DEV_ALLOWED_TRACKERS);
++}
+diff --git a/logitrak-driver-app/src/navigation/RootNavigator.tsx b/logitrak-driver-app/src/navigation/RootNavigator.tsx
+index 3ed02f1..4585abe 100644
+--- a/logitrak-driver-app/src/navigation/RootNavigator.tsx
++++ b/logitrak-driver-app/src/navigation/RootNavigator.tsx
+@@ -14,6 +14,8 @@ import { SettingsScreen } from '@/screens/SettingsScreen';
+ import { TripDetailScreen } from '@/screens/TripDetailScreen';
+ import { ChangePasswordScreen } from '@/screens/ChangePasswordScreen';
+ import { VehiclePickerScreen } from '@/screens/VehiclePickerScreen';
++import BlePrivateModeDevScreen from '@/screens/BlePrivateModeDevScreen';
++import { PRIVATE_MODE_BLE_DEV } from '@/config/featureFlags';
+ import { useAuthStore } from '@/store/authStore';
+ import { colors } from '@/theme/colors';
+ import type { Vehicle } from '@/api/ble';
+@@ -25,6 +27,8 @@ export type RootStackParamList = {
+   ChangePassword: undefined;
+   Settings: undefined;
+   VehiclePicker: { onPick?: (v: Vehicle) => void };
++  // DEV uniquement (Phase 1 BLE READ-ONLY) : route présente seulement si PRIVATE_MODE_BLE_DEV.
++  BlePrivateModeDev?: undefined;
+ };
+ 
+ export type TabParamList = {
+@@ -167,6 +171,13 @@ export function RootNavigator() {
+                 component={VehiclePickerScreen}
+                 options={{ title: 'Choisir un véhicule' }}
+               />
++              {PRIVATE_MODE_BLE_DEV ? (
++                <Stack.Screen
++                  name="BlePrivateModeDev"
++                  component={BlePrivateModeDevScreen}
++                  options={{ title: 'BLE Private Mode (DEV)' }}
++                />
++              ) : null}
+             </>
+           )
+         ) : (
+diff --git a/logitrak-driver-app/src/screens/BlePrivateModeDevScreen.tsx b/logitrak-driver-app/src/screens/BlePrivateModeDevScreen.tsx
+new file mode 100644
+index 0000000..a0783b9
+--- /dev/null
++++ b/logitrak-driver-app/src/screens/BlePrivateModeDevScreen.tsx
+@@ -0,0 +1,209 @@
++import React, { useCallback, useEffect, useRef, useState } from 'react';
++import {
++  View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
++} from 'react-native';
++import { SafeAreaView } from 'react-native-safe-area-context';
++import { colors, spacing, radius, font } from '@/theme/colors';
++import {
++  PrivateModeBleReader, BlePrivateModeState, BleReadResult,
++} from '@/ble/privateModeBle';
++import { bleScanner } from '@/ble/scanner';
++import { isBleDeviceAllowedForDev, BLE_DEV_ALLOWED_TRACKERS } from '@/config/featureFlags';
++
++/**
++ * ÉCRAN DEV — PHASE 1 BLE READ-ONLY (FMC130 781479).
++ *
++ * But : prouver la connexion GATT réelle + lecture `privatemode ?`.
++ * - Credentials saisis EN MÉMOIRE uniquement (jamais persistés, jamais loggés).
++ * - AUCUNE écriture `privatemode ON/OFF`.
++ * - Met en PAUSE le scan beacon pendant la connexion (mono-connexion FMC130).
++ * - Accès réservé au DEV (routé derrière le flag PRIVATE_MODE_BLE_DEV).
++ */
++
++const STATE_LABEL: Record<BlePrivateModeState, string> = {
++  UNKNOWN: 'Inconnu',
++  CONNECTING: 'Connexion…',
++  PRO: 'PROFESSIONNEL (Privatemode OFF)',
++  PRIVATE: 'PRIVÉ (Privatemode ON)',
++  ERROR: 'Erreur',
++};
++
++const STATE_COLOR: Record<BlePrivateModeState, string> = {
++  UNKNOWN: colors.textMuted,
++  CONNECTING: colors.warning,
++  PRO: colors.pro,
++  PRIVATE: colors.perso,
++  ERROR: colors.danger,
++};
++
++export default function BlePrivateModeDevScreen() {
++  const [nameFilter, setNameFilter] = useState(BLE_DEV_ALLOWED_TRACKERS[0] ?? '');
++  const [deviceKeyword, setDeviceKeyword] = useState('');
++  const [smsLogin, setSmsLogin] = useState('');
++  const [smsPassword, setSmsPassword] = useState('');
++  const [state, setState] = useState<BlePrivateModeState>('UNKNOWN');
++  const [busy, setBusy] = useState(false);
++  const [raw, setRaw] = useState<string | null>(null);
++  const [error, setError] = useState<string | null>(null);
++  const [log, setLog] = useState<string[]>([]);
++  const readerRef = useRef<PrivateModeBleReader | null>(null);
++
++  const appendLog = useCallback((line: string) => {
++    setLog((prev) => [...prev.slice(-30), `${new Date().toLocaleTimeString('fr-CH')} ${line}`]);
++  }, []);
++
++  useEffect(() => {
++    return () => {
++      // Démontage : on libère la connexion et le manager, et on ne laisse rien ouvert.
++      readerRef.current?.destroy().catch(() => {});
++    };
++  }, []);
++
++  const run = useCallback(async () => {
++    if (busy) return;
++    if (!deviceKeyword || !smsLogin || !smsPassword) {
++      setError('Renseignez keyword, login et mot de passe (DEV uniquement).');
++      return;
++    }
++    setBusy(true);
++    setError(null);
++    setRaw(null);
++    setState('CONNECTING');
++    appendLog('Pause du scan beacon (mono-connexion FMC130)…');
++
++    // Mono-connexion : le FMC130 n'accepte qu'UNE connexion BLE. On stoppe le scan.
++    try { await bleScanner.stop(); } catch { /* ignore */ }
++
++    const reader = new PrivateModeBleReader();
++    readerRef.current = reader;
++    let result: BleReadResult = { state: 'ERROR' };
++    try {
++      appendLog(`Recherche du véhicule « ${nameFilter} »…`);
++      const dev = await reader.findDevice(nameFilter);
++      if (!dev) {
++        setState('ERROR');
++        setError('Véhicule introuvable (vérifiez le filtre de nom et la proximité).');
++        appendLog('Aucun device trouvé.');
++        return;
++      }
++      // GARDE-FOU (pilote) : on contrôle l'IDENTIFIANT RÉELLEMENT DÉTECTÉ (pas le
++      // texte saisi). Exact match sur l'allowlist (fail-closed) -> sinon PAS de GATT.
++      appendLog(`Nom BLE détecté : « ${dev.name || dev.localName || dev.id} » (à confirmer terrain).`);
++      if (!isBleDeviceAllowedForDev({ name: dev.name, localName: dev.localName, id: dev.id })) {
++        setState('ERROR');
++        setError(
++          `Périphérique détecté non autorisé pour ce test DEV. Autorisés : ${
++            BLE_DEV_ALLOWED_TRACKERS.join(', ') || '(aucun)'
++          }.`,
++        );
++        appendLog('Refus de connexion : device détecté hors allowlist.');
++        return;
++      }
++      appendLog(`Device trouvé : ${dev.name || dev.localName || dev.id}. Connexion GATT…`);
++      await reader.connect(dev.id);
++      appendLog('Connecté. Notifications activées. Authentification + lecture…');
++
++      result = await reader.readPrivatemode({ deviceKeyword, smsLogin, smsPassword });
++      setState(result.state);
++      setRaw(result.rawResponse ?? null);
++      if (result.error) setError(result.error);
++      appendLog(`Résultat : ${result.state}${result.rawResponse ? ` — « ${result.rawResponse} »` : ''}`);
++    } catch (e: any) {
++      setState('ERROR');
++      setError(e?.message || 'Échec BLE.');
++      appendLog(`Erreur : ${e?.message || 'inconnue'}`);
++    } finally {
++      try { await reader.disconnect(); appendLog('Déconnexion propre (:cfg_disconnect).'); } catch { /* ignore */ }
++      setBusy(false);
++    }
++  }, [busy, deviceKeyword, smsLogin, smsPassword, nameFilter, appendLog]);
++
++  return (
++    <SafeAreaView style={styles.safe} edges={['top']}>
++      <ScrollView contentContainerStyle={styles.content} testID="ble-dev-scroll">
++        <Text style={styles.title}>BLE Private Mode — DEV (lecture seule)</Text>
++        <Text style={styles.sub}>
++          Phase 1 : connexion GATT au FMC130 et lecture de l'état via « privatemode ? ».
++          Aucune écriture ON/OFF. Credentials en mémoire uniquement.
++        </Text>
++
++        <View style={[styles.stateCard, { borderColor: STATE_COLOR[state] }]} testID="ble-dev-state">
++          <Text style={styles.stateLabel}>État lu</Text>
++          <Text style={[styles.stateValue, { color: STATE_COLOR[state] }]} testID="ble-dev-state-value">
++            {STATE_LABEL[state]}
++          </Text>
++          {raw ? <Text style={styles.rawLine} testID="ble-dev-raw">Réponse : {raw}</Text> : null}
++          {error ? <Text style={styles.errorLine} testID="ble-dev-error">{error}</Text> : null}
++        </View>
++
++        <Text style={styles.field}>Filtre nom device (ex : 781479)</Text>
++        <TextInput
++          style={styles.input} value={nameFilter} onChangeText={setNameFilter}
++          autoCapitalize="none" autoCorrect={false} testID="ble-dev-name"
++        />
++        <Text style={styles.field}>Device keyword (:sec_login)</Text>
++        <TextInput
++          style={styles.input} value={deviceKeyword} onChangeText={setDeviceKeyword}
++          autoCapitalize="none" autoCorrect={false} secureTextEntry testID="ble-dev-keyword"
++        />
++        <Text style={styles.field}>SMS login</Text>
++        <TextInput
++          style={styles.input} value={smsLogin} onChangeText={setSmsLogin}
++          autoCapitalize="none" autoCorrect={false} testID="ble-dev-login"
++        />
++        <Text style={styles.field}>SMS password</Text>
++        <TextInput
++          style={styles.input} value={smsPassword} onChangeText={setSmsPassword}
++          autoCapitalize="none" autoCorrect={false} secureTextEntry testID="ble-dev-password"
++        />
++
++        <TouchableOpacity
++          style={[styles.btn, busy && styles.btnDisabled]}
++          onPress={run} disabled={busy} testID="ble-dev-read"
++          accessibilityRole="button" accessibilityLabel="Lire l'état BLE"
++        >
++          {busy ? <ActivityIndicator color={colors.textInverse} />
++            : <Text style={styles.btnText}>Lire l'état (privatemode ?)</Text>}
++        </TouchableOpacity>
++
++        <Text style={styles.field}>Journal technique</Text>
++        <View style={styles.logBox} testID="ble-dev-log">
++          {log.length === 0 ? <Text style={styles.logEmpty}>—</Text>
++            : log.map((l, i) => <Text key={i} style={styles.logLine}>{l}</Text>)}
++        </View>
++      </ScrollView>
++    </SafeAreaView>
++  );
++}
++
++const styles = StyleSheet.create({
++  safe: { flex: 1, backgroundColor: colors.bg },
++  content: { padding: spacing.md, paddingBottom: spacing.xxl },
++  title: { color: colors.text, fontSize: font.size.xl, fontWeight: '700', marginBottom: spacing.xs },
++  sub: { color: colors.textMuted, fontSize: font.size.sm, marginBottom: spacing.lg, lineHeight: 18 },
++  stateCard: {
++    backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 2,
++    padding: spacing.lg, marginBottom: spacing.lg,
++  },
++  stateLabel: { color: colors.textMuted, fontSize: font.size.xs, textTransform: 'uppercase', letterSpacing: 1 },
++  stateValue: { fontSize: font.size.lg, fontWeight: '700', marginTop: spacing.xs },
++  rawLine: { color: colors.text, fontSize: font.size.sm, marginTop: spacing.sm },
++  errorLine: { color: colors.danger, fontSize: font.size.sm, marginTop: spacing.sm },
++  field: { color: colors.textMuted, fontSize: font.size.xs, marginTop: spacing.md, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 },
++  input: {
++    backgroundColor: colors.bgCard, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
++    color: colors.text, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: font.size.md,
++  },
++  btn: {
++    marginTop: spacing.lg, backgroundColor: colors.primary, borderRadius: radius.md,
++    paddingVertical: spacing.md, alignItems: 'center',
++  },
++  btnDisabled: { opacity: 0.6 },
++  btnText: { color: colors.textInverse, fontSize: font.size.md, fontWeight: '700' },
++  logBox: {
++    backgroundColor: colors.bgCard, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
++    padding: spacing.sm, marginTop: 4, minHeight: 80,
++  },
++  logEmpty: { color: colors.textMuted, fontSize: font.size.sm },
++  logLine: { color: colors.textMuted, fontSize: font.size.xs, lineHeight: 16 },
++});
+diff --git a/logitrak-driver-app/src/screens/SettingsScreen.tsx b/logitrak-driver-app/src/screens/SettingsScreen.tsx
+index 7d3f88a..4d0fd6a 100644
+--- a/logitrak-driver-app/src/screens/SettingsScreen.tsx
++++ b/logitrak-driver-app/src/screens/SettingsScreen.tsx
+@@ -25,6 +25,7 @@ import {
+   NotificationPreferences,
+ } from '@/api/notifications';
+ import type { RootStackParamList } from '@/navigation/RootNavigator';
++import { PRIVATE_MODE_BLE_DEV } from '@/config/featureFlags';
+ 
+ type Nav = NativeStackNavigationProp<RootStackParamList>;
+ 
+@@ -168,6 +169,25 @@ export function SettingsScreen() {
+           {isDev ? <Row label="Environnement" value="développement" /> : null}
+         </Section>
+ 
++        {/* Outils développeur — DEV uniquement (disparaît en production : flag fail-closed). */}
++        {PRIVATE_MODE_BLE_DEV ? (
++          <Section title="Outils développeur">
++            <TouchableOpacity
++              style={styles.rowBtn}
++              onPress={() => nav.navigate('BlePrivateModeDev')}
++              testID="settings-ble-dev"
++              accessibilityRole="button"
++              accessibilityLabel="Ouvrir l'outil BLE Private Mode (DEV)"
++            >
++              <View style={{ flex: 1 }}>
++                <Text style={styles.rowBtnText}>BLE Private Mode (DEV)</Text>
++                <Text style={styles.rowSub}>Tester la lecture Privé / Pro du FMC130</Text>
++              </View>
++              <Text style={styles.chevron}>›</Text>
++            </TouchableOpacity>
++          </Section>
++        ) : null}
++
+         <Text style={styles.legal}>
+           © Logitrak 2026 · Données traitées conformément à la nLPD/RGPD.{'\n'}
+           Le mode PRIVÉ masque entièrement vos trajets personnels — y compris pour votre manager.
