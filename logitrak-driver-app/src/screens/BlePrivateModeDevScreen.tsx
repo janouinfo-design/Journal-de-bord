@@ -5,7 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import {
-  PrivateModeBleReader, BlePrivateModeState, BleReadResult,
+  PrivateModeBleReader, BlePrivateModeState, BleReadResult, BleCommandFormat,
 } from '@/ble/privateModeBle';
 import { bleScanner } from '@/ble/scanner';
 import { isBleDeviceAllowedForDev, BLE_DEV_ALLOWED_TRACKERS } from '@/config/featureFlags';
@@ -41,6 +41,7 @@ export default function BlePrivateModeDevScreen() {
   const [deviceKeyword, setDeviceKeyword] = useState('');
   const [smsLogin, setSmsLogin] = useState('');
   const [smsPassword, setSmsPassword] = useState('');
+  const [format, setFormat] = useState<BleCommandFormat>('sms_dbg');
   const [state, setState] = useState<BlePrivateModeState>('UNKNOWN');
   const [busy, setBusy] = useState(false);
   const [raw, setRaw] = useState<string | null>(null);
@@ -61,14 +62,12 @@ export default function BlePrivateModeDevScreen() {
 
   const run = useCallback(async () => {
     if (busy) return;
-    if (!deviceKeyword || !smsLogin || !smsPassword) {
-      setError('Renseignez keyword, login et mot de passe (DEV uniquement).');
-      return;
-    }
+    // Credentials TOUS optionnels (keyword/login/password). Aucune exigence bloquante.
     setBusy(true);
     setError(null);
     setRaw(null);
     setState('CONNECTING');
+    appendLog(`Format sélectionné : ${format === 'raw' ? 'privatemode ? (brut)' : '@sms_dbg:[login password] privatemode ?'}`);
     appendLog('Pause du scan beacon (mono-connexion FMC130)…');
 
     // Mono-connexion : le FMC130 n'accepte qu'UNE connexion BLE. On stoppe le scan.
@@ -86,9 +85,10 @@ export default function BlePrivateModeDevScreen() {
         appendLog('Aucun device trouvé.');
         return;
       }
-      // GARDE-FOU (pilote) : on contrôle l'IDENTIFIANT RÉELLEMENT DÉTECTÉ (pas le
-      // texte saisi). Exact match sur l'allowlist (fail-closed) -> sinon PAS de GATT.
-      appendLog(`Nom BLE détecté : « ${dev.name || dev.localName || dev.id} » (à confirmer terrain).`);
+      // Journal technique : nom BLE réellement détecté + RSSI (donnée clé terrain).
+      const detectedName = dev.name || dev.localName || dev.id;
+      appendLog(`Nom BLE détecté : « ${detectedName} » | RSSI : ${dev.rssi ?? 'n/a'} dBm (à confirmer terrain).`);
+      // GARDE-FOU (pilote) : contrôle de l'IDENTIFIANT RÉELLEMENT DÉTECTÉ (pas le texte saisi).
       if (!isBleDeviceAllowedForDev({ name: dev.name, localName: dev.localName, id: dev.id })) {
         setState('ERROR');
         setError(
@@ -99,24 +99,27 @@ export default function BlePrivateModeDevScreen() {
         appendLog('Refus de connexion : device détecté hors allowlist.');
         return;
       }
-      appendLog(`Device trouvé : ${dev.name || dev.localName || dev.id}. Connexion GATT…`);
+      appendLog(`Device autorisé. Connexion GATT…`);
       await reader.connect(dev.id);
-      appendLog('Connecté. Notifications activées. Authentification + lecture…');
+      appendLog('Connecté. Notifications activées.');
 
-      result = await reader.readPrivatemode({ deviceKeyword, smsLogin, smsPassword });
+      result = await reader.readPrivatemode({ deviceKeyword, smsLogin, smsPassword, format });
+      appendLog(`Authentification keyword : ${result.authSent ? 'ENVOYÉE' : 'NON envoyée (keyword vide)'}.`);
+      appendLog(`Commande envoyée : « ${result.sentCommand ?? '(n/a)'} »`);
+      appendLog(`Réponse brute : ${result.rawResponse ? `« ${result.rawResponse} »` : '(aucune)'}`);
       setState(result.state);
       setRaw(result.rawResponse ?? null);
       if (result.error) setError(result.error);
-      appendLog(`Résultat : ${result.state}${result.rawResponse ? ` — « ${result.rawResponse} »` : ''}`);
+      appendLog(`Résultat : ${result.state}${result.error ? ` — ${result.error}` : ''}`);
     } catch (e: any) {
       setState('ERROR');
       setError(e?.message || 'Échec BLE.');
-      appendLog(`Erreur : ${e?.message || 'inconnue'}`);
+      appendLog(`Erreur GATT : ${e?.message || 'inconnue'}`);
     } finally {
       try { await reader.disconnect(); appendLog('Déconnexion propre (:cfg_disconnect).'); } catch { /* ignore */ }
       setBusy(false);
     }
-  }, [busy, deviceKeyword, smsLogin, smsPassword, nameFilter, appendLog]);
+  }, [busy, deviceKeyword, smsLogin, smsPassword, nameFilter, format, appendLog]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -141,20 +144,55 @@ export default function BlePrivateModeDevScreen() {
           style={styles.input} value={nameFilter} onChangeText={setNameFilter}
           autoCapitalize="none" autoCorrect={false} testID="ble-dev-name"
         />
-        <Text style={styles.field}>Device keyword (:sec_login)</Text>
+
+        <Text style={styles.field}>Format de commande</Text>
+        <View style={styles.formatRow}>
+          <TouchableOpacity
+            style={[styles.formatBtn, format === 'sms_dbg' && styles.formatBtnActive]}
+            onPress={() => setFormat('sms_dbg')}
+            testID="ble-dev-format-smsdbg"
+            accessibilityRole="button"
+            accessibilityState={{ selected: format === 'sms_dbg' }}
+          >
+            <Text style={[styles.formatText, format === 'sms_dbg' && styles.formatTextActive]}>
+              @sms_dbg
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.formatBtn, format === 'raw' && styles.formatBtnActive]}
+            onPress={() => setFormat('raw')}
+            testID="ble-dev-format-raw"
+            accessibilityRole="button"
+            accessibilityState={{ selected: format === 'raw' }}
+          >
+            <Text style={[styles.formatText, format === 'raw' && styles.formatTextActive]}>
+              privatemode ? (brut)
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.field}>Device keyword (:sec_login) — optionnel</Text>
         <TextInput
           style={styles.input} value={deviceKeyword} onChangeText={setDeviceKeyword}
+          placeholder="Laisser vide = pas d'authentification"
+          placeholderTextColor={colors.textMuted}
           autoCapitalize="none" autoCorrect={false} secureTextEntry testID="ble-dev-keyword"
         />
-        <Text style={styles.field}>SMS login</Text>
+        <Text style={styles.field}>SMS login — optionnel</Text>
         <TextInput
           style={styles.input} value={smsLogin} onChangeText={setSmsLogin}
+          placeholder="Optionnel"
+          placeholderTextColor={colors.textMuted}
           autoCapitalize="none" autoCorrect={false} testID="ble-dev-login"
+          editable={format === 'sms_dbg'}
         />
-        <Text style={styles.field}>SMS password</Text>
+        <Text style={styles.field}>SMS password — optionnel</Text>
         <TextInput
           style={styles.input} value={smsPassword} onChangeText={setSmsPassword}
+          placeholder="Optionnel"
+          placeholderTextColor={colors.textMuted}
           autoCapitalize="none" autoCorrect={false} secureTextEntry testID="ble-dev-password"
+          editable={format === 'sms_dbg'}
         />
 
         <TouchableOpacity
@@ -194,6 +232,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgCard, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
     color: colors.text, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: font.size.md,
   },
+  formatRow: { flexDirection: 'row', gap: spacing.sm },
+  formatBtn: {
+    flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
+    paddingVertical: spacing.sm, alignItems: 'center', backgroundColor: colors.bgCard,
+  },
+  formatBtnActive: { borderColor: colors.primary, backgroundColor: colors.primary + '22' },
+  formatText: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
+  formatTextActive: { color: colors.primary },
   btn: {
     marginTop: spacing.lg, backgroundColor: colors.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',

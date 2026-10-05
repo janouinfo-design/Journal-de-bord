@@ -46,14 +46,42 @@ export interface BleReadResult {
   /** Ligne brute renvoyée par le device (SANS secret ; sûre à afficher en DEV). */
   rawResponse?: string | null;
   error?: string | null;
+  /** Commande réellement envoyée (secrets masqués) — pour le journal technique. */
+  sentCommand?: string | null;
+  /** Authentification keyword envoyée ? (keyword renseigné) */
+  authSent?: boolean;
 }
 
+/** Format de commande Phase 1 (sélecteur UI). READ-ONLY : uniquement « privatemode ? ». */
+export type BleCommandFormat = 'sms_dbg' | 'raw';
+
 export interface BleCredentials {
-  /** :sec_login:<deviceKeyword> */
-  deviceKeyword: string;
-  /** @sms_dbg:<smsLogin> <smsPassword> privatemode ? */
-  smsLogin: string;
-  smsPassword: string;
+  /** :sec_login:<deviceKeyword> — OPTIONNEL : vide -> aucune authentification envoyée. */
+  deviceKeyword?: string;
+  /** @sms_dbg:<smsLogin> <smsPassword> ... — OPTIONNELS. */
+  smsLogin?: string;
+  smsPassword?: string;
+  /** Format de la commande de lecture. Défaut : 'sms_dbg'. */
+  format?: BleCommandFormat;
+}
+
+/**
+ * Construit la commande de LECTURE `privatemode ?` selon le format choisi (PURE/testable).
+ * - 'raw'     -> "privatemode ?"
+ * - 'sms_dbg' -> "@sms_dbg:[<login> <password> ]privatemode ?"
+ *   login/password optionnels : vides -> "@sms_dbg:privatemode ?" (aucun double espace).
+ * READ-ONLY : jamais ON/OFF. Jamais de SMS réseau (envoi via BLE uniquement).
+ */
+export function buildReadCommand(
+  format: BleCommandFormat | undefined,
+  smsLogin?: string,
+  smsPassword?: string,
+): string {
+  if (format === 'raw') return 'privatemode ?';
+  const login = (smsLogin || '').trim();
+  const password = (smsPassword || '').trim();
+  const auth = [login, password].filter(Boolean).join(' ');
+  return auth ? `@sms_dbg:${auth} privatemode ?` : '@sms_dbg:privatemode ?';
 }
 
 /** Délais (ms) — bornés pour éviter tout spinner infini. */
@@ -242,32 +270,41 @@ export class PrivateModeBleReader {
   }
 
   /**
-   * Séquence READ-ONLY complète :
-   *   :sec_login:<keyword>  ->  @sms_dbg:<login> <password> privatemode ?  ->  lecture ON/OFF
-   * Retourne l'état confirmé par le device, ou ERROR/UNKNOWN (fail-closed).
+   * Séquence READ-ONLY :
+   *   [:sec_login:<keyword> si keyword fourni]  ->  commande de lecture (format choisi)  ->  ON/OFF
+   * Keyword/login/password OPTIONNELS. Jamais d'écriture ON/OFF. Jamais de SMS réseau.
+   * Retourne l'état confirmé + la commande réellement envoyée (secrets masqués pour le journal).
    */
   async readPrivatemode(creds: BleCredentials): Promise<BleReadResult> {
+    const keyword = (creds.deviceKeyword || '').trim();
+    const authSent = keyword.length > 0;
+    const cmd = buildReadCommand(creds.format, creds.smsLogin, creds.smsPassword);
     try {
-      // 1) Authentification device (keyword). Secret jamais loggé.
-      await this.writeCommand(`:sec_login:${creds.deviceKeyword}`);
-      await sleep(INTER_CMD_DELAY_MS);
+      // 1) Authentification device UNIQUEMENT si un keyword est renseigné.
+      if (authSent) {
+        await this.writeCommand(`:sec_login:${keyword}`);
+        await sleep(INTER_CMD_DELAY_MS);
+      }
 
-      // 2) Interrogation de l'état réel.
-      await this.writeCommand(`@sms_dbg:${creds.smsLogin} ${creds.smsPassword} privatemode ?`);
+      // 2) Interrogation de l'état réel (READ-ONLY).
+      await this.writeCommand(cmd);
 
       // 3) Attendre une réponse reconnaissable.
       const line = await this.waitForPrivatemode();
       if (!line) {
-        return { state: 'UNKNOWN', rawResponse: null, error: 'Aucune réponse du véhicule (timeout).' };
+        return { state: 'UNKNOWN', rawResponse: null, error: 'Aucune réponse du véhicule (timeout).',
+                 sentCommand: redact(cmd), authSent };
       }
       const parsed = parsePrivatemodeResponse(line);
       if (!parsed) {
-        return { state: 'UNKNOWN', rawResponse: line, error: 'Réponse non reconnue.' };
+        return { state: 'UNKNOWN', rawResponse: line, error: 'Réponse non reconnue.',
+                 sentCommand: redact(cmd), authSent };
       }
-      return { state: parsed, rawResponse: line, error: null };
+      return { state: parsed, rawResponse: line, error: null, sentCommand: redact(cmd), authSent };
     } catch (e: any) {
       logger.warn('ble-pm', 'readPrivatemode failed', e?.message);
-      return { state: 'ERROR', rawResponse: null, error: e?.message || 'Échec de lecture BLE.' };
+      return { state: 'ERROR', rawResponse: null, error: e?.message || 'Échec de lecture BLE.',
+               sentCommand: redact(cmd), authSent };
     }
   }
 

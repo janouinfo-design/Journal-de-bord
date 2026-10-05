@@ -325,6 +325,17 @@ frontend:
       - working: true
         agent: "testing"
         comment: "FAIL-CLOSED UI TEST PASSED (2026-09-07) - Driver Mobile App (Expo web, mobile viewport 390x844). Verified PRIVATE_MODE_ENABLED feature flag NOT set (fail-closed by design). Test results: (1) Login successful with chauffeur@logitrak.ch / chauffeur123 ✓, (2) Driver screen rendered correctly (Jean Dupont, no active session, vehicle search, PRO/PRIVÉ mobile override buttons) ✓, (3) CRITICAL: private-mode-section (testID) NOT present ✓ (expected - feature disabled), (4) private-mode-unavailable (testID) NOT present ✓ (expected - FEATURE_DISABLED reason is intentionally hidden/discreet), (5) No console errors (only 2 deprecation warnings: pointerEvents, shadow* props) ✓, (6) SECURITY: NO forbidden strings found in DOM or console (Navixy, Teltonika, privatemode, AVL, 11813, 11000, raw_command, navixy_hash, api_key, Bearer, INTEGRATION_ENCRYPTION_KEY) ✓. Fail-closed behavior verified: when feature flag is OFF, driver cannot see or toggle Private mode. UI is discreet (no error message, no unavailable notice). App renders without crashes. Screenshot captured. NO ISSUES FOUND."
+  - task: "BLE DEV screen modifications - smoke test (command format selector + optional credentials)"
+    implemented: true
+    working: "NA"
+    file: "logitrak-driver-app/src/screens/BLEDevScreen.tsx (not accessible in web)"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: "BLE DEV SCREEN SMOKE TEST COMPLETE (2026-10-05) - NON-REGRESSION VALIDATION. CONTEXT: React Native Expo app served in WEB MODE at http://localhost:3000. Modified BLE DEV screen (command format selector @sms_dbg/raw + credentials made optional) + buildReadCommand logic. SMOKE TEST OBJECTIVE: Verify app loads without fatal JS error after BLE DEV modifications. LIMITATIONS (EXPECTED): (1) BLE DEV flag OFF in web (EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV not defined) → BLE DEV screen does NOT appear (fail-closed expected). (2) Settings screen is behind login (no test credentials provided). (3) BLE technical screen (format selector, privatemode reading, GATT FMC130 connection) requires NATIVE APK + PHYSICAL DEVICE → NOT testable in web. (4) BLE modifications covered by 123 Jest tests (buildReadCommand: raw/sms_dbg format, optional credentials, no double space, never ON/OFF). TEST RESULTS: ✅ (1) APP LOAD: SUCCESS - Page loaded at http://localhost:3000, page title 'Login', no white screen, no fatal JS error, no React error overlay ✓. ✅ (2) LOGIN SCREEN PRESENT: Email field with placeholder 'chauffeur@logitrak.ch' ✓, Password field (MOT DE PASSE) ✓, 'Se connecter' button visible ✓, 'Rester connecté' checkbox ✓, LOGITRAK logo + 'Console Chauffeur' title ✓. ✅ (3) CONSOLE LOGS: ONLY expected warnings (NORMAL, to be ignored): TaskManager.isTaskRegisteredAsync not available on web ✓, Notifications.setNotificationCategoryAsync not available on web ✓. NO NEW red errors found ✓. ✅ (4) TESTING_AGENT_BLE_NATIVE: NOT_APPLICABLE (BLE requires native APK + physical device, covered by 123 Jest tests). Screenshot captured: 01_initial_load.png. FINAL VERDICT: ✅ SMOKE TEST PASS - App loads successfully without fatal errors after BLE DEV modifications. NO REGRESSION DETECTED. BLE technical features NOT testable in web (expected limitation)."
 
 metadata:
   created_by: "main_agent"

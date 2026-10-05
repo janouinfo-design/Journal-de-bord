@@ -12,6 +12,7 @@ import {
   parsePrivatemodeResponse,
   asciiToBase64,
   base64ToAscii,
+  buildReadCommand,
   NUS_SERVICE_UUID,
   NUS_WRITE_UUID,
   NUS_NOTIFY_UUID,
@@ -72,6 +73,41 @@ describe('UUIDs Nordic UART (Teltonika)', () => {
     expect(NUS_NOTIFY_UUID).toBe('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
   });
 });
+
+describe('buildReadCommand — format de commande (READ-ONLY, jamais ON/OFF)', () => {
+  test('format "raw" -> commande brute (ignore login/password)', () => {
+    expect(buildReadCommand('raw')).toBe('privatemode ?');
+    expect(buildReadCommand('raw', 'log', 'pwd')).toBe('privatemode ?');
+  });
+
+  test('format "sms_dbg" avec login+password', () => {
+    expect(buildReadCommand('sms_dbg', 'log', 'pwd')).toBe('@sms_dbg:log pwd privatemode ?');
+  });
+
+  test('format "sms_dbg" SANS credentials -> pas de double espace', () => {
+    expect(buildReadCommand('sms_dbg')).toBe('@sms_dbg:privatemode ?');
+    expect(buildReadCommand('sms_dbg', '', '')).toBe('@sms_dbg:privatemode ?');
+    expect(buildReadCommand('sms_dbg', '  ', '  ')).toBe('@sms_dbg:privatemode ?');
+  });
+
+  test('format "sms_dbg" avec login seul', () => {
+    expect(buildReadCommand('sms_dbg', 'log', '')).toBe('@sms_dbg:log privatemode ?');
+  });
+
+  test('défaut (format undefined) -> sms_dbg', () => {
+    expect(buildReadCommand(undefined, 'log', 'pwd')).toBe('@sms_dbg:log pwd privatemode ?');
+  });
+
+  test('READ-ONLY : jamais de ON/OFF produit', () => {
+    for (const f of ['raw', 'sms_dbg', undefined] as const) {
+      const cmd = buildReadCommand(f, 'a', 'b').toLowerCase();
+      expect(cmd).toContain('privatemode ?');
+      expect(cmd).not.toContain(' on');
+      expect(cmd).not.toContain(' off');
+    }
+  });
+});
+
 
 describe('sécurité — pas d\'écriture d\'état en Phase 1', () => {
   test('le module n\'exporte aucune API ON/OFF', () => {
