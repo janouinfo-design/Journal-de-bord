@@ -83,3 +83,52 @@ describe('sécurité — pas d\'écriture d\'état en Phase 1', () => {
     }
   });
 });
+
+describe('garde-fous feature flag BLE DEV (logique pure, déterministe)', () => {
+  const ff = require('@/config/featureFlags');
+
+  test('computeBleDevEnabled : seule la valeur exacte "1" active', () => {
+    expect(ff.computeBleDevEnabled('1')).toBe(true);
+    expect(ff.computeBleDevEnabled('0')).toBe(false);   // explicitement verrouillé
+    expect(ff.computeBleDevEnabled(undefined)).toBe(false);
+    expect(ff.computeBleDevEnabled(null)).toBe(false);
+    expect(ff.computeBleDevEnabled('true')).toBe(false);
+    expect(ff.computeBleDevEnabled(' 1 ')).toBe(false); // pas de trim : strict
+  });
+
+  test('parseAllowedTrackers : CSV -> liste normalisée, vide -> []', () => {
+    expect(ff.parseAllowedTrackers('781479')).toEqual(['781479']);
+    expect(ff.parseAllowedTrackers('781479, 123456 ')).toEqual(['781479', '123456']);
+    expect(ff.parseAllowedTrackers('')).toEqual([]);
+    expect(ff.parseAllowedTrackers(undefined)).toEqual([]);
+  });
+
+  test('isTrackerAllowed : allowlist vide -> fail-closed', () => {
+    expect(ff.isTrackerAllowed('781479', [])).toBe(false);
+  });
+
+  test('isTrackerAllowed : exact match, variantes refusées (pas de sous-chaîne)', () => {
+    const allow = ['781479'];
+    expect(ff.isTrackerAllowed('781479', allow)).toBe(true);
+    expect(ff.isTrackerAllowed('17814790', allow)).toBe(false);
+    expect(ff.isTrackerAllowed('781479999', allow)).toBe(false);
+    expect(ff.isTrackerAllowed(' 781479 ', allow)).toBe(true); // trim de l'entrée
+    expect(ff.isTrackerAllowed(null, allow)).toBe(false);
+  });
+
+  test('extractCandidateTrackerIds : découpage déterministe par séparateurs', () => {
+    expect(ff.extractCandidateTrackerIds('FMC-781479-x')).toEqual(['FMC', '781479', 'x']);
+    expect(ff.extractCandidateTrackerIds('17814790')).toEqual(['17814790']);
+    expect(ff.extractCandidateTrackerIds(null)).toEqual([]);
+  });
+
+  test('isBleDeviceAllowed : "FMC-781479-x" OK, "17814790"/"FMC130" refusés', () => {
+    const allow = ['781479'];
+    expect(ff.isBleDeviceAllowed({ name: 'FMC-781479-x' }, allow)).toBe(true);
+    expect(ff.isBleDeviceAllowed({ name: '17814790' }, allow)).toBe(false);
+    expect(ff.isBleDeviceAllowed({ name: 'FMC130' }, allow)).toBe(false);
+    expect(ff.isBleDeviceAllowed({ id: '781479' }, allow)).toBe(true);
+    expect(ff.isBleDeviceAllowed({ name: null, localName: null, id: null }, allow)).toBe(false);
+    expect(ff.isBleDeviceAllowed({ name: '781479' }, [])).toBe(false); // fail-closed
+  });
+});

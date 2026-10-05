@@ -44,6 +44,19 @@
       "env": {
         "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch"
       }
+    },
+    "pilot-dev-ble": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "pilot-dev-ble",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://journal.logitrak.ch",
+        "EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV": "1",
+        "EXPO_PUBLIC_BLE_DEV_ALLOWED_TRACKERS": "781479"
+      }
     }
   },
   "submit": {

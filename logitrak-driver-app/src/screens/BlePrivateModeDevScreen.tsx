@@ -8,6 +8,7 @@ import {
   PrivateModeBleReader, BlePrivateModeState, BleReadResult,
 } from '@/ble/privateModeBle';
 import { bleScanner } from '@/ble/scanner';
+import { isBleDeviceAllowedForDev, BLE_DEV_ALLOWED_TRACKERS } from '@/config/featureFlags';
 
 /**
  * ÉCRAN DEV — PHASE 1 BLE READ-ONLY (FMC130 781479).
@@ -36,7 +37,7 @@ const STATE_COLOR: Record<BlePrivateModeState, string> = {
 };
 
 export default function BlePrivateModeDevScreen() {
-  const [nameFilter, setNameFilter] = useState('781479');
+  const [nameFilter, setNameFilter] = useState(BLE_DEV_ALLOWED_TRACKERS[0] ?? '');
   const [deviceKeyword, setDeviceKeyword] = useState('');
   const [smsLogin, setSmsLogin] = useState('');
   const [smsPassword, setSmsPassword] = useState('');
@@ -83,6 +84,19 @@ export default function BlePrivateModeDevScreen() {
         setState('ERROR');
         setError('Véhicule introuvable (vérifiez le filtre de nom et la proximité).');
         appendLog('Aucun device trouvé.');
+        return;
+      }
+      // GARDE-FOU (pilote) : on contrôle l'IDENTIFIANT RÉELLEMENT DÉTECTÉ (pas le
+      // texte saisi). Exact match sur l'allowlist (fail-closed) -> sinon PAS de GATT.
+      appendLog(`Nom BLE détecté : « ${dev.name || dev.localName || dev.id} » (à confirmer terrain).`);
+      if (!isBleDeviceAllowedForDev({ name: dev.name, localName: dev.localName, id: dev.id })) {
+        setState('ERROR');
+        setError(
+          `Périphérique détecté non autorisé pour ce test DEV. Autorisés : ${
+            BLE_DEV_ALLOWED_TRACKERS.join(', ') || '(aucun)'
+          }.`,
+        );
+        appendLog('Refus de connexion : device détecté hors allowlist.');
         return;
       }
       appendLog(`Device trouvé : ${dev.name || dev.localName || dev.id}. Connexion GATT…`);
