@@ -14,6 +14,8 @@ import { SettingsScreen } from '@/screens/SettingsScreen';
 import { TripDetailScreen } from '@/screens/TripDetailScreen';
 import { ChangePasswordScreen } from '@/screens/ChangePasswordScreen';
 import { VehiclePickerScreen } from '@/screens/VehiclePickerScreen';
+import BlePrivateModeDevScreen from '@/screens/BlePrivateModeDevScreen';
+import { PRIVATE_MODE_BLE_DEV } from '@/config/featureFlags';
 import { useAuthStore } from '@/store/authStore';
 import { colors } from '@/theme/colors';
 import type { Vehicle } from '@/api/ble';
@@ -25,6 +27,8 @@ export type RootStackParamList = {
   ChangePassword: undefined;
   Settings: undefined;
   VehiclePicker: { onPick?: (v: Vehicle) => void };
+  // DEV uniquement (Phase 1 BLE READ-ONLY) : route présente seulement si PRIVATE_MODE_BLE_DEV.
+  BlePrivateModeDev?: undefined;
 };
 
 export type TabParamList = {
@@ -167,6 +171,13 @@ export function RootNavigator() {
                 component={VehiclePickerScreen}
                 options={{ title: 'Choisir un véhicule' }}
               />
+              {PRIVATE_MODE_BLE_DEV ? (
+                <Stack.Screen
+                  name="BlePrivateModeDev"
+                  component={BlePrivateModeDevScreen}
+                  options={{ title: 'BLE Private Mode (DEV)' }}
+                />
+              ) : null}
             </>
           )
         ) : (
