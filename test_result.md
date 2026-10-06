@@ -2008,6 +2008,30 @@ agent_communication:
       
       FINAL VERDICT: ✅ PASS — READY_FOR_LOT_2
 
+  - agent: "testing"
+    message: |
+      BLE DEV SMOKE TEST COMPLETE — ✅ PASS / NO REGRESSION (2026-10-06)
+      
+      CONTEXT:
+      React Native/Expo mobile app (LOGITRAK Driver) served at http://localhost:3000 (web version).
+      OBSERVATION-ONLY smoke test for NON-REGRESSION after enriching BLE DEV diagnostic screen.
+      NO system modifications per strict instructions (NO supervisor, NO service restarts, NO installations).
+      
+      DELIVERABLE COMPLETE:
+      ✅ Load status: OK (HTTP 200, no fatal errors, no white screen)
+      ✅ Login screen: ALL elements present (email field "chauffeur@logitrak.ch", password field, "Se connecter" button)
+      ✅ Console errors: NONE (only expected native warnings - TaskManager/Notifications unavailable in web)
+      ✅ TESTING_AGENT_BLE_NATIVE = NOT_APPLICABLE confirmed
+      
+      BLE NATIVE TESTING LIMITATION:
+      BLE DEV technical screen (format sms_std 2 spaces / lineEndingSuffix / write mode selectors,
+      privatemode reading, GATT FMC130) requires native APK + physical device → NOT testable in web browser.
+      EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV flag not defined in web → BLE DEV screen not visible (fail-closed expected).
+      Coverage: 128 Jest tests for buildReadCommand already validate BLE logic.
+      
+      FINAL VERDICT: ✅ PASS — NO REGRESSION
+      App loads correctly, login screen functional, NO blocking issues.
+
 
   - task: "LOT 2 — Mobile App (React Native/Expo) — Driver↔Vehicle Persistent Assignment UI + END-Safety Rule"
     implemented: true
@@ -2031,3 +2055,14 @@ agent_communication:
       - working: true
         agent: "testing"
         comment: "ADMIN DOCUMENT FEDERATION VALIDATION COMPLETE — ✅ PASS / READY: YES. CONTEXT: Validated NEW ADMIN document federation endpoints (Proposition A) that expose driver-uploaded (mobile) vehicle documents to FLEET ADMIN module, grouped by vehicle, with 'added_by [driver]' note. Code committed. NO code modifications, NO deployment. PYTEST-based validation (no curl). Backend at /app/backend. NEW ENDPOINTS (backend/app/routes/documents.py, mounted under /api/livre): (1) GET /admin/vehicle-documents (lines 322-357, guard: require_roles('admin','manager') at line 326) → returns {count, vehicles:[{vehicle_id, vehicle_plate, vehicle_model, vehicle_label, documents:[{id, type, filename, status, created_at, created_by, added_by_label, source:'MOBILE_DRIVER', download_url}]}]}. Groups driver-uploaded docs (collection vehicle_documents) BY VEHICLE. Excludes archived. Optional filters: vehicle_id, status. NEVER exposes storage_path. (2) GET /admin/vehicle-documents/{doc_id}/download (lines 360-378, guard: require_roles('admin','manager') at line 362) → secure download, tenant-scoped, audited. EXACT COMMANDS RUN: (1) cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/test_admin_vehicle_documents.py -v → 5 PASSED in 2.26s ✓. (2) cd /app/backend && set -a && . ./.env && set +a && PYTHONPATH=/app/backend python -m pytest tests/test_driver_vehicle_documents.py tests/test_vehicle_assignment.py tests/test_fmc130_confirmation_fix.py tests/test_private_mode_stale_exposure.py -q → 66 PASSED in 9.29s ✓. PER-FILE COUNTS: test_admin_vehicle_documents.py: 5 PASSED ✓, test_driver_vehicle_documents.py: 12 PASSED ✓, test_vehicle_assignment.py: 15 PASSED ✓, test_fmc130_confirmation_fix.py: 36 PASSED ✓, test_private_mode_stale_exposure.py: 3 PASSED ✓. TOTAL: 71 PASSED (5 new + 66 non-regression). BEHAVIORS VERIFIED (WITH TEST NAMES): ✅ (1) Documents grouped by vehicle: test_admin_list_grouped_by_vehicle PASSED — returns {count:3, vehicles:[{vehicle_id:'vA', documents:[...]}, {vehicle_id:'vB', documents:[...]}]}, grouped correctly ✓. ✅ (2) added_by_label uses driver name + source MOBILE_DRIVER + no storage_path exposed: test_admin_added_by_label_uses_driver_name PASSED — verified added_by_label='Orhan'/'Ivan' (driver names), source='MOBILE_DRIVER', download_url present, storage_path NOT in response ✓. ✅ (3) Filter by vehicle_id works: test_admin_filter_by_vehicle PASSED — vehicle_id='vB' returns only vB documents ✓. ✅ (4) Filter by status works: test_admin_filter_by_status PASSED — status='valide' returns only doc2 ✓. ✅ (5) Archived documents excluded: test_admin_archived_excluded PASSED — doc4 (archived:true) NOT in results ✓. STATIC CODE REVIEW (backend/app/routes/documents.py): ✅ (A) Both admin endpoints guarded by require_roles('admin','manager'): Line 326 (admin_list_vehicle_documents) ✓, Line 362 (admin_download_vehicle_document) ✓. ✅ (B) _admin_doc_dto (lines 302-319) NEVER returns storage_path: Returns only {id, vehicle_id, type, filename, content_type, size_bytes, status, document_date, expiry_date, created_at, created_by, added_by_label, source, download_url}. NO storage_path field ✓. ✅ (C) No changes to private-mode engine or vehicle_assignment: This task ONLY adds document federation endpoints. NO imports/modifications to private_mode_engine.py or vehicle_assignment.py ✓. FINAL VERDICT: ✅ PASS — READY: YES. NO ISSUES FOUND. All behaviors verified. Guards confirmed. DTO secure (no storage_path). Non-regression clean."
+  - task: "BLE DEV Diagnostic Screen — Smoke Test (Web NON-REGRESSION)"
+    implemented: true
+    working: true
+    file: "logitrak-driver-app/ (React Native/Expo web build)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "BLE DEV SMOKE TEST COMPLETE — ✅ PASS / NO REGRESSION. CONTEXT: React Native/Expo mobile app (LOGITRAK Driver) served at http://localhost:3000 (web version). OBSERVATION-ONLY smoke test for NON-REGRESSION after enriching BLE DEV diagnostic screen (format/termination/write selectors + raw frame logging). NO system modifications (NO supervisor, NO service restarts, NO installations). Web server ALREADY running (HTTP 200 confirmed). OBJECTIVE: Verify app loads without fatal JS error + login screen present. LOAD STATUS: ✅ OK — HTTP 200, page loaded successfully, NO white screen, NO fatal JS errors, content rendered (185 chars body text) ✓. LOGIN SCREEN ELEMENTS: ✅ ALL PRESENT — (1) Email field with placeholder 'chauffeur@logitrak.ch' ✓, (2) Password field (MOT DE PASSE) ✓, (3) 'Se connecter' button ✓, (4) 'Rester connecté' checkbox ✓, (5) LOGITRAK branding with 'Console Chauffeur' subtitle ✓. Screenshot captured: .screenshots/01_initial_load.png. CONSOLE LOGS: ✅ NO NEW RED ERRORS — Only WARNINGS (not errors) about native features unavailable in web (EXPECTED/NORMAL as documented): (1) TaskManager.isTaskRegisteredAsync not available on web (background tasks) ✓, (2) Notifications.setNotificationCategoryAsync not available on web (notification categories) ✓. These are the exact warnings mentioned in review request as NORMAL. NO fatal errors, NO unexpected errors. BLE NATIVE TESTING: ✅ TESTING_AGENT_BLE_NATIVE = NOT_APPLICABLE — BLE DEV technical screen (format sms_std 2 spaces / lineEndingSuffix / write mode selectors, privatemode reading, GATT FMC130) requires native APK + physical device → NOT testable in web browser (fail-closed expected). EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV flag not defined in web → BLE DEV screen not visible (expected behavior). Settings screen behind login (no credentials for deeper navigation). Coverage: 128 Jest tests for buildReadCommand (format sms_std, lineEndingSuffix, visualizePayload) already validate BLE logic. DELIVERABLE COMPLETE: ✅ Load status: OK (HTTP 200, no fatal errors), ✅ Login present: YES (all elements verified), ✅ New console errors: NONE (only expected native warnings), ✅ TESTING_AGENT_BLE_NATIVE = NOT_APPLICABLE confirmed. FINAL VERDICT: ✅ PASS — NO REGRESSION. App loads correctly, login screen functional, NO blocking issues. BLE native features correctly documented as NOT_APPLICABLE for web testing."

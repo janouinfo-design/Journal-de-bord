@@ -3,29 +3,22 @@ import { requestBlePermissions } from '@/utils/permissions';
 import { logger } from '@/utils/logger';
 
 /**
- * PHASE 1 — BLE READ-ONLY (FMC130 781479).
+ * PHASE 1 — BLE READ-ONLY (FMC130 781479, device BLE « 781479_LE »).
  *
  * Objectif STRICT : prouver la connexion GATT réelle au FMC130 et LIRE l'état
- * Private/Business via `privatemode ?` (Nordic UART Service). AUCUNE écriture
- * `privatemode ON/OFF` ici.
+ * Private/Business (Nordic UART Service). AUCUNE écriture `privatemode ON/OFF`.
  *
- * Source Teltonika (firmware 04.02.03.Rev.01) :
- *   Service : 6e400001-b5a3-f393-e0a9-e50e24dcca9e
- *   Write   : 6e400002-b5a3-f393-e0a9-e50e24dcca9e  (vers le device)
- *   Notify  : 6e400003-b5a3-f393-e0a9-e50e24dcca9e  (réponses du device)
- *   Commandes ASCII terminées par '\r'.
- *   Workflow : connexion -> activer notify -> :sec_login:<keyword> ->
- *              @sms_dbg:<login> <password> privatemode ? -> lire "Privatemode ON/OFF"
- *              -> :cfg_disconnect
+ * ⚠️ Cible terrain : FMC130 firmware **04.00.00_13** (BL:1.10, BT:4).
+ * Les formats `:sec_login:` / `@sms_dbg:` NE sont PAS confirmés par le wiki public
+ * Teltonika pour ce firmware. Cet écran est un OUTIL DE DIAGNOSTIC permettant de
+ * tester plusieurs variantes (mode d'écriture, terminaison, format de commande) et
+ * d'OBSERVER toutes les trames NOTIFY brutes, afin d'identifier la syntaxe réelle.
  *
- * Règles de sécurité (impératives) :
- * - AUCUN secret (keyword/login/password) n'est jamais écrit dans les logs.
- * - AUCUN secret n'est persisté ici (les credentials viennent de l'appelant, en mémoire).
- * - AUCUN secret hardcodé.
- * - La preuve d'état = réponse réelle du device (fail-closed : sinon UNKNOWN/ERROR).
+ * Nordic UART :
+ *   Service : 6e400001-... | Write (RX) : 6e400002-... | Notify (TX) : 6e400003-...
  *
- * NOTE mono-connexion : le FMC130 n'accepte qu'UNE connexion BLE à la fois. L'appelant
- * DOIT mettre en pause le scan beacon (bleScanner.stop()) avant d'utiliser ce module.
+ * Règles de sécurité : aucun secret loggé/persisté/hardcodé ; état = preuve réelle
+ * du device (fail-closed). Mono-connexion FMC130 : stopper le scan beacon avant usage.
  */
 
 // ---- UUIDs Nordic UART Service (Teltonika) ----
@@ -43,33 +36,55 @@ export type BlePrivateModeState =
 
 export interface BleReadResult {
   state: BlePrivateModeState;
-  /** Ligne brute renvoyée par le device (SANS secret ; sûre à afficher en DEV). */
+  /** Ligne reconnue "Privatemode ON/OFF" si trouvée (sûre à afficher). */
   rawResponse?: string | null;
+  /** TOUTES les trames NOTIFY brutes reçues (sans filtrage) — diagnostic. */
+  rawNotifications?: string | null;
   error?: string | null;
-  /** Commande réellement envoyée (secrets masqués) — pour le journal technique. */
+  /** Payload exact envoyé (secrets masqués, terminaison visible) — journal. */
   sentCommand?: string | null;
   /** Authentification keyword envoyée ? (keyword renseigné) */
   authSent?: boolean;
+  /** Mode d'écriture réellement utilisé. */
+  writeModeUsed?: BleWriteMode | null;
 }
 
 /** Format de commande Phase 1 (sélecteur UI). READ-ONLY : uniquement « privatemode ? ». */
-export type BleCommandFormat = 'sms_dbg' | 'raw';
+export type BleCommandFormat = 'sms_dbg' | 'sms_std' | 'raw';
+
+/** Terminaison de ligne (sélecteur UI). */
+export type BleLineEnding = 'cr' | 'crlf' | 'lf' | 'none';
+
+/** Mode d'écriture GATT (sélecteur UI). */
+export type BleWriteMode = 'withResponse' | 'withoutResponse';
+
+/** Capacités réelles de la caractéristique WRITE (lues après discovery). */
+export interface BleWriteCaps {
+  uuid: string;
+  isWritableWithResponse: boolean;
+  isWritableWithoutResponse: boolean;
+}
 
 export interface BleCredentials {
   /** :sec_login:<deviceKeyword> — OPTIONNEL : vide -> aucune authentification envoyée. */
   deviceKeyword?: string;
-  /** @sms_dbg:<smsLogin> <smsPassword> ... — OPTIONNELS. */
+  /** login/password SMS — OPTIONNELS. */
   smsLogin?: string;
   smsPassword?: string;
-  /** Format de la commande de lecture. Défaut : 'sms_dbg'. */
+  /** Format de la commande de lecture. Défaut : 'sms_std'. */
   format?: BleCommandFormat;
+  /** Terminaison. Défaut : 'cr'. */
+  lineEnding?: BleLineEnding;
+  /** Mode d'écriture. Défaut : auto (selon capacités). */
+  writeMode?: BleWriteMode;
 }
 
 /**
- * Construit la commande de LECTURE `privatemode ?` selon le format choisi (PURE/testable).
+ * Construit la commande de LECTURE `privatemode ?` selon le format (PURE/testable).
  * - 'raw'     -> "privatemode ?"
- * - 'sms_dbg' -> "@sms_dbg:[<login> <password> ]privatemode ?"
- *   login/password optionnels : vides -> "@sms_dbg:privatemode ?" (aucun double espace).
+ * - 'sms_std' -> format SMS Teltonika standard : "<login> <password> privatemode ?"
+ *               SANS login/password -> DEUX espaces en tête : "  privatemode ?".
+ * - 'sms_dbg' -> "@sms_dbg:[<login> <password> ]privatemode ?" (vide -> "@sms_dbg:privatemode ?").
  * READ-ONLY : jamais ON/OFF. Jamais de SMS réseau (envoi via BLE uniquement).
  */
 export function buildReadCommand(
@@ -77,11 +92,36 @@ export function buildReadCommand(
   smsLogin?: string,
   smsPassword?: string,
 ): string {
-  if (format === 'raw') return 'privatemode ?';
   const login = (smsLogin || '').trim();
   const password = (smsPassword || '').trim();
+  if (format === 'raw') return 'privatemode ?';
+  if (format === 'sms_std') {
+    // Format SMS/GPRS Teltonika : "<login> <password> <commande>".
+    // Sans identifiants -> DEUX espaces en tête (exigence Teltonika documentée).
+    return `${login} ${password} privatemode ?`;
+  }
+  // 'sms_dbg' (défaut historique)
   const auth = [login, password].filter(Boolean).join(' ');
   return auth ? `@sms_dbg:${auth} privatemode ?` : '@sms_dbg:privatemode ?';
+}
+
+/** Suffixe de terminaison à partir du sélecteur. */
+export function lineEndingSuffix(ending: BleLineEnding | undefined): string {
+  switch (ending) {
+    case 'crlf': return '\r\n';
+    case 'lf': return '\n';
+    case 'none': return '';
+    case 'cr':
+    default: return '\r';
+  }
+}
+
+/** Représentation LISIBLE du payload pour le journal (espaces/terminaison visibles). */
+export function visualizePayload(payload: string): string {
+  return payload
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/ /g, '·'); // espaces rendus visibles (ex: "··privatemode·?\\r")
 }
 
 /** Délais (ms) — bornés pour éviter tout spinner infini. */
@@ -166,6 +206,7 @@ export class PrivateModeBleReader {
   private notifySub: Subscription | null = null;
   private buffer = '';
   private connected = false;
+  private writeCaps: BleWriteCaps | null = null;
 
   /** Scanne et retourne les devices dont le nom correspond à `nameFilter` (ex: contient "781479"). */
   async findDevice(nameFilter: string, timeoutMs = CONNECT_TIMEOUT_MS): Promise<Device | null> {
@@ -207,7 +248,7 @@ export class PrivateModeBleReader {
     });
   }
 
-  /** Connexion GATT + découverte services + activation des notifications. */
+  /** Connexion GATT + découverte services + lecture des capacités WRITE + activation notify. */
   async connect(deviceId: string): Promise<void> {
     if (!this.manager) this.manager = new BleManager();
     logger.info('ble-pm', `connect -> device ${deviceId}`);
@@ -216,7 +257,23 @@ export class PrivateModeBleReader {
     await dev.discoverAllServicesAndCharacteristics();
     this.connected = true;
 
-    // Activer les notifications AVANT tout envoi de commande (exigé par le workflow).
+    // Lire les CAPACITÉS réelles de la caractéristique WRITE (diagnostic + choix du mode).
+    this.writeCaps = null;
+    try {
+      const chars = await dev.characteristicsForService(NUS_SERVICE_UUID);
+      const wc = chars.find((c) => c.uuid.toLowerCase() === NUS_WRITE_UUID.toLowerCase());
+      if (wc) {
+        this.writeCaps = {
+          uuid: wc.uuid,
+          isWritableWithResponse: !!wc.isWritableWithResponse,
+          isWritableWithoutResponse: !!wc.isWritableWithoutResponse,
+        };
+      }
+    } catch (e: any) {
+      logger.warn('ble-pm', 'read write caps failed', e?.message);
+    }
+
+    // Activer les notifications AVANT tout envoi de commande. On conserve TOUT le buffer brut.
     this.buffer = '';
     this.notifySub = dev.monitorCharacteristicForService(
       NUS_SERVICE_UUID,
@@ -230,21 +287,48 @@ export class PrivateModeBleReader {
         if (!b64) return;
         const chunk = base64ToAscii(b64);
         this.buffer += chunk;
-        logger.debug('ble-pm', 'notify chunk', redact(chunk.replace(/\r/g, '\\r')));
+        logger.debug('ble-pm', 'notify chunk', visualizePayload(chunk));
       },
     );
   }
 
-  /** Écrit une commande ASCII (terminée par \r) sur la caractéristique Write. */
-  private async writeCommand(ascii: string): Promise<void> {
+  /** Capacités WRITE lues au discovery (ou null). */
+  getWriteCaps(): BleWriteCaps | null {
+    return this.writeCaps;
+  }
+
+  /** Résout le mode d'écriture effectif selon le choix + les capacités réelles. */
+  private resolveWriteMode(requested?: BleWriteMode): BleWriteMode {
+    const caps = this.writeCaps;
+    if (!caps) return requested ?? 'withoutResponse';
+    if (requested === 'withResponse' && caps.isWritableWithResponse) return 'withResponse';
+    if (requested === 'withoutResponse' && caps.isWritableWithoutResponse) return 'withoutResponse';
+    // Auto / mode demandé non supporté -> prendre ce qui est réellement disponible.
+    if (caps.isWritableWithoutResponse) return 'withoutResponse';
+    if (caps.isWritableWithResponse) return 'withResponse';
+    return requested ?? 'withoutResponse';
+  }
+
+  /**
+   * Écrit une commande ASCII sur la caractéristique Write, avec terminaison et mode choisis.
+   * Retourne le mode réellement utilisé (pour le journal).
+   */
+  private async writeCommand(
+    ascii: string, ending: BleLineEnding | undefined, mode?: BleWriteMode,
+  ): Promise<BleWriteMode> {
     if (!this.device) throw new Error('Non connecté');
-    const payload = asciiToBase64(ascii.endsWith('\r') ? ascii : `${ascii}\r`);
-    logger.debug('ble-pm', 'write', redact(ascii));
-    await this.device.writeCharacteristicWithResponseForService(
-      NUS_SERVICE_UUID,
-      NUS_WRITE_UUID,
-      payload,
-    );
+    const full = `${ascii}${lineEndingSuffix(ending)}`;
+    const payload = asciiToBase64(full);
+    const effMode = this.resolveWriteMode(mode);
+    logger.debug('ble-pm', `write [${effMode}]`, visualizePayload(redact(full)));
+    if (effMode === 'withoutResponse') {
+      await this.device.writeCharacteristicWithoutResponseForService(
+        NUS_SERVICE_UUID, NUS_WRITE_UUID, payload);
+    } else {
+      await this.device.writeCharacteristicWithResponseForService(
+        NUS_SERVICE_UUID, NUS_WRITE_UUID, payload);
+    }
+    return effMode;
   }
 
   /** Attend qu'une réponse reconnaissable (ON/OFF) apparaisse dans le buffer, borné par timeout. */
@@ -270,41 +354,49 @@ export class PrivateModeBleReader {
   }
 
   /**
-   * Séquence READ-ONLY :
-   *   [:sec_login:<keyword> si keyword fourni]  ->  commande de lecture (format choisi)  ->  ON/OFF
+   * Séquence READ-ONLY (diagnostic) :
+   *   [:sec_login:<keyword> si keyword fourni]  ->  commande de lecture (format/terminaison/mode)
    * Keyword/login/password OPTIONNELS. Jamais d'écriture ON/OFF. Jamais de SMS réseau.
-   * Retourne l'état confirmé + la commande réellement envoyée (secrets masqués pour le journal).
+   * Retourne l'état + le payload exact (visualisé) + TOUTES les trames NOTIFY brutes.
    */
   async readPrivatemode(creds: BleCredentials): Promise<BleReadResult> {
     const keyword = (creds.deviceKeyword || '').trim();
     const authSent = keyword.length > 0;
     const cmd = buildReadCommand(creds.format, creds.smsLogin, creds.smsPassword);
+    const ending = creds.lineEnding ?? 'cr';
+    const sentVisual = visualizePayload(redact(`${cmd}${lineEndingSuffix(ending)}`));
+    let writeModeUsed: BleWriteMode | null = null;
     try {
       // 1) Authentification device UNIQUEMENT si un keyword est renseigné.
       if (authSent) {
-        await this.writeCommand(`:sec_login:${keyword}`);
+        await this.writeCommand(`:sec_login:${keyword}`, ending, creds.writeMode);
         await sleep(INTER_CMD_DELAY_MS);
       }
 
       // 2) Interrogation de l'état réel (READ-ONLY).
-      await this.writeCommand(cmd);
+      writeModeUsed = await this.writeCommand(cmd, ending, creds.writeMode);
 
-      // 3) Attendre une réponse reconnaissable.
+      // 3) Attendre une réponse reconnaissable (tout en conservant le buffer complet).
       const line = await this.waitForPrivatemode();
+      const allRaw = this.buffer ? visualizePayload(this.buffer) : null;
       if (!line) {
-        return { state: 'UNKNOWN', rawResponse: null, error: 'Aucune réponse du véhicule (timeout).',
-                 sentCommand: redact(cmd), authSent };
+        return { state: 'UNKNOWN', rawResponse: null, rawNotifications: allRaw,
+                 error: 'Aucune ligne « Privatemode » reconnue (voir trames brutes).',
+                 sentCommand: sentVisual, authSent, writeModeUsed };
       }
       const parsed = parsePrivatemodeResponse(line);
       if (!parsed) {
-        return { state: 'UNKNOWN', rawResponse: line, error: 'Réponse non reconnue.',
-                 sentCommand: redact(cmd), authSent };
+        return { state: 'UNKNOWN', rawResponse: line, rawNotifications: allRaw,
+                 error: 'Réponse non reconnue.', sentCommand: sentVisual, authSent, writeModeUsed };
       }
-      return { state: parsed, rawResponse: line, error: null, sentCommand: redact(cmd), authSent };
+      return { state: parsed, rawResponse: line, rawNotifications: allRaw, error: null,
+               sentCommand: sentVisual, authSent, writeModeUsed };
     } catch (e: any) {
       logger.warn('ble-pm', 'readPrivatemode failed', e?.message);
-      return { state: 'ERROR', rawResponse: null, error: e?.message || 'Échec de lecture BLE.',
-               sentCommand: redact(cmd), authSent };
+      const allRaw = this.buffer ? visualizePayload(this.buffer) : null;
+      return { state: 'ERROR', rawResponse: null, rawNotifications: allRaw,
+               error: e?.message || 'Échec de lecture BLE.',
+               sentCommand: sentVisual, authSent, writeModeUsed };
     }
   }
 
@@ -312,7 +404,7 @@ export class PrivateModeBleReader {
   async disconnect(): Promise<void> {
     try {
       if (this.device && this.connected) {
-        try { await this.writeCommand(':cfg_disconnect'); } catch { /* best-effort */ }
+        try { await this.writeCommand(':cfg_disconnect', 'cr'); } catch { /* best-effort */ }
       }
     } finally {
       try { this.notifySub?.remove(); } catch { /* ignore */ }

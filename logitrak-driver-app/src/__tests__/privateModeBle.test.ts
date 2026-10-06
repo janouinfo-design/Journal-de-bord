@@ -13,6 +13,8 @@ import {
   asciiToBase64,
   base64ToAscii,
   buildReadCommand,
+  lineEndingSuffix,
+  visualizePayload,
   NUS_SERVICE_UUID,
   NUS_WRITE_UUID,
   NUS_NOTIFY_UUID,
@@ -99,12 +101,44 @@ describe('buildReadCommand — format de commande (READ-ONLY, jamais ON/OFF)', (
   });
 
   test('READ-ONLY : jamais de ON/OFF produit', () => {
-    for (const f of ['raw', 'sms_dbg', undefined] as const) {
+    for (const f of ['raw', 'sms_dbg', 'sms_std', undefined] as const) {
       const cmd = buildReadCommand(f, 'a', 'b').toLowerCase();
       expect(cmd).toContain('privatemode ?');
       expect(cmd).not.toContain(' on');
       expect(cmd).not.toContain(' off');
     }
+  });
+
+  test('format "sms_std" : "<login> <password> privatemode ?"', () => {
+    expect(buildReadCommand('sms_std', 'log', 'pwd')).toBe('log pwd privatemode ?');
+  });
+
+  test('format "sms_std" SANS credentials : DEUX espaces en tête (exigence Teltonika)', () => {
+    expect(buildReadCommand('sms_std')).toBe('  privatemode ?');
+    expect(buildReadCommand('sms_std', '', '')).toBe('  privatemode ?');
+    // les 2 espaces doivent être EXACTEMENT là
+    expect(buildReadCommand('sms_std').startsWith('  ')).toBe(true);
+    expect(buildReadCommand('sms_std').length).toBe('  privatemode ?'.length);
+  });
+
+  test('format "sms_std" avec login seul', () => {
+    expect(buildReadCommand('sms_std', 'log', '')).toBe('log  privatemode ?');
+  });
+});
+
+describe('lineEndingSuffix / visualizePayload', () => {
+  test('terminaisons', () => {
+    expect(lineEndingSuffix('cr')).toBe('\r');
+    expect(lineEndingSuffix('crlf')).toBe('\r\n');
+    expect(lineEndingSuffix('lf')).toBe('\n');
+    expect(lineEndingSuffix('none')).toBe('');
+    expect(lineEndingSuffix(undefined)).toBe('\r'); // défaut
+  });
+
+  test('visualisation : espaces et terminaisons visibles', () => {
+    expect(visualizePayload('  privatemode ?\r')).toBe('··privatemode·?\\r');
+    expect(visualizePayload('privatemode ?\r\n')).toBe('privatemode·?\\r\\n');
+    expect(visualizePayload('x\n')).toBe('x\\n');
   });
 });
 

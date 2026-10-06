@@ -5,19 +5,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import {
-  PrivateModeBleReader, BlePrivateModeState, BleReadResult, BleCommandFormat,
+  PrivateModeBleReader, BlePrivateModeState, BleReadResult,
+  BleCommandFormat, BleLineEnding, BleWriteMode,
 } from '@/ble/privateModeBle';
 import { bleScanner } from '@/ble/scanner';
 import { isBleDeviceAllowedForDev, BLE_DEV_ALLOWED_TRACKERS } from '@/config/featureFlags';
 
 /**
- * ÉCRAN DEV — PHASE 1 BLE READ-ONLY (FMC130 781479).
- *
- * But : prouver la connexion GATT réelle + lecture `privatemode ?`.
- * - Credentials saisis EN MÉMOIRE uniquement (jamais persistés, jamais loggés).
- * - AUCUNE écriture `privatemode ON/OFF`.
- * - Met en PAUSE le scan beacon pendant la connexion (mono-connexion FMC130).
- * - Accès réservé au DEV (routé derrière le flag PRIVATE_MODE_BLE_DEV).
+ * ÉCRAN DEV — PHASE 1 BLE READ-ONLY (FMC130 781479, device « 781479_LE »).
+ * Outil de DIAGNOSTIC : teste format / terminaison / mode d'écriture et journalise
+ * TOUTES les trames NOTIFY brutes. AUCUNE écriture ON/OFF. Zéro backend. Zéro SMS réseau.
+ * Cible firmware : 04.00.00_13.
  */
 
 const STATE_LABEL: Record<BlePrivateModeState, string> = {
@@ -36,12 +34,32 @@ const STATE_COLOR: Record<BlePrivateModeState, string> = {
   ERROR: colors.danger,
 };
 
+const FORMAT_OPTIONS: { value: BleCommandFormat; label: string }[] = [
+  { value: 'sms_std', label: 'SMS std (2 esp.)' },
+  { value: 'raw', label: 'brut' },
+  { value: 'sms_dbg', label: '@sms_dbg' },
+];
+
+const ENDING_OPTIONS: { value: BleLineEnding; label: string }[] = [
+  { value: 'cr', label: '\\r' },
+  { value: 'crlf', label: '\\r\\n' },
+  { value: 'lf', label: '\\n' },
+  { value: 'none', label: 'aucune' },
+];
+
+const WRITE_OPTIONS: { value: BleWriteMode; label: string }[] = [
+  { value: 'withoutResponse', label: 'Sans réponse' },
+  { value: 'withResponse', label: 'Avec réponse' },
+];
+
 export default function BlePrivateModeDevScreen() {
   const [nameFilter, setNameFilter] = useState(BLE_DEV_ALLOWED_TRACKERS[0] ?? '');
   const [deviceKeyword, setDeviceKeyword] = useState('');
   const [smsLogin, setSmsLogin] = useState('');
   const [smsPassword, setSmsPassword] = useState('');
-  const [format, setFormat] = useState<BleCommandFormat>('sms_dbg');
+  const [format, setFormat] = useState<BleCommandFormat>('sms_std');
+  const [lineEnding, setLineEnding] = useState<BleLineEnding>('cr');
+  const [writeMode, setWriteMode] = useState<BleWriteMode>('withoutResponse');
   const [state, setState] = useState<BlePrivateModeState>('UNKNOWN');
   const [busy, setBusy] = useState(false);
   const [raw, setRaw] = useState<string | null>(null);
@@ -50,27 +68,22 @@ export default function BlePrivateModeDevScreen() {
   const readerRef = useRef<PrivateModeBleReader | null>(null);
 
   const appendLog = useCallback((line: string) => {
-    setLog((prev) => [...prev.slice(-30), `${new Date().toLocaleTimeString('fr-CH')} ${line}`]);
+    setLog((prev) => [...prev.slice(-40), `${new Date().toLocaleTimeString('fr-CH')} ${line}`]);
   }, []);
 
   useEffect(() => {
-    return () => {
-      // Démontage : on libère la connexion et le manager, et on ne laisse rien ouvert.
-      readerRef.current?.destroy().catch(() => {});
-    };
+    return () => { readerRef.current?.destroy().catch(() => {}); };
   }, []);
 
   const run = useCallback(async () => {
     if (busy) return;
-    // Credentials TOUS optionnels (keyword/login/password). Aucune exigence bloquante.
+    // Credentials TOUS optionnels. Aucune exigence bloquante.
     setBusy(true);
     setError(null);
     setRaw(null);
     setState('CONNECTING');
-    appendLog(`Format sélectionné : ${format === 'raw' ? 'privatemode ? (brut)' : '@sms_dbg:[login password] privatemode ?'}`);
+    appendLog(`Format : ${format} | Terminaison : ${lineEnding} | Write : ${writeMode}`);
     appendLog('Pause du scan beacon (mono-connexion FMC130)…');
-
-    // Mono-connexion : le FMC130 n'accepte qu'UNE connexion BLE. On stoppe le scan.
     try { await bleScanner.stop(); } catch { /* ignore */ }
 
     const reader = new PrivateModeBleReader();
@@ -85,28 +98,37 @@ export default function BlePrivateModeDevScreen() {
         appendLog('Aucun device trouvé.');
         return;
       }
-      // Journal technique : nom BLE réellement détecté + RSSI (donnée clé terrain).
       const detectedName = dev.name || dev.localName || dev.id;
-      appendLog(`Nom BLE détecté : « ${detectedName} » | RSSI : ${dev.rssi ?? 'n/a'} dBm (à confirmer terrain).`);
-      // GARDE-FOU (pilote) : contrôle de l'IDENTIFIANT RÉELLEMENT DÉTECTÉ (pas le texte saisi).
+      appendLog(`Nom BLE détecté : « ${detectedName} » | RSSI : ${dev.rssi ?? 'n/a'} dBm.`);
       if (!isBleDeviceAllowedForDev({ name: dev.name, localName: dev.localName, id: dev.id })) {
         setState('ERROR');
         setError(
-          `Périphérique détecté non autorisé pour ce test DEV. Autorisés : ${
+          `Périphérique détecté non autorisé. Autorisés : ${
             BLE_DEV_ALLOWED_TRACKERS.join(', ') || '(aucun)'
           }.`,
         );
         appendLog('Refus de connexion : device détecté hors allowlist.');
         return;
       }
-      appendLog(`Device autorisé. Connexion GATT…`);
+      appendLog('Device autorisé. Connexion GATT…');
       await reader.connect(dev.id);
+
+      // Journal : capacités réelles de la caractéristique WRITE.
+      const caps = reader.getWriteCaps();
+      if (caps) {
+        appendLog(`WRITE char ${caps.uuid} | WithResponse=${caps.isWritableWithResponse} | WithoutResponse=${caps.isWritableWithoutResponse}`);
+      } else {
+        appendLog('Capacités WRITE : indéterminées (char introuvable au discovery).');
+      }
       appendLog('Connecté. Notifications activées.');
 
-      result = await reader.readPrivatemode({ deviceKeyword, smsLogin, smsPassword, format });
-      appendLog(`Authentification keyword : ${result.authSent ? 'ENVOYÉE' : 'NON envoyée (keyword vide)'}.`);
-      appendLog(`Commande envoyée : « ${result.sentCommand ?? '(n/a)'} »`);
-      appendLog(`Réponse brute : ${result.rawResponse ? `« ${result.rawResponse} »` : '(aucune)'}`);
+      result = await reader.readPrivatemode({
+        deviceKeyword, smsLogin, smsPassword, format, lineEnding, writeMode,
+      });
+      appendLog(`Auth keyword : ${result.authSent ? 'ENVOYÉE' : 'NON envoyée (vide)'}.`);
+      appendLog(`Write mode utilisé : ${result.writeModeUsed ?? 'n/a'}.`);
+      appendLog(`Payload exact envoyé : « ${result.sentCommand ?? '(n/a)'} »`);
+      appendLog(`Trames NOTIFY brutes : ${result.rawNotifications ? `« ${result.rawNotifications} »` : '(aucune)'}`);
       setState(result.state);
       setRaw(result.rawResponse ?? null);
       if (result.error) setError(result.error);
@@ -116,17 +138,17 @@ export default function BlePrivateModeDevScreen() {
       setError(e?.message || 'Échec BLE.');
       appendLog(`Erreur GATT : ${e?.message || 'inconnue'}`);
     } finally {
-      try { await reader.disconnect(); appendLog('Déconnexion propre (:cfg_disconnect).'); } catch { /* ignore */ }
+      try { await reader.disconnect(); appendLog('Déconnexion propre.'); } catch { /* ignore */ }
       setBusy(false);
     }
-  }, [busy, deviceKeyword, smsLogin, smsPassword, nameFilter, format, appendLog]);
+  }, [busy, deviceKeyword, smsLogin, smsPassword, nameFilter, format, lineEnding, writeMode, appendLog]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} testID="ble-dev-scroll">
-        <Text style={styles.title}>BLE Private Mode — DEV (lecture seule)</Text>
+        <Text style={styles.title}>BLE Private Mode — DEV (diagnostic, lecture seule)</Text>
         <Text style={styles.sub}>
-          Phase 1 : connexion GATT au FMC130 et lecture de l'état via « privatemode ? ».
+          Phase 1 : connexion GATT au FMC130 (fw 04.00.00_13) et lecture « privatemode ? ».
           Aucune écriture ON/OFF. Credentials en mémoire uniquement.
         </Text>
 
@@ -146,30 +168,19 @@ export default function BlePrivateModeDevScreen() {
         />
 
         <Text style={styles.field}>Format de commande</Text>
-        <View style={styles.formatRow}>
-          <TouchableOpacity
-            style={[styles.formatBtn, format === 'sms_dbg' && styles.formatBtnActive]}
-            onPress={() => setFormat('sms_dbg')}
-            testID="ble-dev-format-smsdbg"
-            accessibilityRole="button"
-            accessibilityState={{ selected: format === 'sms_dbg' }}
-          >
-            <Text style={[styles.formatText, format === 'sms_dbg' && styles.formatTextActive]}>
-              @sms_dbg
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.formatBtn, format === 'raw' && styles.formatBtnActive]}
-            onPress={() => setFormat('raw')}
-            testID="ble-dev-format-raw"
-            accessibilityRole="button"
-            accessibilityState={{ selected: format === 'raw' }}
-          >
-            <Text style={[styles.formatText, format === 'raw' && styles.formatTextActive]}>
-              privatemode ? (brut)
-            </Text>
-          </TouchableOpacity>
-        </View>
+        <Selector
+          options={FORMAT_OPTIONS} value={format} onChange={setFormat} testPrefix="ble-dev-format"
+        />
+
+        <Text style={styles.field}>Terminaison</Text>
+        <Selector
+          options={ENDING_OPTIONS} value={lineEnding} onChange={setLineEnding} testPrefix="ble-dev-ending"
+        />
+
+        <Text style={styles.field}>Mode d'écriture (prioriser « Sans réponse »)</Text>
+        <Selector
+          options={WRITE_OPTIONS} value={writeMode} onChange={setWriteMode} testPrefix="ble-dev-write"
+        />
 
         <Text style={styles.field}>Device keyword (:sec_login) — optionnel</Text>
         <TextInput
@@ -181,18 +192,16 @@ export default function BlePrivateModeDevScreen() {
         <Text style={styles.field}>SMS login — optionnel</Text>
         <TextInput
           style={styles.input} value={smsLogin} onChangeText={setSmsLogin}
-          placeholder="Optionnel"
-          placeholderTextColor={colors.textMuted}
+          placeholder="Optionnel" placeholderTextColor={colors.textMuted}
           autoCapitalize="none" autoCorrect={false} testID="ble-dev-login"
-          editable={format === 'sms_dbg'}
+          editable={format !== 'raw'}
         />
         <Text style={styles.field}>SMS password — optionnel</Text>
         <TextInput
           style={styles.input} value={smsPassword} onChangeText={setSmsPassword}
-          placeholder="Optionnel"
-          placeholderTextColor={colors.textMuted}
+          placeholder="Optionnel" placeholderTextColor={colors.textMuted}
           autoCapitalize="none" autoCorrect={false} secureTextEntry testID="ble-dev-password"
-          editable={format === 'sms_dbg'}
+          editable={format !== 'raw'}
         />
 
         <TouchableOpacity
@@ -214,10 +223,38 @@ export default function BlePrivateModeDevScreen() {
   );
 }
 
+/** Petit sélecteur segmenté générique (diagnostic). */
+function Selector<T extends string>({ options, value, onChange, testPrefix }: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  testPrefix: string;
+}) {
+  return (
+    <View style={styles.selectorRow}>
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <TouchableOpacity
+            key={o.value}
+            style={[styles.selectorBtn, active && styles.selectorBtnActive]}
+            onPress={() => onChange(o.value)}
+            testID={`${testPrefix}-${o.value}`}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+          >
+            <Text style={[styles.selectorText, active && styles.selectorTextActive]}>{o.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { padding: spacing.md, paddingBottom: spacing.xxl },
-  title: { color: colors.text, fontSize: font.size.xl, fontWeight: '700', marginBottom: spacing.xs },
+  title: { color: colors.text, fontSize: font.size.lg, fontWeight: '700', marginBottom: spacing.xs },
   sub: { color: colors.textMuted, fontSize: font.size.sm, marginBottom: spacing.lg, lineHeight: 18 },
   stateCard: {
     backgroundColor: colors.bgCard, borderRadius: radius.lg, borderWidth: 2,
@@ -232,14 +269,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgCard, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
     color: colors.text, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: font.size.md,
   },
-  formatRow: { flexDirection: 'row', gap: spacing.sm },
-  formatBtn: {
-    flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
-    paddingVertical: spacing.sm, alignItems: 'center', backgroundColor: colors.bgCard,
+  selectorRow: { flexDirection: 'row', gap: spacing.xs, flexWrap: 'wrap' },
+  selectorBtn: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
+    paddingVertical: spacing.xs, paddingHorizontal: spacing.md, backgroundColor: colors.bgCard,
   },
-  formatBtnActive: { borderColor: colors.primary, backgroundColor: colors.primary + '22' },
-  formatText: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
-  formatTextActive: { color: colors.primary },
+  selectorBtnActive: { borderColor: colors.primary, backgroundColor: colors.primary + '22' },
+  selectorText: { color: colors.textMuted, fontSize: font.size.sm, fontWeight: '600' },
+  selectorTextActive: { color: colors.primary },
   btn: {
     marginTop: spacing.lg, backgroundColor: colors.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',
