@@ -1,0 +1,41 @@
+diff --git a/backend/app/navixy_sync.py b/backend/app/navixy_sync.py
+index 4084636..3bb06a0 100644
+--- a/backend/app/navixy_sync.py
++++ b/backend/app/navixy_sync.py
+@@ -428,6 +428,7 @@ async def _sync_tracks_for_vehicle(
+     new_count = 0
+     updated_count = 0
+     had_any = False
++    skipped_incomplete = 0
+     cursor = start_dt
+     while cursor < end_dt:
+         chunk_end = min(cursor + timedelta(days=TRACK_CHUNK_DAYS), end_dt)
+@@ -438,6 +439,18 @@ async def _sync_tracks_for_vehicle(
+             cursor = chunk_end
+             continue
+         for tr in resp.get("list", []):
++            # Garde-fou : un track INCOMPLET (sans start_date/end_date) = trajet non terminé
++            # OU variation de payload Navixy. On l'IGNORE localement (jamais inventer de date,
++            # jamais créer un faux trajet terminé) et on CONTINUE les autres tracks, afin que
++            # sync_navixy() atteigne apply_rules_to_all(). Skip LOCAL (pas de try/except global).
++            if not tr.get("start_date") or not tr.get("end_date"):
++                skipped_incomplete += 1
++                logger.warning(
++                    "navixy_sync: track incomplet ignoré (tracker=%s, track_id=%s, "
++                    "start_date=%r, keys=%s)",
++                    tracker_id, tr.get("id"), tr.get("start_date"), sorted(tr.keys()),
++                )
++                continue
+             doc = await _build_trip_doc(
+                 db, vehicle, tracker_id, tr, zones_local
+             )
+@@ -448,6 +461,9 @@ async def _sync_tracks_for_vehicle(
+                 updated_count += 1
+             had_any = True
+         cursor = chunk_end
++    if skipped_incomplete:
++        logger.warning("navixy_sync: %d track(s) incomplet(s) ignoré(s) (tracker=%s)",
++                        skipped_incomplete, tracker_id)
+     return new_count, updated_count, had_any
+ 
+ 
