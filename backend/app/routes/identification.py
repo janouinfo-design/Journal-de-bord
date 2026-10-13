@@ -476,11 +476,24 @@ async def driver_my_vehicle(user=Depends(get_current_user)):
     """Véhicule actuel (session en cours) ou dernier véhicule utilisé.
     Données réelles uniquement — aucun champ inventé (pas de SoC/carburant)."""
     db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
     sess = await ble_engine.get_current_session(db, driver_id)
     current = bool(sess)
+    # Lot 1/2 : si pas de session BLE, utiliser l'affectation PERSISTANTE (source de vérité).
+    if not sess:
+        from app import vehicle_assignment as va
+        asg_vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+        if asg_vehicle_id:
+            vehicle = await db.vehicles.find_one({"id": asg_vehicle_id, "tenant_id": tenant_id}, {"_id": 0}) or {}
+            return {
+                "vehicle": {"id": vehicle.get("id"), "plate": vehicle.get("plate"),
+                            "model": vehicle.get("model")},
+                "current": True,
+                "session": None,
+            }
     if not sess:
         last = await db.driver_sessions.find_one(
             {"driver_id": driver_id}, {"_id": 0}, sort=[("started_at", -1)])
@@ -518,8 +531,12 @@ async def driver_sos(payload: SosIn, user=Depends(get_current_user)):
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
     driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "name": 1}) or {}
-    sess = await ble_engine.get_current_session(db, driver_id)
-    vehicle_id = sess.get("vehicle_id") if sess else None
+    # Véhicule actif = affectation persistante (fallback session BLE).
+    from app import vehicle_assignment as va
+    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        vehicle_id = sess.get("vehicle_id") if sess else None
     vehicle = await db.vehicles.find_one(
         {"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0, "plate": 1, "navixy_tracker_id": 1}
     ) if vehicle_id else None
@@ -622,10 +639,13 @@ async def driver_km_summary(
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
-    sess = await ble_engine.get_current_session(db, driver_id)
-    vehicle_id = sess.get("vehicle_id") if sess else None
-
-    # Instant courant en heure locale chauffeur (Europe/Zurich).
+    # Lot 1/2 : source de vérité du véhicule actif = affectation PERSISTANTE.
+    # Priorité à resolve_active_vehicle ; fallback session BLE (rétro-compat).
+    from app import vehicle_assignment as va
+    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        vehicle_id = sess.get("vehicle_id") if sess else None
     _TZ = ZoneInfo("Europe/Zurich")
     now_local = datetime.now(timezone.utc).astimezone(_TZ)
     _MONTHS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
@@ -705,13 +725,17 @@ async def driver_vehicle_odometer(
     from app.odometer_audit import read_vehicle_odometer
 
     db = get_db()
+    tenant_id = user.get("tenant_id") or "default"
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
-    # Véhicule de la session courante (source de vérité pour ce chauffeur).
-    sess = await ble_engine.get_current_session(db, driver_id)
-    current_vehicle_id = sess.get("vehicle_id") if sess else None
+    # Véhicule de la session courante (source de vérité = affectation persistante).
+    from app import vehicle_assignment as va
+    current_vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not current_vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        current_vehicle_id = sess.get("vehicle_id") if sess else None
 
     target_vehicle_id = vehicle_id or current_vehicle_id
     if not target_vehicle_id:
