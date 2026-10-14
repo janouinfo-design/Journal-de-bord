@@ -39,9 +39,13 @@ class _FakeDB:
 def _run(assignments, vehicle_id, trip_iso):
     # Les docs de test reçoivent tenant_id=default (comme en base) pour matcher
     # le filtre de list_assignments ({tenant_id, vehicle_id}).
+    # Volet 2 : ce fichier valide le RESOLVER LEGACY V1 (comportement historique
+    # INCHANGÉ). On cible donc explicitement `_resolve_driver_for_trip_v1`, qui est
+    # la fonction utilisée par `reassign_all_trips()`. Le resolver moderne V2
+    # (`resolve_driver_for_trip`) est testé séparément dans test_resolve_driver_v2.py.
     docs = [{**a, "tenant_id": "default"} for a in assignments]
     db = _FakeDB(docs)
-    return asyncio.run(A.resolve_driver_for_trip(db, vehicle_id, trip_iso))
+    return asyncio.run(A._resolve_driver_for_trip_v1(db, vehicle_id, trip_iso))
 
 
 def test_fail_closed_no_window_no_primary_returns_none():

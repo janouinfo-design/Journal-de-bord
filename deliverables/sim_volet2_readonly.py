@@ -307,6 +307,22 @@ def main():
     all_anomalies = []
     samples = defaultdict(list)
     witness_rows = []
+    per_tenant = defaultdict(lambda: {"trips": 0, "modern_segment": 0,
+                                      "legacy_v1": 0, "none": 0, "vehicles": set()})
+
+    # ---- assignments LEGACY — SCOPE "default" EN DUR (comme le runtime).
+    # CORRECTIF CRITIQUE : le resolver runtime `_resolve_driver_for_trip_v1` lit
+    # les assignments via `list_assignments` qui filtre `tenant_id="default"` EN
+    # DUR (KNOWN_LIMITATION legacy mono-tenant). Le simulateur doit reproduire
+    # EXACTEMENT ce comportement : on charge les assignments UNE SEULE FOIS sur
+    # "default", quel que soit le tenant du trip. Conséquence attendue : pour un
+    # trip d'un tenant != "default", le candidat V1 est (quasi) toujours None ->
+    # fallback_V1 = 0, sans aucun fallback des events modernes vers "default".
+    legacy_asgs_by_vehicle = defaultdict(list)
+    for a in db.assignments.find({"tenant_id": "default"},
+                                 {"_id": 0, "vehicle_id": 1, "driver_id": 1,
+                                  "from_date": 1, "to_date": 1, "is_primary": 1}):
+        legacy_asgs_by_vehicle[a.get("vehicle_id")].append(a)
 
     for tenant in tenants:
         # ---- events OK, triés par at ----
@@ -335,12 +351,9 @@ def main():
         for s in segments:
             segs_by_vehicle[s["vehicle_id"]].append(s)
 
-        # ---- assignments legacy par vehicle ----
-        asgs_by_vehicle = defaultdict(list)
-        for a in db.assignments.find({"tenant_id": tenant},
-                                     {"_id": 0, "vehicle_id": 1, "driver_id": 1,
-                                      "from_date": 1, "to_date": 1, "is_primary": 1}):
-            asgs_by_vehicle[a.get("vehicle_id")].append(a)
+        # ---- assignments legacy par vehicle : TOUJOURS le cache "default"
+        #      (jamais scopé sur le tenant courant), pour coller au runtime V1.
+        asgs_by_vehicle = legacy_asgs_by_vehicle
 
         # ---- trips ----
         tr_cur = db.trips.find(
@@ -395,6 +408,17 @@ def main():
                         cat = "LEGACY_PRE_MODERN"
 
             cat_counts[cat] += 1
+
+            # ---- ventilation par tenant (vérif que rien d'inattendu sur non-default) ----
+            pt = per_tenant[tenant]
+            pt["trips"] += 1
+            pt["vehicles"].add(vid)
+            if cat == "MODERN_SEGMENT":
+                pt["modern_segment"] += 1
+            elif cat == "LEGACY_PRE_MODERN":
+                pt["legacy_v1"] += 1
+            else:  # MODERN_GAP_NONE / NO_RELATION_NONE / CONFLICT_NONE
+                pt["none"] += 1
 
             # ---- comparaisons 3-way ----
             if v2 == v1:
@@ -484,6 +508,17 @@ def main():
     for c in ("MODERN_SEGMENT", "LEGACY_PRE_MODERN", "MODERN_GAP_NONE",
               "NO_RELATION_NONE", "CONFLICT_NONE"):
         print(f"  {c:<20} : {cat_counts.get(c, 0)}")
+    print("-" * 78)
+
+    print("VENTILATION PAR TENANT (MODERN_SEGMENT / fallback V1 / None)")
+    print("  NB: pour les tenants != 'default', le candidat V1 est toujours None")
+    print("      (KNOWN_LIMITATION legacy scope 'default') -> V2 ne produit que")
+    print("      MODERN_SEGMENT ou None, jamais LEGACY_PRE_MODERN.")
+    for tenant in sorted(per_tenant.keys()):
+        pt = per_tenant[tenant]
+        print(f"  [{tenant}] trips={pt['trips']} vehicules={len(pt['vehicles'])} "
+              f"MODERN_SEGMENT={pt['modern_segment']} "
+              f"fallback_V1={pt['legacy_v1']} None={pt['none']}")
     print("-" * 78)
 
     print("COMPARAISON 3-WAY (STORED vs V1 vs V2)")

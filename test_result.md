@@ -1,6 +1,18 @@
 #====================================================================================================
 # Phase 4.1 — Finalisation App Chauffeur Expo (Mes trajets, Profil, Réglages)
 #====================================================================================================
+#
+# Volet 2 — resolver multi-source MODERNE (assignments.py) — CODE CANONIQUE VALIDÉ (non déployé)
+#   - resolve_driver_for_trip() = V2 (point d'entrée navixy_sync) ; _resolve_driver_for_trip_v1() = V1 legacy inchangé.
+#   - reassign_all_trips() appelle EXCLUSIVEMENT V1. navixy_sync.py INCHANGÉ.
+#   - Invariant: V2 == V1 sauf autorité moderne prouvée (vehicle_assignment_events, result=OK, at, [start,end)).
+#   - Conflit temporel corrigé: ne jamais invalider rétroactivement un segment valide avant l'instant du conflit.
+#   - Tests: test_resolve_driver_fail_closed.py 14/14, test_resolve_driver_v2.py 17/17, test_fmc130_resolve_pending.py 12/12 (43/43).
+#   - Empreintes: assignments.py sha256 c9b26737133782d55431d279303a1434bb21bdfd0472b0a19e619917ab692902 ;
+#                 sim_volet2_readonly.py sha256 9abaf5a3df5bd0bb30ba85fdf4c3059dc993927b622c4b27b9ac0261c4b7156f.
+#   - Déploiement PROD: NON DONNÉ. Voir deliverables/VOLET2_STATUS.md.
+#
+
 
 user_problem_statement: |
   Phase 4.1 : terminer UNIQUEMENT les écrans manquants de l'app chauffeur Expo — Mes trajets,
@@ -46,6 +58,20 @@ backend:
       - working: true
         agent: "testing"
         comment: "PRIVATE KM AVL16 FEATURE VERIFIED - All 112 tests PASSED (18 new + 94 regression). NEW FEATURE: Private km computed from hardware AVL16 odometer (not GPS), because in PRIVATE mode FMC130 masks GPS but AVL16 keeps increasing. Software-only, NO device commands, NO real Navixy calls, NO .env prod changes. Feature-flag PRIVATE_KM_SOURCE_AVL16 (default '0' = OFF). All device/odometer hooks MOCKED in tests. NEW MODULE (backend/app/private_mileage.py): collection private_mileage_session (append-only history), states OPEN/CLOSED/ABANDONED. open_session (Q4b: START captured when PRIVATE command accepted/sent), capture_end_candidate (END candidate at BUSINESS send), close_session (idempotent), close_from_candidate (DEGRADED), abandon on tracker change. private_distance() fail-closed (negative delta -> None), null != 0. aggregate_private_km() with CUTOVER logic: flag OFF -> legacy GPS; flag ON -> disjoint intervals: GPS before cutover + AVL16 after cutover; source enum AVL16 | GPS_FALLBACK | MIXED_TRANSITION | UNAVAILABLE; post-cutover with no AVL16 session -> UNAVAILABLE (null), never silent GPS. ensure_indexes(): UNIQUE PARTIAL index {state:'OPEN'} on (tenant_id,vehicle_id,tracker_id) => DB-level idempotency (two concurrent PRIVATE -> 1 OPEN). CHANGES: private_mode_engine.py: request_mode() opens session on PRIVATE accepted (REAL/simulate) and captures END candidate + closes on BUSINESS confirmed; resolve_pending_confirmation() closes session on async BUSINESS confirm. All wrapped so flag OFF = no-op and exceptions never block mode switch. routes/identification.py: GET /driver/km-summary now computes private_km via aggregate_private_km (with GPS-fallback closure) and returns private_km_source. pro_km unchanged. Periods already in Europe/Zurich; added 'week' earlier. server.py: calls ensure_indexes at startup. TEST RESULTS: (1) NEW AVL16 UNIT + INTEGRATION SUITES: 18/18 PASSED in 0.60s - test_private_mileage.py (7 tests): flag OFF -> GPS_FALLBACK ✓, no-cutover+sessions -> AVL16 ✓, entirely pre-cutover -> GPS_FALLBACK ✓, entirely post-cutover with session -> AVL16, WITHOUT session -> UNAVAILABLE (private_km None, NOT GPS) ✓, crossing cutover -> MIXED_TRANSITION = GPS(before)+AVL16(after) disjoint (e.g. 350+220=570) ✓, private_distance: 10000.0->10012.4 = 12.4; negative delta -> None; None inputs -> None ✓, finalize_fields fail-closed ✓. test_private_mileage_sessions.py (9 tests): open->close computes 12.4 ✓, DOUBLE OPEN idempotent (exactly 1 OPEN, 2nd returns None via simulated DuplicateKeyError) ✓, DOUBLE CLOSE only once (no 2nd private_km) ✓, negative delta -> None + reason NEGATIVE_DELTA ✓, end missing -> UNAVAILABLE ✓, tracker change abandons previous OPEN ✓, close_from_candidate -> DEGRADED ✓, flag OFF -> no session created ✓, unfinished session stays OPEN and is NOT counted ✓. test_private_mileage_integration.py (2 tests): PRIVATE accepted (REAL) opens session with odometer_start=10000.0; BUSINESS confirmed closes it with private_km=12.4, quality OK ✓, PRIVATE with DEVICE_WRITE=0 (refused before send) creates NO session ✓. (2) NON-REGRESSION SUITE: 94/94 PASSED in 9.00s - test_private_mode_phase2.py (26 tests) ✓, test_fmc130_prive_pro_ux.py (8 tests) ✓, test_fmc130_business_recovery.py (7 tests) ✓, test_fmc130_lkp_fixes.py (11 tests) ✓, test_fmc130_resolve_pending.py (7 tests) ✓, test_fmc130_confirmation_fix.py (17 tests) ✓, test_fmc130_lkp_no_samples.py (5 tests) ✓, test_private_mode_gate.py (14 tests) ✓. All BUSINESS recovery fix tests still pass, no PRIVATE/BUSINESS regression. (3) BACKEND SERVICE: RUNNING (supervisor, uptime 0:01:10, no errors in logs). VERIFICATION CONSTRAINTS: NO code modifications (verification only) ✓, ignored unrelated integration tests with HTTP 401 login (out of scope) ✓. TOTAL: 112/112 PASSED (100%). NO ISSUES FOUND."
+  - task: "VOLET 2 — Driver Assignment Resolver (multi-source V2 + V1 non-regression)"
+    implemented: true
+    working: true
+    file: "backend/app/assignments.py, backend/tests/test_resolve_driver_fail_closed.py, backend/tests/test_resolve_driver_v2.py, backend/tests/test_fmc130_resolve_pending.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "VOLET 2 BUG TEMPOREL CORRIGÉ — CERTIFICATION COMPLÈTE ✅ TOUS LES TESTS PASSED (43/43 : 14 V1 + 17 V2 + 12 FMC130). CONTEXTE : Validation du correctif du bug de régression temporelle dans /app/backend/app/assignments.py fonction _reconstruct_modern_segments (blob git af3ef053e75a4d6d5b79c4b3a0c6f47de24d62e9, sha256 c9b26737133782d55431d279303a1434bb21bdfd0472b0a19e619917ab692902 VÉRIFIÉ ✓). BUG CORRIGÉ : auparavant, dès qu'un chauffeur avait UN événement moderne incohérent (conflit), TOUS ses segments étaient supprimés rétroactivement — y compris des segments valides ANTÉRIEURS au conflit. Cela pouvait réécrire l'attribution d'anciens trajets. CORRECTION (lignes 269-293) : on ne supprime plus en masse ; un segment valide antérieur au conflit reste couvrant ; la neutralisation (None) ne s'applique qu'À PARTIR de l'instant du conflit (via conflict_vehicle_since) ; les segments OUVERTS d'un chauffeur en conflit sont bornés à l'instant du conflit. PÉRIMÈTRE STRICT : exécution UNIQUEMENT des tests pytest listés. AUCUNE modification de code, AUCUNE modification de base réelle, AUCUN déploiement, AUCUNE synchro Navixy, AUCUN reassign_all_trips() sur données réelles. Tests en mémoire uniquement (fake DB). COMMANDES EXÉCUTÉES (chaque fichier SÉPARÉMENT, artefact asyncio.get_event_loop() connu et documenté KNOWN/OUT OF SCOPE) : (1) cd /app/backend && python3 -m pytest tests/test_resolve_driver_fail_closed.py -v → 14 PASSED in 0.11s ✓, (2) cd /app/backend && python3 -m pytest tests/test_resolve_driver_v2.py -v → 17 PASSED in 0.11s ✓, (3) cd /app/backend && python3 -m pytest tests/test_fmc130_resolve_pending.py -q → 12 PASSED in 4.23s ✓. CERTIFICATIONS DEMANDÉES : ✅ A. NON-RÉGRESSION V1 (14/14 PASS, 0 skip/xfail) : Tous les tests historiques V1 (_resolve_driver_for_trip_v1) PASSED. Aucun test supprimé/affaibli. Tests : test_fail_closed_no_window_no_primary_returns_none, test_dated_window_match_wins, test_primary_used_when_no_dated_window, test_dated_window_overrides_primary, test_no_assignment_returns_none, test_never_falls_back_to_first_arbitrary, test_v1_primary_open_ended_covers_everything_unchanged, test_v1_primary_bounded_trip_before_from_not_covered, test_v1_primary_bounded_trip_equals_from_inclusive_covered, test_v1_primary_bounded_trip_inside_window_covered, test_v1_primary_bounded_trip_equals_to_exclusive_not_covered, test_v1_primary_bounded_trip_after_to_not_covered, test_v1_primary_half_open_only_from_set_covers_future, test_v1_dated_window_still_overrides_bounded_primary. ✅ B. V2 (17/17 PASS) : Tous les tests V2 (resolve_driver_for_trip) PASSED. EN PARTICULIER, les 2 NOUVEAUX tests validant la CORRECTION du bug temporel PASSED : (1) test_v2_conflict_does_not_invalidate_prior_valid_segment (lignes 370-391) : segment valide [01/10,10/10) CONSERVÉ pour trajets 05/10 et 09/10 (→ driver drvP), et None pour trajet 25/10 (après conflit du 20/10). PROUVE qu'un conflit à T n'invalide PAS rétroactivement une relation prouvée avant T ✓. (2) test_v2_conflict_bounds_open_segment_of_conflicting_driver (lignes 394-411) : segment ouvert borné à l'instant du conflit (couvert avant, None au/après) ✓. Cas existants V2 également PASSED : test_v2_modern_segment_covers_returns_modern_driver (témoin audi), test_v2_modern_segment_end_exclusive (fin EXCLUSIVE [start,end)), test_v2_modern_gap_returns_none_after_modern_since (scénario 09ce/e711 post-modern_since → None), test_v2_legacy_pre_modern_before_modern_since_returns_v1 (LEGACY_PRE_MODERN), test_v2_v1_candidate_without_modern_since_returns_v1 (candidat sans modern_since → V1), test_v2_no_relation_returns_none (NO_RELATION_NONE), test_v2_conflict_two_modern_segments_returns_none (CONFLICT_NONE >=2 segments), test_v2_tenant_absent_falls_back_to_v1_exact (tenant absent → V1 exact), test_v2_force_released_marks_conflict_returns_none (FORCE→conflit→None), test_v2_take_on_open_segment_marks_conflict_returns_none (TAKE-sur-TAKE→None), test_v2_release_without_take_marks_conflict (RELEASE-sans-TAKE→None), test_v2_clean_change_reconstructs_two_segments (CHANGED propre), test_v2_invalid_trip_timestamp_returns_v1 (timestamp invalide→V1). ✅ C. PREUVE reassign_all_trips() → V1 UNIQUEMENT : test_reassign_all_trips_uses_v1_only PASSED (monkeypatch : V1 appelé, V2 JAMAIS) ✓, test_reassign_does_not_apply_modern_authority_to_manual_trip PASSED (manuel non réécrit) ✓. CODE VÉRIFIÉ : /app/backend/app/assignments.py ligne 386 : reassign_all_trips appelle `_resolve_driver_for_trip_v1` (V1) et JAMAIS resolve_driver_for_trip (V2) ✓. ✅ D. FMC130 (12/12 PASS isolé) : test_fmc130_resolve_pending.py 12 PASSED in 4.23s ✓. Tests : test_A_private_confirmed_live_avl16_and_dominant, test_B_live_avl16_unavailable_stays_pending, test_C_live_avl16_not_increasing_no_false_confirm, test_D_timeout_without_proof_becomes_unknown, test_E_business_confirmation_not_regressed, test_F_no_device_command_triggered, test_G_injection_read_odo_km_still_works, test_H_business_timeout_sets_awaiting_async_confirm, test_I_business_promoted_late_when_fresh_position_returns, test_J_business_still_unknown_if_no_proof_at_wakeup, test_K_business_not_promoted_if_position_frozen_on_anchor, test_L_async_window_expired_stops_retrying. ARTEFACT CONNU DOCUMENTÉ (KNOWN/OUT OF SCOPE) : Lancer test_resolve_driver_fail_closed.py + test_fmc130_resolve_pending.py ENSEMBLE provoque RuntimeError: There is no current event loop (asyncio.get_event_loop() déprécié dans FMC130) — PAS une régression, artefact d'environnement de test. Tests exécutés SÉPARÉMENT comme demandé. ENVIRONNEMENT : Python 3.11.17, pytest 9.0.3, backend /app/backend, tests en mémoire (fake DB), AUCUNE donnée réelle modifiée. TOTAL : 43/43 PASSED (100%). VERDICT FINAL : ✅ PASS — BUG TEMPOREL CORRIGÉ ET CERTIFIÉ. AUCUNE ANOMALIE BLOQUANTE. AUCUNE RÉGRESSION V1. CORRECTION TEMPORELLE VALIDÉE (segments valides antérieurs au conflit CONSERVÉS). reassign_all_trips() UTILISE EXCLUSIVEMENT V1."
+      - working: true
+        agent: "testing"
+        comment: "VOLET 2 CERTIFICATION FINALE COMPLETE — ✅ TOUS LES TESTS PASSED (41/41 : 14 V1 + 15 V2 + 12 FMC130). CONTEXTE : Certification finale de la VERSION CANONIQUE du resolver d'affectation conducteur Volet 2 dans /app/backend/app/assignments.py (blob git a048c6f99ea45d5226db77c0b51bc72679ee1732, sha256 af8c74217a6ac3a5d1bf7bbf5b6657e2ca3eab07045e451902a7743cbf1bb7e1 VÉRIFIÉ ✓). PÉRIMÈTRE STRICT : exécution UNIQUEMENT des tests pytest listés. AUCUNE modification de code, AUCUNE modification de base réelle, AUCUN déploiement, AUCUNE synchro Navixy, AUCUN reassign_all_trips() sur données réelles. Tests en mémoire uniquement (fake DB). COMMANDES EXÉCUTÉES (chaque fichier SÉPARÉMENT, artefact asyncio.get_event_loop() connu et documenté) : (1) cd /app/backend && python3 -m pytest tests/test_resolve_driver_fail_closed.py -v → 14 PASSED in 0.10s ✓, (2) cd /app/backend && python3 -m pytest tests/test_resolve_driver_v2.py -v → 15 PASSED in 0.10s ✓, (3) cd /app/backend && python3 -m pytest tests/test_fmc130_resolve_pending.py -q → 12 PASSED in 4.24s ✓. CERTIFICATIONS DEMANDÉES : ✅ A. NON-RÉGRESSION V1 (14/14 PASS, 0 skip/xfail) : Tous les tests historiques V1 (_resolve_driver_for_trip_v1) PASSED. Aucun test supprimé/affaibli. Tests : test_fail_closed_no_window_no_primary_returns_none, test_dated_window_match_wins, test_primary_used_when_no_dated_window, test_dated_window_overrides_primary, test_no_assignment_returns_none, test_never_falls_back_to_first_arbitrary, test_v1_primary_open_ended_covers_everything_unchanged, test_v1_primary_bounded_trip_before_from_not_covered, test_v1_primary_bounded_trip_equals_from_inclusive_covered, test_v1_primary_bounded_trip_inside_window_covered, test_v1_primary_bounded_trip_equals_to_exclusive_not_covered, test_v1_primary_bounded_trip_after_to_not_covered, test_v1_primary_half_open_only_from_set_covers_future, test_v1_dated_window_still_overrides_bounded_primary. ✅ B. V2 (15/15 PASS) : Tous les tests V2 (resolve_driver_for_trip) PASSED, en particulier les 5 nouveaux tests FAIL-CLOSED STRICT (version canonique) : (1) test_v2_force_released_marks_conflict_returns_none : VEHICLE_FORCE_RELEASED → conflit → None (jamais deviner) ✓, (2) test_v2_take_on_open_segment_marks_conflict_returns_none : TAKE sur segment déjà ouvert → conflit driver → None pour vA et vB ✓, (3) test_v2_release_without_take_marks_conflict : RELEASED sans TAKE → conflit → None ✓, (4) test_v2_clean_change_reconstructs_two_segments : VEHICLE_CHANGED cohérent → A couvert [08:00,12:00), A NON couvert à 12:00 (fin exclusive), B couvert dès 12:00 ✓, (5) test_v2_invalid_trip_timestamp_returns_v1 : timestamp trip non parsable → V1 exact ✓. Cas nominaux V2 également PASSED : test_v2_modern_segment_covers_returns_modern_driver (témoin audi), test_v2_modern_segment_end_exclusive (fin EXCLUSIVE [start,end)), test_v2_modern_gap_returns_none_after_modern_since (scénario 09ce/e711 post-modern_since → None), test_v2_legacy_pre_modern_before_modern_since_returns_v1 (LEGACY_PRE_MODERN), test_v2_v1_candidate_without_modern_since_returns_v1 (candidat sans modern_since → V1), test_v2_no_relation_returns_none (NO_RELATION_NONE), test_v2_conflict_two_modern_segments_returns_none (CONFLICT_NONE >=2 segments), test_v2_tenant_absent_falls_back_to_v1_exact (tenant absent → V1 exact). ✅ C. PREUVE reassign_all_trips() → V1 UNIQUEMENT : test_reassign_all_trips_uses_v1_only PASSED (monkeypatch : V1 appelé, V2 JAMAIS) ✓, test_reassign_does_not_apply_modern_authority_to_manual_trip PASSED (manuel non réécrit) ✓. CODE VÉRIFIÉ : /app/backend/app/assignments.py ligne 368 : reassign_all_trips appelle `_resolve_driver_for_trip_v1` (V1) et JAMAIS resolve_driver_for_trip (V2) ✓. ✅ D. FMC130 (12/12 PASS isolé) : test_fmc130_resolve_pending.py 12 PASSED in 4.24s ✓. Tests : test_A_private_confirmed_live_avl16_and_dominant, test_B_live_avl16_unavailable_stays_pending, test_C_live_avl16_not_increasing_no_false_confirm, test_D_timeout_without_proof_becomes_unknown, test_E_business_confirmation_not_regressed, test_F_no_device_command_triggered, test_G_injection_read_odo_km_still_works, test_H_business_timeout_sets_awaiting_async_confirm, test_I_business_promoted_late_when_fresh_position_returns, test_J_business_still_unknown_if_no_proof_at_wakeup, test_K_business_not_promoted_if_position_frozen_on_anchor, test_L_async_window_expired_stops_retrying. ARTEFACT CONNU DOCUMENTÉ : Lancer test_resolve_driver_fail_closed.py + test_fmc130_resolve_pending.py ENSEMBLE provoque RuntimeError: There is no current event loop (asyncio.get_event_loop() déprécié dans FMC130) — PAS une régression, artefact d'environnement de test. Tests exécutés SÉPARÉMENT comme demandé. ENVIRONNEMENT : Python 3.11.17, pytest 9.0.3, backend /app/backend, tests en mémoire (fake DB), AUCUNE donnée réelle modifiée. TOTAL : 41/41 PASSED (100%). VERDICT FINAL : ✅ PASS — VERSION CANONIQUE VOLET 2 CERTIFIÉE. AUCUNE ANOMALIE BLOQUANTE. AUCUNE RÉGRESSION V1. FAIL-CLOSED STRICT VÉRIFIÉ. reassign_all_trips() UTILISE EXCLUSIVEMENT V1."
   - task: "FMC130 BUSINESS confirmation bug fix - software-only unit tests"
     implemented: true
     working: true
@@ -2330,3 +2356,236 @@ agent_communication:
       Design A fail-closed (return None) préservé.
       Aucune régression détectée.
       Prêt pour Volet 2.
+
+  - agent: "testing"
+    message: |
+      VALIDATION VOLET 2 — RESOLVER MULTI-SOURCE MODERNE — ✅ 100% PASS (2026-01-XX)
+      
+      CONTEXTE:
+      Validation du Volet 2 du resolver d'affectation conducteur dans /app/backend/app/assignments.py.
+      NOUVEAU resolver moderne V2 (resolve_driver_for_trip) + PREUVE que reassign_all_trips()
+      utilise EXCLUSIVEMENT V1. Tests unitaires pytest avec fakes en mémoire.
+      AUCUNE donnée écrite/modifiée, AUCUN appel à reassign_all_trips() sur vraies données,
+      AUCUNE synchro Navixy.
+      
+      RÉSULTATS DES TESTS (LANCÉS SÉPARÉMENT):
+      ✅ test_resolve_driver_fail_closed.py: 14/14 PASSED en 0.10s (V1 non-régression)
+      ✅ test_resolve_driver_v2.py: 10/10 PASSED en 0.10s (V2 + reassign V1-only)
+      ✅ test_fmc130_resolve_pending.py: 12/12 PASSED en 4.17s (non-régression)
+      ✅ TOTAL: 36/36 PASSED (100%)
+      
+      ARTEFACT EVENT LOOP CONFIRMÉ (NON-RÉGRESSION):
+      ⚠️  Lancement des DEUX premiers fichiers ensemble → RuntimeError: There is no current event loop
+          → Artefact connu d'isolation d'event loop (test_fmc130_resolve_pending.py utilise asyncio.get_event_loop())
+          → PAS une régression du code Volet 2
+          → Chaque fichier passe à 100% lancé isolément ✓
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      POINT A — V1 NON-RÉGRESSION : 14/14 PASS ✅
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Resolver legacy _resolve_driver_for_trip_v1() (lignes 109-146) INCHANGÉ.
+      Comportement historique préservé. Scope tenant "default" (legacy mono-tenant).
+      
+      Tests confirmés:
+      ✅ test_fail_closed_no_window_no_primary_returns_none
+      ✅ test_dated_window_match_wins
+      ✅ test_primary_used_when_no_dated_window
+      ✅ test_dated_window_overrides_primary
+      ✅ test_no_assignment_returns_none
+      ✅ test_never_falls_back_to_first_arbitrary
+      ✅ test_v1_primary_open_ended_covers_everything_unchanged
+      ✅ test_v1_primary_bounded_trip_before_from_not_covered
+      ✅ test_v1_primary_bounded_trip_equals_from_inclusive_covered
+      ✅ test_v1_primary_bounded_trip_inside_window_covered
+      ✅ test_v1_primary_bounded_trip_equals_to_exclusive_not_covered
+      ✅ test_v1_primary_bounded_trip_after_to_not_covered
+      ✅ test_v1_primary_half_open_only_from_set_covers_future
+      ✅ test_v1_dated_window_still_overrides_bounded_primary
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      POINT B — V2 : 10/10 PASS ✅
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Resolver moderne resolve_driver_for_trip() (lignes 265-301) respecte l'invariant
+      « V2 == V1 sauf autorité moderne PROUVÉE ». Source d'autorité moderne :
+      vehicle_assignment_events (JOURNAL métier), timestamp métier `at`, uniquement
+      result=="OK", scope STRICT (tenant_id, driver_id). Segments reconstruits en
+      convention [start, end) (fin EXCLUSIVE).
+      
+      Tests confirmés avec cas spécifiques:
+      
+      ✅ MODERN_SEGMENT (segment moderne couvrant → driver moderne):
+         test_v2_modern_segment_covers_returns_modern_driver PASSED
+         → Segment [2026-06-15T08:00, None) couvre trip 2026-06-15T10:00 → driver moderne
+      
+      ✅ Fin EXCLUSIVE [start,end):
+         test_v2_modern_segment_end_exclusive PASSED
+         → Segment [2026-06-15T08:00, 2026-06-15T18:00) ne couvre PAS trip 2026-06-15T18:00
+         → Code ligne 185: `if end is not None and trip_iso >= end: return False`
+      
+      ✅ MODERN_GAP_NONE (chauffeur sous autorité moderne, pas de segment couvrant → None):
+         test_v2_modern_gap_returns_none_after_modern_since PASSED
+         → Candidat V1 avec modern_since=2026-06-01, trip 2026-06-15 >= modern_since
+         → Aucun segment couvrant → None (fail-closed, jamais V1)
+         → Code ligne 299: `if ms is not None and trip_start_iso >= ms: return None`
+      
+      ✅ LEGACY_PRE_MODERN (trip avant modern_since → == V1):
+         test_v2_legacy_pre_modern_before_modern_since_returns_v1 PASSED
+         → Candidat V1 avec modern_since=2026-06-15, trip 2026-06-01 < modern_since
+         → Retourne V1 exact (trip avant autorité moderne)
+         → Code ligne 301: `return v1` (branche else)
+      
+      ✅ Candidat V1 sans modern_since → == V1:
+         test_v2_v1_candidate_without_modern_since_returns_v1 PASSED
+         → Candidat V1 jamais dans events modernes (modern_since=None)
+         → Retourne V1 exact (pas sous autorité moderne)
+         → Code ligne 298: `ms = modern_since.get(v1)` → None → ligne 301: `return v1`
+      
+      ✅ NO_RELATION_NONE → None:
+         test_v2_no_relation_returns_none PASSED
+         → V1 retourne None (aucune relation legacy)
+         → Aucun segment moderne → retourne None (== V1)
+         → Code ligne 296: `if v1 is None: return None`
+      
+      ✅ CONFLICT_NONE (>=2 segments → None):
+         test_v2_conflict_two_modern_segments_returns_none PASSED
+         → Deux segments modernes couvrants (deux chauffeurs) → conflit
+         → Retourne None (jamais deviner, fail-closed)
+         → Code ligne 292: `if len(covering_drivers) >= 2: return None`
+      
+      ✅ Tenant absent → V1 exact:
+         test_v2_tenant_absent_falls_back_to_v1_exact PASSED
+         → Vehicle introuvable ou tenant_id absent
+         → Aucun accès aux events modernes → retourne V1 exact (non-régression)
+         → Code lignes 278-281: `if not tenant_id: return v1`
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      POINT C — PREUVE reassign_all_trips() UTILISE EXCLUSIVEMENT V1 ✅
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Test: test_reassign_all_trips_uses_v1_only PASSED
+      
+      Méthode: monkeypatch des deux resolvers avec compteurs d'appels.
+      Résultat: v1 appelé 2 fois (pour 2 trips), v2 JAMAIS appelé (0 appels).
+      
+      Code vérifié (lignes 313-332):
+      - Ligne 324: `new_driver = await _resolve_driver_for_trip_v1(db, ...)`
+      - AUCUN appel à resolve_driver_for_trip (V2)
+      
+      Invariant confirmé: reassign_all_trips() (route admin de RÉÉCRITURE HISTORIQUE)
+      utilise EXCLUSIVEMENT le resolver legacy V1, JAMAIS le resolver moderne V2.
+      On évite ainsi toute nouvelle capacité de réécriture de l'historique via
+      l'autorité moderne.
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      POINT D — TRAJET MANUEL HISTORIQUE NON RÉÉCRIT PAR REASSIGN ✅
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Test: test_reassign_does_not_apply_modern_authority_to_manual_trip PASSED
+      
+      Scénario:
+      - Trip historique avec driver_id manuel (dMANUAL)
+      - Segment moderne couvrant avec driver différent (dMODERN)
+      - reassign_all_trips() appelé
+      
+      Résultat: Trip reste avec dMANUAL (INCHANGÉ).
+      
+      Raison: reassign_all_trips() appelle V1 (pas V2), donc l'autorité moderne
+      (vehicle_assignment_events) n'est JAMAIS consultée. Le trajet manuel historique
+      n'est pas réécrit via l'autorité moderne.
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      POINT E — FMC130 : 12/12 PASS ISOLÉ ✅
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Test: test_fmc130_resolve_pending.py
+      Résultat: 12 passed in 4.17s
+      
+      Non-régression confirmée sur les tests FMC130 (private mode, resolve pending).
+      Aucun impact du Volet 2 sur les fonctionnalités FMC130 existantes.
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      POINT F — AUCUNE DONNÉE RÉELLE MODIFIÉE (TESTS EN MÉMOIRE/FAKES) ✅
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Isolation des tests confirmée:
+      
+      ✅ test_resolve_driver_fail_closed.py:
+         - Utilise _FakeDB + _FakeColl (lignes 35-47)
+         - Aucune vraie base MongoDB, tout en mémoire
+      
+      ✅ test_resolve_driver_v2.py:
+         - Utilise _DB + _Coll (lignes 84-91)
+         - Fake Mongo minimal en mémoire (find/find_one/update_one simulés)
+         - Aucune connexion réseau, aucune vraie base
+      
+      ✅ test_fmc130_resolve_pending.py:
+         - Utilise _DB + _Coll (ligne 52)
+         - Aucune vraie base MongoDB, tout en mémoire
+      
+      ✅ AUCUNE donnée écrite/modifiée dans une vraie base
+      ✅ AUCUN appel à reassign_all_trips() sur vraies données
+      ✅ AUCUNE synchro Navixy déclenchée
+      ✅ AUCUN déploiement
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      ARCHITECTURE VÉRIFIÉE
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      ✅ _resolve_driver_for_trip_v1() (lignes 109-146):
+         - Resolver LEGACY (comportement historique)
+         - Scope tenant "default" (legacy mono-tenant)
+         - Utilisé par reassign_all_trips() EXCLUSIVEMENT
+      
+      ✅ resolve_driver_for_trip() (lignes 265-301):
+         - NOUVEAU resolver V2 (point d'entrée runtime)
+         - Utilisé par navixy_sync (synchro runtime)
+         - Déduit le tenant via db.vehicles.find_one
+         - Si tenant introuvable → renvoie V1 exact (non-régression)
+         - Invariant: « V2 == V1 sauf autorité moderne PROUVÉE »
+      
+      ✅ reassign_all_trips() (lignes 313-332):
+         - DOIT appeler _resolve_driver_for_trip_v1 (ligne 324)
+         - JAMAIS resolve_driver_for_trip (V2)
+         - Évite toute réécriture historique via autorité moderne
+      
+      ✅ Helpers modernes (lignes 167-262):
+         - _seg_covers(): couverture [start, end) fin EXCLUSIVE
+         - _rebuild_driver_segments(): reconstruction défensive des segments
+         - _modern_context_for_vehicle(): lecture seule, scope STRICT tenant_id
+      
+      ✅ AUCUN ID métier codé en dur (e711/09ce/Audi sont des IDs de test génériques)
+      ✅ AUCUNE écriture (lecture seule)
+      ✅ AUCUN backfill
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      COMMANDES EXÉCUTÉES
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      (1) cd /app/backend && python3 -m pytest tests/test_resolve_driver_fail_closed.py -v
+          → 14 passed in 0.10s ✓
+      
+      (2) cd /app/backend && python3 -m pytest tests/test_resolve_driver_v2.py -v
+          → 10 passed in 0.10s ✓
+      
+      (3) cd /app/backend && python3 -m pytest tests/test_fmc130_resolve_pending.py -q
+          → 12 passed in 4.17s ✓
+      
+      ═══════════════════════════════════════════════════════════════════════════════
+      FINAL VERDICT: ✅ PASS — VOLET 2 VALIDÉ À 100%
+      ═══════════════════════════════════════════════════════════════════════════════
+      
+      Tous les points A→F confirmés explicitement:
+      ✅ A. V1 non-régression : 14/14 PASS (comportement legacy inchangé)
+      ✅ B. V2 : 10/10 PASS (tous les cas spécifiques confirmés)
+      ✅ C. reassign_all_trips() utilise EXCLUSIVEMENT V1 (preuve par monkeypatch)
+      ✅ D. Trajet manuel historique non réécrit par reassign (confirmé)
+      ✅ E. FMC130 : 12/12 PASS isolé (non-régression)
+      ✅ F. AUCUNE donnée réelle modifiée (tests en mémoire/fakes)
+      
+      Invariant « V2 == V1 sauf autorité moderne PROUVÉE » respecté.
+      Convention [start, end) (fin EXCLUSIVE) confirmée.
+      Fail-closed sur conflits/gaps/erreurs confirmé.
+      Aucune régression détectée.
+      Prêt pour intégration.
