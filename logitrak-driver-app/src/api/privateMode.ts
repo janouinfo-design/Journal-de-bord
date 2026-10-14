@@ -33,6 +33,11 @@ export interface PrivateModeStatus {
   last_command?: string | null;
   command_sent_at?: string | null;
   odometer_snapshot_status?: 'OK' | 'UNAVAILABLE' | 'INVALID' | null;
+  // Autorité Fin de service (backend = source de vérité).
+  // private_mode_applicable=false => END autorisée quel que soit `state`.
+  private_mode_applicable?: boolean;
+  end_service_allowed?: boolean;
+  end_service_reason?: string | null;
 }
 
 export interface PrivateModeResult {

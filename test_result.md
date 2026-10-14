@@ -2589,3 +2589,187 @@ agent_communication:
       Fail-closed sur conflits/gaps/erreurs confirmé.
       Aucune régression détectée.
       Prêt pour intégration.
+
+#====================================================================================================
+# BUG FIX — Fin de service bloquée à tort pour véhicules NON éligibles au Mode Privé
+#====================================================================================================
+#
+# CONTEXTE (2026-01-XX) : Bug terrain Ivan ivan@logitrak.ch + véhicule S564 (modèle telfmb003_fmc003).
+# Le chauffeur et le véhicule ne sont PAS éligibles au Mode Privé (compte sans Mode Privé activé,
+# vehicle_private_capabilities=null), mais la « Fin de service » était BLOQUÉE à tort.
+#
+# CAUSE : La logique de blocage s'appliquait AVANT de vérifier l'éligibilité au Mode Privé.
+#
+# CORRECTION : Nouveau module end_service_policy.py (fonction pure decide_end_service) + intégration
+# dans routes/identification.py (_resolve_end_service_decision + POST /driver/vehicle-assignment/end).
+#
+# RÈGLE MÉTIER (backend = source de vérité) :
+#   - private mode NON applicable -> Fin de service AUTORISÉE
+#   - applicable + BUSINESS confirmé -> Fin de service AUTORISÉE
+#   - applicable + PRIVATE/PENDING/REQUESTED/UNKNOWN/erreur lecture -> Fin de service BLOQUÉE (fail-closed)
+#
+# PÉRIMÈTRE STRICT : exécution UNIQUEMENT des tests pytest listés. AUCUNE modification de code,
+# AUCUNE modification de base réelle, AUCUN déploiement, AUCUNE commande device.
+#
+# FICHIERS CONCERNÉS :
+#   - NOUVEAU : /app/backend/app/end_service_policy.py (fonction pure decide_end_service)
+#   - MODIFIÉ : /app/backend/app/routes/identification.py
+#       * GET /driver/private-mode expose private_mode_applicable + end_service_allowed + end_service_reason
+#       * POST /driver/vehicle-assignment/end AUTORITAIRE : refuse (409/blocked) si end_service_allowed=false
+#   - MODIFIÉ (mobile, non testable ici) : logitrak-driver-app/src/store/assignmentStore.ts (endServiceGate)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# TESTS EXÉCUTÉS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+backend:
+  - task: "BUG FIX — Fin de service bloquée à tort (véhicules non éligibles Mode Privé)"
+    implemented: true
+    working: true
+    file: "backend/app/end_service_policy.py, backend/app/routes/identification.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          BUG FIX VALIDÉ — FIN DE SERVICE CORRIGÉE ✅ TOUS LES TESTS PASSED (24/24 : 9 règle métier + 15 non-régression).
+          
+          CONTEXTE : Validation du correctif du bug « Fin de service bloquée à tort » pour les chauffeurs/véhicules
+          NON éligibles au Mode Privé (ex: Ivan ivan@logitrak.ch, véhicule S564 modèle telfmb003_fmc003, compte sans
+          Mode Privé activé, vehicle_private_capabilities=null). Le blocage ne doit s'appliquer QUE si le Mode Privé
+          est APPLICABLE et que l'état n'est pas BUSINESS confirmé.
+          
+          PÉRIMÈTRE STRICT : exécution UNIQUEMENT des tests pytest listés. AUCUNE modification de code, AUCUNE
+          modification de base réelle, AUCUN déploiement, AUCUNE commande device. Tests en mémoire uniquement (fake DB).
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          COMMANDES EXÉCUTÉES
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          (1) cd /app/backend && python3 -m pytest tests/test_end_service_policy.py -v
+              → 9 passed in 0.09s ✓
+          
+          (2) cd /app/backend && python3 -m pytest tests/test_vehicle_assignment.py -q
+              → 15 passed in 0.09s ✓
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          CERTIFICATIONS DEMANDÉES
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          ✅ A. test_end_service_policy.py : 9/9 PASS — Règle métier pure (fonction decide_end_service)
+          
+             Cas 1 — NON applicable (compte sans Mode Privé + véhicule sans capability) -> END AUTORISÉ :
+               ✓ test_not_applicable_allows_end_regardless_of_state
+               ✓ test_not_applicable_allows_end_even_if_state_private
+          
+             Cas 2 — Applicable + BUSINESS confirmé -> END AUTORISÉ :
+               ✓ test_applicable_business_allows_end
+          
+             Cas 3 — Applicable + PRIVATE -> END REFUSÉ :
+               ✓ test_applicable_private_blocks_end
+          
+             Cas 4 — Applicable + PENDING (+ PRIVATE_REQUESTED/BUSINESS_REQUESTED) -> END REFUSÉ :
+               ✓ test_applicable_pending_blocks_end
+               ✓ test_applicable_requested_states_block_end
+          
+             Cas 5 — Applicable + UNKNOWN / erreur lecture -> END REFUSÉ (fail-closed) :
+               ✓ test_applicable_unknown_blocks_end
+               ✓ test_applicable_read_error_blocks_end
+               ✓ test_applicable_missing_state_blocks_end
+          
+          ✅ B. test_vehicle_assignment.py : 15/15 PASS — Non-régression affectation véhicule
+          
+             Aucune régression du flux TAKE/CHANGE/END/exclusivité suite à l'ajout de l'autorité END.
+             Tests confirmés :
+               ✓ test_take_creates_active_assignment
+               ✓ test_take_idempotent_same_request
+               ✓ test_reopen_app_assignment_persists
+               ✓ test_pause_does_not_release
+               ✓ test_private_mode_does_not_release
+               ✓ test_change_a_to_b_success
+               ✓ test_change_a_to_b_rejected_leaves_A_unchanged (CRITIQUE : B occupé -> A inchangé)
+               ✓ test_other_driver_cannot_take_occupied_vehicle
+               ✓ test_concurrent_take_same_vehicle_only_one_wins
+               ✓ test_double_click_take_no_duplicate
+               ✓ test_end_of_service_releases_vehicle
+               ✓ test_admin_force_end_releases_vehicle
+               ✓ test_history_reconstructed_from_events_only
+               ✓ test_multitenant_isolation_same_vehicle_id
+               ✓ test_resolve_active_vehicle_none_when_no_assignment
+          
+          ✅ C. CODE VÉRIFIÉ — POST /driver/vehicle-assignment/end (identification.py lignes 367-403)
+          
+             Endpoint AUTORITAIRE confirmé :
+               ✓ Appelle _resolve_end_service_decision() (ligne 383)
+               ✓ Refuse avec http_status=409 + result="blocked" quand end_service_allowed=False (lignes 384-393)
+               ✓ Libère normalement le véhicule (va.end) quand end_service_allowed=True (lignes 395-403)
+               ✓ Retourne private_mode_applicable + end_service_allowed + reason dans tous les cas
+          
+             Fonction _resolve_end_service_decision() (lignes 302-364) :
+               ✓ Résout l'éligibilité Mode Privé via private_mode_gate.can_use_private_mode()
+               ✓ Lit l'état courant via private_mode_engine.get_mode_state()
+               ✓ Appelle end_service_policy.decide_end_service() avec (applicable, state, read_error)
+               ✓ Fail-closed UNIQUEMENT pour les couples éligibles (non applicable -> END autorisée)
+               ✓ NE MODIFIE PAS le moteur AVL16 ni la confirmation PRIVATE/BUSINESS (lecture seule)
+          
+             GET /driver/private-mode (lignes 407-533) :
+               ✓ Expose private_mode_applicable + end_service_allowed + end_service_reason (lignes 530-532)
+               ✓ L'app mobile NE déduit PAS la règle depuis `state` (backend = source de vérité)
+          
+          ✅ D. AUCUNE DONNÉE RÉELLE MODIFIÉE — AUCUNE COMMANDE DEVICE ENVOYÉE
+          
+             ✓ Tests exécutés en mémoire uniquement (fake DB dans test_vehicle_assignment.py)
+             ✓ Fonction decide_end_service() est PURE (aucun effet de bord, aucune I/O)
+             ✓ AUCUNE connexion MongoDB réelle
+             ✓ AUCUNE commande Navixy/Teltonika
+             ✓ AUCUN déploiement
+             ✓ AUCUNE synchro navixy_sync
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          FINAL VERDICT: ✅ PASS — BUG FIX VALIDÉ À 100%
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          Tous les points A→D confirmés explicitement:
+          ✅ A. Règle métier pure : 9/9 PASS (5 cas métier couverts)
+          ✅ B. Non-régression affectation : 15/15 PASS (aucune régression du flux TAKE/CHANGE/END)
+          ✅ C. POST /driver/vehicle-assignment/end AUTORITAIRE confirmé (409/blocked quand refusé)
+          ✅ D. AUCUNE donnée réelle modifiée, AUCUNE commande device envoyée
+          
+          Règle métier respectée :
+            - NON applicable -> END AUTORISÉE (corrige le bug Ivan/S564)
+            - applicable + BUSINESS -> END AUTORISÉE
+            - applicable + autre état -> END BLOQUÉE (fail-closed conservé pour les éligibles)
+          
+          Prêt pour déploiement PROD.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 0
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "BUG FIX — Fin de service bloquée à tort (véhicules non éligibles Mode Privé)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ CERTIFICATION COMPLÈTE — BUG FIX « FIN DE SERVICE » VALIDÉ (24/24 TESTS PASSED).
+      
+      RÉSUMÉ EXÉCUTIF :
+      - test_end_service_policy.py : 9/9 PASSED (règle métier pure)
+      - test_vehicle_assignment.py : 15/15 PASSED (non-régression affectation)
+      - POST /driver/vehicle-assignment/end : AUTORITAIRE confirmé (409/blocked si refusé)
+      - AUCUNE donnée réelle modifiée, AUCUNE commande device envoyée
+      
+      Le bug est CORRIGÉ : les chauffeurs/véhicules NON éligibles au Mode Privé (ex: Ivan/S564)
+      peuvent désormais terminer leur service normalement. Le blocage fail-closed ne s'applique
+      QUE pour les couples réellement éligibles au Mode Privé.
+      
+      Prêt pour déploiement PROD.

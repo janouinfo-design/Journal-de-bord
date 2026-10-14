@@ -187,10 +187,16 @@ export function reasonToMessage(reason?: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// RÈGLE MÉTIER : « Fin de service » autorisée UNIQUEMENT si Mode Privé = BUSINESS CONFIRMÉ.
-// Cohérent avec 0009 : commande envoyée / success=true / PENDING != confirmé.
-// SEUL BUSINESS confirmé (state=BUSINESS) autorise END. Tout le reste bloque.
-// L'app LIT l'état existant (GET /driver/private-mode) — aucune modif moteur.
+// RÈGLE MÉTIER « Fin de service » ↔ Mode Privé — BACKEND AUTORITAIRE.
+//
+//   private mode NON applicable          => END AUTORISÉE
+//   applicable + BUSINESS confirmé        => END AUTORISÉE
+//   applicable + PRIVATE/PENDING/UNKNOWN  => END BLOQUÉE (fail-closed)
+//
+// L'app NE déduit PLUS la règle depuis `state` : elle lit la décision backend
+// (end_service_allowed / private_mode_applicable). Repli sur l'ancienne logique
+// UNIQUEMENT si un backend ancien ne renvoie pas ces champs (rétro-compat).
+// Aucune modification du moteur AVL16 ni de la confirmation PRIVATE/BUSINESS.
 // ---------------------------------------------------------------------------
 export interface EndGate {
   allowed: boolean;
@@ -198,9 +204,34 @@ export interface EndGate {
 }
 
 export function endServiceGate(pm: PrivateModeStatus | null | undefined, pmError?: boolean): EndGate {
-  // Erreur de lecture du mode -> BLOQUÉ (impossible de vérifier, fail-closed).
+  // 1) AUTORITÉ BACKEND : si la décision explicite est fournie, on la respecte.
+  if (!pmError && pm && typeof pm.end_service_allowed === 'boolean') {
+    if (pm.end_service_allowed) {
+      return { allowed: true, message: null };
+    }
+    // Bloqué par le backend : message adapté selon le motif.
+    if (pm.state === 'PRIVATE') {
+      return { allowed: false, message: 'Repassez en Professionnel avant de terminer votre service.' };
+    }
+    if (
+      pm.state === 'PENDING_CONFIRMATION' ||
+      pm.state === 'PRIVATE_REQUESTED' ||
+      pm.state === 'BUSINESS_REQUESTED'
+    ) {
+      return { allowed: false, message: 'Changement de mode en cours. Attendez la confirmation avant de terminer votre service.' };
+    }
+    return { allowed: false, message: 'Impossible de vérifier le mode du véhicule. Réessayez avant de terminer votre service.' };
+  }
+
+  // 2) REPLI rétro-compat (backend sans end_service_allowed). Fail-closed.
+  // Erreur de lecture du mode -> BLOQUÉ (impossible de vérifier).
   if (pmError || !pm) {
     return { allowed: false, message: 'Impossible de vérifier le mode du véhicule. Réessayez avant de terminer votre service.' };
+  }
+  // Si le backend indique explicitement que le Mode Privé n'est PAS applicable,
+  // la Fin de service est autorisée même sans end_service_allowed (rétro-compat).
+  if (pm.private_mode_applicable === false) {
+    return { allowed: true, message: null };
   }
   const state = pm.state;
   const target = pm.requested_target;
@@ -219,7 +250,6 @@ export function endServiceGate(pm: PrivateModeStatus | null | undefined, pmError
     return { allowed: false, message: 'Changement de mode en cours. Attendez la confirmation avant de terminer votre service.' };
   }
   // Timeout serveur : commande envoyée mais mode NON confirmé (transition_result=TIMEOUT).
-  // On ne conclut jamais BUSINESS -> END bloquée + message d'action clair.
   if (pm.transition_result === 'TIMEOUT') {
     return { allowed: false, message: 'Le mode n\'a pas été confirmé. Repassez en Professionnel (faites rouler le véhicule) avant de terminer votre service.' };
   }

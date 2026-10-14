@@ -299,19 +299,108 @@ async def vehicle_assignment_change(payload: AssignIn, user=Depends(get_current_
     return {"ok": True, **res}
 
 
+async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> dict:
+    """Décision AUTORITAIRE « Fin de service » côté serveur (réutilisée par END).
+
+    Reproduit la résolution d'éligibilité Mode Privé (gate) + l'état courant, puis
+    applique end_service_policy.decide_end_service(). Fail-closed UNIQUEMENT pour les
+    couples réellement éligibles ; non applicable -> END autorisée.
+
+    NE MODIFIE PAS le moteur AVL16 ni la confirmation PRIVATE/BUSINESS (lecture seule).
+    """
+    from app import private_mode_engine as pm
+    from app import private_mode_gate as gate
+    from app import vehicle_assignment as va
+    from app.end_service_policy import decide_end_service
+    from app.tenant_context import get_tenant_doc
+
+    # Feature globale coupée / kill switch -> Mode Privé NON applicable -> END autorisée.
+    if not gate.feature_enabled():
+        return decide_end_service(private_mode_applicable=False, state=None)
+    try:
+        if await gate.kill_switch_active(db):
+            return decide_end_service(private_mode_applicable=False, state=None)
+    except Exception:
+        # Lecture kill switch impossible : on ne bloque pas une Fin de service
+        # pour un couple dont on ignore encore l'éligibilité -> non applicable.
+        return decide_end_service(private_mode_applicable=False, state=None)
+
+    # Véhicule actif du chauffeur (affectation persistante ; fallback session BLE).
+    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+    if not vehicle_id:
+        sess = await ble_engine.get_current_session(db, driver_id)
+        vehicle_id = sess.get("vehicle_id") if sess else None
+    if not vehicle_id:
+        # Pas de véhicule résolu -> Mode Privé non applicable -> END autorisée.
+        return decide_end_service(private_mode_applicable=False, state=None)
+
+    vehicle = await db.vehicles.find_one(
+        {"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0}) or {}
+    tracker_id = vehicle.get("navixy_tracker_id")
+    model = pm.resolve_model(vehicle.get("model"))
+    try:
+        vc = await pm.resolve_vehicle_capability(db, tracker_id, model)
+        decision = await gate.can_use_private_mode(
+            db, tenant_id=tenant_id, tenant_doc=get_tenant_doc(tenant_id),
+            vehicle_doc=vehicle, capability=vc,
+        )
+        applicable = bool(decision.get("allowed"))
+    except Exception:
+        # Impossible d'établir l'éligibilité -> on considère NON applicable
+        # (on ne bloque pas un véhicule dont on ne peut prouver qu'il est pilote).
+        return decide_end_service(private_mode_applicable=False, state=None)
+
+    if not applicable:
+        return decide_end_service(private_mode_applicable=False, state=None)
+
+    # Éligible : lecture de l'état courant (fail-closed si illisible).
+    try:
+        st = await pm.get_mode_state(db, vehicle_id)
+        if st.get("state") == pm.PENDING_CONFIRMATION:
+            st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
+        state_now = st.get("state", pm.UNKNOWN)
+        return decide_end_service(private_mode_applicable=True, state=state_now)
+    except Exception:
+        return decide_end_service(private_mode_applicable=True, state=None, read_error=True)
+
+
 @router.post("/driver/vehicle-assignment/end")
 async def vehicle_assignment_end(payload: AssignEndIn, user=Depends(get_current_user)):
-    """« Fin de service » — libère le véhicule (idempotent)."""
+    """« Fin de service » — libère le véhicule (idempotent).
+
+    AUTORITÉ BACKEND : refuse la libération si le Mode Privé est APPLICABLE au
+    couple (chauffeur, véhicule) ET que l'état n'est pas BUSINESS confirmé.
+    Si le Mode Privé n'est pas applicable -> Fin de service autorisée (corrige le
+    faux blocage pour les comptes/véhicules non éligibles au Mode Privé).
+    """
     from app import vehicle_assignment as va
     db = get_db()
     tenant_id = user.get("tenant_id") or "default"
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
+
+    gate_decision = await _resolve_end_service_decision(db, tenant_id, driver_id)
+    if not gate_decision["end_service_allowed"]:
+        # Bloqué côté serveur : l'app ne peut pas contourner la règle de sécurité.
+        return {
+            "ok": False,
+            "result": "blocked",
+            "reason": gate_decision["reason"],
+            "private_mode_applicable": gate_decision["private_mode_applicable"],
+            "end_service_allowed": False,
+            "http_status": 409,
+        }
+
     res = await va.end(db, tenant_id=tenant_id, driver_id=driver_id,
                        actor_id=user.get("email", "?"), actor_role=user.get("role", "driver"),
                        request_id=payload.request_id)
-    return {"ok": res.get("result") in ("ok", "noop"), **res}
+    return {
+        "ok": res.get("result") in ("ok", "noop"),
+        **res,
+        "private_mode_applicable": gate_decision["private_mode_applicable"],
+        "end_service_allowed": True,
+    }
 
 
 # ---------- Phase 2 — Bascule Privé / Professionnel (backend autoritaire) ----------
@@ -403,6 +492,19 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     else:
         exposed_private_distance_km = st.get("private_distance_km")
 
+    # --- DÉCISION AUTORITAIRE « Fin de service » (backend = source de vérité) ---
+    # L'app NE doit PAS déduire la règle depuis `state`. Le backend expose
+    # explicitement private_mode_applicable + end_service_allowed.
+    #   non applicable            -> END autorisée
+    #   applicable + BUSINESS      -> END autorisée
+    #   applicable + autre/illisible -> END bloquée (fail-closed)
+    from app.end_service_policy import decide_end_service
+    end_decision = decide_end_service(
+        private_mode_applicable=bool(allowed),
+        state=state_now,
+        read_error=False,
+    )
+
     return {
         "state": state_now,
         "pending": st.get("state") == pm.PENDING_CONFIRMATION,
@@ -424,6 +526,10 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         "last_command": st.get("last_command"),                 # dernière commande envoyée
         "command_sent_at": st.get("command_sent_at"),           # horodatage envoi
         "odometer_snapshot_status": st.get("odometer_snapshot_status"),  # OK|UNAVAILABLE|INVALID
+        # --- Autorité Fin de service (backend) ---
+        "private_mode_applicable": end_decision["private_mode_applicable"],
+        "end_service_allowed": end_decision["end_service_allowed"],
+        "end_service_reason": end_decision["reason"],
     }
 
 

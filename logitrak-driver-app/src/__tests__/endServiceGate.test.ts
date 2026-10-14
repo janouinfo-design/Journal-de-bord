@@ -98,6 +98,54 @@ describe('endServiceGate — Fin de service ↔ Mode Privé', () => {
     const g = endServiceGate(pm({ state: 'BUSINESS', transition_result: 'TIMEOUT' as any }));
     expect(g.allowed).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // AUTORITÉ BACKEND (end_service_allowed / private_mode_applicable).
+  // Bug Ivan/S564 : compte sans Mode Privé + véhicule sans capability.
+  // -------------------------------------------------------------------------
+  test('backend: end_service_allowed=true (non applicable) → END AUTORISÉE même si state≠BUSINESS', () => {
+    const g = endServiceGate(
+      pm({ state: 'UNKNOWN', private_mode_applicable: false, end_service_allowed: true }),
+    );
+    expect(g.allowed).toBe(true);
+    expect(g.message).toBeNull();
+  });
+
+  test('cas Ivan/S564 : private_mode_applicable=false + end_service_allowed=true → END AUTORISÉE', () => {
+    const g = endServiceGate(
+      pm({ state: 'UNKNOWN', allowed: false, private_mode_applicable: false, end_service_allowed: true }),
+    );
+    expect(g.allowed).toBe(true);
+  });
+
+  test('backend: end_service_allowed=false + PRIVATE → END BLOQUÉE (repasser PRO)', () => {
+    const g = endServiceGate(
+      pm({ state: 'PRIVATE', private_mode_applicable: true, end_service_allowed: false }),
+    );
+    expect(g.allowed).toBe(false);
+    expect(g.message).toMatch(/Repassez en Professionnel/i);
+  });
+
+  test('backend: end_service_allowed=false + PENDING → END BLOQUÉE', () => {
+    const g = endServiceGate(
+      pm({ state: 'PENDING_CONFIRMATION', private_mode_applicable: true, end_service_allowed: false }),
+    );
+    expect(g.allowed).toBe(false);
+    expect(g.message).toMatch(/Changement de mode en cours/i);
+  });
+
+  test('backend: end_service_allowed=true + BUSINESS → END AUTORISÉE', () => {
+    const g = endServiceGate(
+      pm({ state: 'BUSINESS', private_mode_applicable: true, end_service_allowed: true }),
+    );
+    expect(g.allowed).toBe(true);
+  });
+
+  test('repli rétro-compat : private_mode_applicable=false SANS end_service_allowed → END AUTORISÉE', () => {
+    // Backend ancien sans end_service_allowed, mais expose private_mode_applicable=false.
+    const g = endServiceGate(pm({ state: 'UNKNOWN', private_mode_applicable: false }));
+    expect(g.allowed).toBe(true);
+  });
 });
 
 describe('reasonToMessage — conflits affectation', () => {
