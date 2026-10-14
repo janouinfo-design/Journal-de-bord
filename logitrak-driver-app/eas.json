@@ -12,7 +12,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://driver-ui-desync.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://fleet-trips-4.preview.emergentagent.com"
       }
     },
     "preview": {
@@ -25,7 +25,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://driver-ui-desync.preview.emergentagent.com"
+        "EXPO_PUBLIC_API_URL": "https://fleet-trips-4.preview.emergentagent.com"
       }
     },
     "production": {

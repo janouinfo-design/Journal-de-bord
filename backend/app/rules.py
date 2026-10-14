@@ -12,6 +12,10 @@ Simplified model (Iteration 4):
 from datetime import datetime, timezone
 from typing import Optional
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def _parse_hm(s: str) -> int:
     """Convert 'HH:MM' to minutes since midnight."""
@@ -185,31 +189,80 @@ async def _get_schedule_for(db, driver_id: Optional[str]) -> dict:
     return s
 
 
-async def apply_rules_to_all(db):
-    """Reclassify auto-classified trips using the current settings + schedules.
+def _effective_strategy(vehicle: Optional[dict], settings: dict) -> str:
+    """Stratégie de classification EFFECTIVE pour un véhicule.
 
-    Stratégie de classification (settings.classification_mode) :
-      - 'legacy' (défaut)            : logique horaire/zones existante (INCHANGÉE).
-      - 'privacy_history_strict'     : état PRO/PRIVÉ CONFIRMÉ prioritaire, aucun
-        fallback horaire, preuve insuffisante -> None (À classer). Ne corrige une
-        classification AUTO que sur preuve fiable ; ne touche JAMAIS le manuel.
+    Priorité : override VÉHICULE (vehicle.classification_mode) > tenant
+    (settings.classification_mode) > 'legacy'. Aucun ID hardcodé : le périmètre
+    pilote est porté par le champ `classification_mode` du véhicule concerné.
     """
-    settings = await db.settings.find_one({"id": "default"}, {"_id": 0}) or default_settings()
-    strategy = settings.get("classification_mode") or CLASSIFICATION_STRATEGY_LEGACY
+    v = (vehicle or {}).get("classification_mode")
+    if v in (CLASSIFICATION_STRATEGY_LEGACY, CLASSIFICATION_STRATEGY_PRIVACY):
+        return v
+    s = settings.get("classification_mode")
+    if s in (CLASSIFICATION_STRATEGY_LEGACY, CLASSIFICATION_STRATEGY_PRIVACY):
+        return s
+    return CLASSIFICATION_STRATEGY_LEGACY
 
-    if strategy == CLASSIFICATION_STRATEGY_PRIVACY:
-        return await _apply_privacy_history_strict(db, settings)
 
-    # ---- LEGACY (comportement historique, strictement inchangé) ----
-    vehicles = {v["id"]: v async for v in db.vehicles.find({}, {"_id": 0})}
-    forced_vehicle_ids = [vid for vid, v in vehicles.items() if v.get("mode") in ("always_pro", "always_perso")]
+async def apply_rules_to_all(db):
+    """Reclassify auto-classified trips. Stratégie résolue PAR VÉHICULE.
+
+    Chaque trajet est classé selon la stratégie EFFECTIVE de SON véhicule :
+      - 'legacy' (défaut)        : logique horaire/zones existante (INCHANGÉE) ;
+      - 'privacy_history_strict' : état PRO/PRIVÉ CONFIRMÉ prioritaire, jamais
+        d'écrasement d'une classification existante par None, pas de fallback horaire.
+
+    Périmètre pilote = véhicules portant vehicle.classification_mode='privacy_history_strict'
+    (override véhicule). Les autres véhicules restent strictement en 'legacy'.
+
+    ISOLATION MULTI-TENANT (fail-safe) : la reclassification NE DOIT JAMAIS s'exécuter
+    hors d'un contexte tenant. Si aucun tenant n'est posé (get_tenant_id() is None),
+    on REFUSE de tourner (return 0 + log). Cela empêche qu'un appel non scopé lise les
+    settings d'un tenant et reclasse les véhicules de TOUS les tenants (cause de la
+    régression cross-tenant : events audit sans tenant_id, 27 véhicules impactés).
+    """
+    from app.tenant_context import get_tenant_id
+    tenant_id = get_tenant_id()
+    if not tenant_id:
+        logger.error("apply_rules_to_all: appel SANS contexte tenant -> REFUSÉ (fail-safe). "
+                     "Aucune reclassification effectuée.")
+        return 0
+
+    # Défense en profondeur : on filtre EXPLICITEMENT par tenant_id dans toutes les
+    # requêtes (en plus du proxy TenantScopedDB), pour ne jamais dépendre uniquement
+    # de l'isolation implicite.
+    tf = {"tenant_id": tenant_id}
+    settings = await db.settings.find_one({"id": "default", **tf}, {"_id": 0}) or default_settings()
+    vehicles = {v["id"]: v async for v in db.vehicles.find(tf, {"_id": 0})}
+
+    # Véhicules en stratégie PRIVACY (override véhicule OU, si le tenant est en privacy,
+    # tous ceux qui n'ont pas explicitement 'legacy').
+    privacy_vehicle_ids = {
+        vid for vid, v in vehicles.items()
+        if _effective_strategy(v, settings) == CLASSIFICATION_STRATEGY_PRIVACY
+    }
+
+    updated = 0
+    # 1) Véhicules PRIVACY -> moteur strict (anti-régression). Scope tenant + véhicules.
+    if privacy_vehicle_ids:
+        updated += await _apply_privacy_history_strict(db, settings, privacy_vehicle_ids, tenant_id)
+
+    # 2) Véhicules LEGACY -> logique horaire existante (STRICTEMENT inchangée).
+    forced_vehicle_ids = [
+        vid for vid, v in vehicles.items()
+        if v.get("mode") in ("always_pro", "always_perso") and vid not in privacy_vehicle_ids
+    ]
     default_sched = await _get_schedule_for(db, None)
     cache: dict = {}
-    updated = 0
-    query = {"$or": [{"auto_classified": True}]}
+    # Filtrage explicite tenant (défense en profondeur).
+    query = {"$and": [tf, {"$or": [{"auto_classified": True}]}]}
     if forced_vehicle_ids:
-        query["$or"].append({"vehicle_id": {"$in": forced_vehicle_ids}})
+        query["$and"][1]["$or"].append({"vehicle_id": {"$in": forced_vehicle_ids}})
     async for trip in db.trips.find(query, {"_id": 0}):
+        vid = trip.get("vehicle_id")
+        if vid in privacy_vehicle_ids:
+            continue  # déjà traité par le moteur strict
         drv = trip.get("driver_id")
         if drv in cache:
             sched = cache[drv]
@@ -218,7 +271,7 @@ async def apply_rules_to_all(db):
             cache[drv] = sched
         else:
             sched = default_sched
-        cls = classify_trip(trip, vehicles.get(trip["vehicle_id"]), settings, sched)
+        cls = classify_trip(trip, vehicles.get(vid), settings, sched)
         if trip.get("classification") != cls:
             await db.trips.update_one(
                 {"id": trip["id"]},
@@ -228,20 +281,35 @@ async def apply_rules_to_all(db):
     return updated
 
 
-async def _apply_privacy_history_strict(db, settings) -> int:
+async def _apply_privacy_history_strict(db, settings, vehicle_ids: Optional[set] = None,
+                                        tenant_id: Optional[str] = None) -> int:
     """Stratégie privacy_history_strict : classe par historique mode CONFIRMÉ.
 
-    - Ne traite que les trajets AUTO (auto_classified != False) -> le manuel est intouchable.
-    - Vehicle mode always_pro/always_perso reste prioritaire (politique véhicule explicite).
-    - Historique insuffisant / preuve ancienne / changement pendant trajet -> None.
-    - Chaque correction est auditée (ancienne/nouvelle valeur + preuve + raison).
+    PÉRIMÈTRE : si `vehicle_ids` est fourni, SEULS ces véhicules sont traités
+    (scope pilote via override véhicule). `tenant_id` filtre explicitement (isolation).
+
+    RÈGLE DE PRÉSERVATION (anti-régression) :
+    - auto existante + preuve fraîche CONTRADICTOIRE -> corriger ;
+    - auto existante + PAS de preuve fraîche        -> CONSERVER l'existant (jamais -> None) ;
+    - None + preuve fraîche                         -> classifier ;
+    - None + preuve insuffisante                    -> rester None ;
+    - manuel (auto_classified=False)                -> jamais touché.
+
+    Autrement dit : on n'ÉCRASE JAMAIS une classification existante par None.
     """
     fresh_max_s = int(settings.get("classification_fresh_max_s") or PRIVACY_FRESH_MAX_S)
-    vehicles = {v["id"]: v async for v in db.vehicles.find({}, {"_id": 0})}
+    tf = {"tenant_id": tenant_id} if tenant_id else {}
+    vehicles = {v["id"]: v async for v in db.vehicles.find(tf, {"_id": 0})}
     events_cache: dict = {}
     updated = 0
-    async for trip in db.trips.find({"auto_classified": {"$ne": False}}, {"_id": 0}):
+    trip_query = {**tf, "auto_classified": {"$ne": False}}
+    if vehicle_ids is not None:
+        trip_query["vehicle_id"] = {"$in": list(vehicle_ids)}
+    async for trip in db.trips.find(trip_query, {"_id": 0}):
         vid = trip.get("vehicle_id")
+        # Garde-fou périmètre : ne jamais traiter un véhicule hors scope.
+        if vehicle_ids is not None and vid not in vehicle_ids:
+            continue
         veh = vehicles.get(vid) or {}
 
         # Politique véhicule explicite (prioritaire, inchangée).
@@ -261,26 +329,35 @@ async def _apply_privacy_history_strict(db, settings) -> int:
                 cls = classify_by_mode_history(trip, events_cache[vid], fresh_max_s)
 
         current = trip.get("classification")
-        if current != cls:
-            await db.trips.update_one(
-                {"id": trip["id"]},
-                {"$set": {"classification": cls, "auto_classified": True}},
-            )
-            # Audit de la correction (traçabilité, jamais de secret).
-            try:
-                await db.audit_log.insert_one({
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "scope": "trip_classification",
-                    "strategy": CLASSIFICATION_STRATEGY_PRIVACY,
-                    "trip_id": trip.get("id"),
-                    "vehicle_id": vid,
-                    "old_classification": current,
-                    "new_classification": cls,
-                    "reason": "privacy_history_strict",
-                })
-            except Exception:
-                pass
-            updated += 1
+
+        # GARDE-FOU ANTI-RÉGRESSION : ne JAMAIS remplacer une classification
+        # existante (professional/personal) par None (preuve insuffisante).
+        # On n'écrit que si la cible est une valeur concrète ET différente.
+        if cls not in ("professional", "personal"):
+            continue  # preuve insuffisante -> on conserve l'existant (ou on laisse None)
+        if current == cls:
+            continue  # idempotent
+
+        await db.trips.update_one(
+            {"id": trip["id"]},
+            {"$set": {"classification": cls, "auto_classified": True}},
+        )
+        # Audit de la correction (traçabilité + tenant_id explicite, jamais de secret).
+        try:
+            await db.audit_log.insert_one({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "scope": "trip_classification",
+                "strategy": CLASSIFICATION_STRATEGY_PRIVACY,
+                "tenant_id": tenant_id,
+                "trip_id": trip.get("id"),
+                "vehicle_id": vid,
+                "old_classification": current,
+                "new_classification": cls,
+                "reason": "privacy_history_strict",
+            })
+        except Exception:
+            pass
+        updated += 1
     return updated
 
 

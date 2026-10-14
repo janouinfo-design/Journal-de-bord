@@ -1,604 +1,458 @@
+#!/usr/bin/env python3
 """
-Backend test for vehicle resolution bug fix in 4 driver endpoints.
+Test validation for GET /api/livre/driver/km-summary driver-centered aggregation fix.
 
-BUG FIXED: These 4 endpoints were resolving the active vehicle via the old BLE session
-(`ble_engine.get_current_session`) instead of the persistent assignment
-(`vehicle_assignment.resolve_active_vehicle`). This caused issues when a driver had an
-ACTIVE assignment but NO BLE session - the endpoints would return `vehicle_id=None`.
+Review request: Validate that km-summary aggregates across ALL vehicles of the driver,
+not just the active vehicle. The vehicle_id (active) is returned for CONTEXT but does
+NOT filter the km aggregation.
 
-THE FIX: Now they resolve via `resolve_active_vehicle(db, driver_id, tenant_id)` as
-PRIORITY, with fallback to BLE session.
-
-ENDPOINTS FIXED (all in identification.py, prefix /api/livre):
-1. GET /api/livre/driver/km-summary (most critical)
-2. GET /api/livre/driver/vehicle/odometer
-3. GET /api/livre/driver/my-vehicle
-4. POST /api/livre/driver/sos
-
-TEST SCENARIO:
-1. Create/identify a driver user + generate auth token
-2. Create an ACTIVE assignment for this driver + a vehicle_id from tenant 'default',
-   status=ACTIVE. Ensure NO BLE session exists (to isolate the "assignment without BLE
-   session" case)
-3. Create some trips for this vehicle_id, tenant 'default', with start_time recent
-   (today, ISO UTC), some classification='professional' with distance_km
-4. Call GET /api/livre/driver/km-summary?period=today with the driver token
-5. Verify vehicle_id is NON-null, available=true, pro_km reflects trips
-6. Test FALLBACK: delete ACTIVE assignment, verify km-summary returns vehicle_id=None
-7. Test other endpoints: my-vehicle, odometer, sos
+Test scenario:
+1. Create 1 test driver + 2 vehicles (KM2TEST_VEH_A, KM2TEST_VEH_B)
+2. Create trips TODAY with specific km values
+3. Verify aggregation across both vehicles
+4. Verify vehicle_id context vs filtering
+5. Verify AVL16 fallback behavior (flag OFF by default)
+6. Verify other driver/tenant isolation
+7. Clean up test data
 """
+import asyncio
 import os
 import sys
 import uuid
-import asyncio
 from datetime import datetime, timezone, timedelta
-import httpx
+from zoneinfo import ZoneInfo
 
 # Add backend to path
 sys.path.insert(0, '/app/backend')
 
-# Environment setup
-os.environ.setdefault('MONGO_URL', 'mongodb://localhost:27017')
-os.environ.setdefault('DB_NAME', 'journal_logitrak')
-os.environ.setdefault('JWT_SECRET', 'dev-local-only-secret-not-for-production-4b1c9e')
-
-from app.db import get_db
-from app.auth import create_access_token
 from motor.motor_asyncio import AsyncIOMotorClient
+import httpx
 
-# Backend URL from .env
-BACKEND_URL = "https://driver-ui-desync.preview.emergentagent.com"
+# Configuration
+BACKEND_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001")
+if not BACKEND_URL.startswith("http"):
+    BACKEND_URL = f"https://{BACKEND_URL}"
+API_BASE = f"{BACKEND_URL}/api"
 
-# Test credentials from .env
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "journal_logitrak")
+
+# Test credentials
 DRIVER_EMAIL = "chauffeur@logitrak.ch"
 DRIVER_PASSWORD = "Test1234!"
 
-# Test data IDs (UUIDs)
-TEST_DRIVER_ID = str(uuid.uuid4())
-TEST_VEHICLE_ID = str(uuid.uuid4())
-TEST_ASSIGNMENT_ID = str(uuid.uuid4())
-TENANT_ID = "default"
+# Test data prefix
+PREFIX = "KM2TEST_"
+
+# Timezone
+TZ = ZoneInfo("Europe/Zurich")
 
 
-async def setup_test_data():
-    """Setup test data: driver, vehicle, ACTIVE assignment (NO BLE session), trips."""
-    print("\n=== SETUP TEST DATA ===")
+class TestContext:
+    def __init__(self):
+        self.db = None
+        self.client = None
+        self.driver_token = None
+        self.driver_id = None
+        self.tenant_id = "default"
+        self.vehicle_a_id = None
+        self.vehicle_b_id = None
+        self.trip_ids = []
+        self.assignment_id = None
+        self.other_driver_id = None
+        self.other_trip_id = None
+        
+    async def setup_db(self):
+        """Connect to MongoDB"""
+        self.client = AsyncIOMotorClient(MONGO_URL)
+        self.db = self.client[DB_NAME]
+        print(f"✓ Connected to MongoDB: {MONGO_URL}/{DB_NAME}")
+        
+    async def cleanup_db(self):
+        """Close MongoDB connection"""
+        if self.client:
+            self.client.close()
+            print("✓ Closed MongoDB connection")
     
-    # Connect to MongoDB
-    client = AsyncIOMotorClient(os.environ['MONGO_URL'])
-    db = client[os.environ['DB_NAME']]
+    async def login_driver(self):
+        """Login as test driver and get token"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{API_BASE}/auth/login",
+                json={"email": DRIVER_EMAIL, "password": DRIVER_PASSWORD}
+            )
+            if resp.status_code != 200:
+                raise Exception(f"Login failed: {resp.status_code} {resp.text}")
+            data = resp.json()
+            self.driver_token = data["access_token"]
+            
+            # Get driver_id from /auth/me
+            resp = await client.get(
+                f"{API_BASE}/auth/me",
+                headers={"Authorization": f"Bearer {self.driver_token}"}
+            )
+            if resp.status_code != 200:
+                raise Exception(f"Get /auth/me failed: {resp.status_code} {resp.text}")
+            user = resp.json()
+            
+            # Get driver record
+            driver = await self.db.drivers.find_one(
+                {"email": DRIVER_EMAIL, "tenant_id": self.tenant_id},
+                {"_id": 0, "id": 1}
+            )
+            if not driver:
+                raise Exception(f"Driver record not found for {DRIVER_EMAIL}")
+            self.driver_id = driver["id"]
+            
+            print(f"✓ Logged in as {DRIVER_EMAIL}, driver_id={self.driver_id}")
     
-    # 1. Find or create driver user
-    user = await db.users.find_one({"email": DRIVER_EMAIL}, {"_id": 0})
-    if not user:
-        print(f"❌ Driver user {DRIVER_EMAIL} not found in DB")
-        return None, None, None
-    
-    print(f"✅ Found driver user: {user.get('email')}")
-    
-    # 2. Find driver record by email (driver records use email, not user_id)
-    driver = await db.drivers.find_one({"email": DRIVER_EMAIL}, {"_id": 0})
-    if not driver:
-        print(f"❌ Driver record not found for email {DRIVER_EMAIL}")
-        return None, None, None
-    
-    driver_id = driver["id"]
-    print(f"✅ Found driver record: {driver.get('name')} (id: {driver_id})")
-    
-    # 3. Find an existing vehicle from tenant 'default' or create test vehicle
-    vehicle = await db.vehicles.find_one({"tenant_id": TENANT_ID}, {"_id": 0})
-    if not vehicle:
-        # Create test vehicle
-        vehicle_id = TEST_VEHICLE_ID
-        vehicle = {
-            "id": vehicle_id,
-            "tenant_id": TENANT_ID,
-            "plate": "TEST-FIX-001",
-            "model": "FMC130",
-            "label": "Test Vehicle Fix",
-            "active": True,
-            "navixy_tracker_id": None,
+    async def create_test_vehicles(self):
+        """Create 2 test vehicles"""
+        self.vehicle_a_id = f"{PREFIX}VEH_A_{uuid.uuid4().hex[:8]}"
+        self.vehicle_b_id = f"{PREFIX}VEH_B_{uuid.uuid4().hex[:8]}"
+        
+        vehicle_a = {
+            "id": self.vehicle_a_id,
+            "tenant_id": self.tenant_id,
+            "plate": f"{PREFIX}PLATE_A",
+            "model": f"{PREFIX}MODEL_A",
+            "label": f"{PREFIX}LABEL_A",
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.vehicles.insert_one(dict(vehicle))
-        print(f"✅ Created test vehicle: {vehicle['plate']} (id: {vehicle_id})")
-    else:
-        vehicle_id = vehicle["id"]
-        print(f"✅ Using existing vehicle: {vehicle.get('plate')} (id: {vehicle_id})")
+        vehicle_b = {
+            "id": self.vehicle_b_id,
+            "tenant_id": self.tenant_id,
+            "plate": f"{PREFIX}PLATE_B",
+            "model": f"{PREFIX}MODEL_B",
+            "label": f"{PREFIX}LABEL_B",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        
+        await self.db.vehicles.insert_one(vehicle_a)
+        await self.db.vehicles.insert_one(vehicle_b)
+        
+        print(f"✓ Created vehicle A: {self.vehicle_a_id}")
+        print(f"✓ Created vehicle B: {self.vehicle_b_id}")
     
-    # 4. Ensure NO BLE session exists for this driver (critical for test)
-    await db.driver_sessions.delete_many({"driver_id": driver_id, "status": "active"})
-    print(f"✅ Ensured NO BLE session exists for driver {driver_id}")
+    async def create_test_trips(self):
+        """Create test trips TODAY with specific km values"""
+        now_local = datetime.now(timezone.utc).astimezone(TZ)
+        today_start = now_local.replace(hour=8, minute=0, second=0, microsecond=0)
+        
+        trips = [
+            # VEH_A: professional 12.7, personal 7.4
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": self.tenant_id,
+                "driver_id": self.driver_id,
+                "vehicle_id": self.vehicle_a_id,
+                "classification": "professional",
+                "auto_classified": True,
+                "distance_km": 12.7,
+                "start_time": (today_start + timedelta(hours=0)).astimezone(timezone.utc).isoformat(),
+                "end_time": (today_start + timedelta(hours=1)).astimezone(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": self.tenant_id,
+                "driver_id": self.driver_id,
+                "vehicle_id": self.vehicle_a_id,
+                "classification": "personal",
+                "auto_classified": True,
+                "distance_km": 7.4,
+                "start_time": (today_start + timedelta(hours=1)).astimezone(timezone.utc).isoformat(),
+                "end_time": (today_start + timedelta(hours=2)).astimezone(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            # VEH_B: professional 32.7, personal 20.3, manual professional 10.0, None 5.0
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": self.tenant_id,
+                "driver_id": self.driver_id,
+                "vehicle_id": self.vehicle_b_id,
+                "classification": "professional",
+                "auto_classified": True,
+                "distance_km": 32.7,
+                "start_time": (today_start + timedelta(hours=2)).astimezone(timezone.utc).isoformat(),
+                "end_time": (today_start + timedelta(hours=3)).astimezone(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": self.tenant_id,
+                "driver_id": self.driver_id,
+                "vehicle_id": self.vehicle_b_id,
+                "classification": "personal",
+                "auto_classified": True,
+                "distance_km": 20.3,
+                "start_time": (today_start + timedelta(hours=3)).astimezone(timezone.utc).isoformat(),
+                "end_time": (today_start + timedelta(hours=4)).astimezone(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": self.tenant_id,
+                "driver_id": self.driver_id,
+                "vehicle_id": self.vehicle_b_id,
+                "classification": "professional",
+                "auto_classified": False,  # MANUAL
+                "distance_km": 10.0,
+                "start_time": (today_start + timedelta(hours=4)).astimezone(timezone.utc).isoformat(),
+                "end_time": (today_start + timedelta(hours=5)).astimezone(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": self.tenant_id,
+                "driver_id": self.driver_id,
+                "vehicle_id": self.vehicle_b_id,
+                "classification": None,  # None should NOT be counted
+                "auto_classified": True,
+                "distance_km": 5.0,
+                "start_time": (today_start + timedelta(hours=5)).astimezone(timezone.utc).isoformat(),
+                "end_time": (today_start + timedelta(hours=6)).astimezone(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+        
+        for trip in trips:
+            await self.db.trips.insert_one(trip)
+            self.trip_ids.append(trip["id"])
+        
+        print(f"✓ Created {len(trips)} test trips TODAY")
+        print(f"  - VEH_A: professional=12.7, personal=7.4")
+        print(f"  - VEH_B: professional=32.7, personal=20.3, manual_professional=10.0, None=5.0")
+        print(f"  - Expected: PRO=55.4 (12.7+32.7+10.0), PRIVATE=27.7 (7.4+20.3)")
     
-    # 5. Create ACTIVE assignment (source of truth)
-    # First, clean up any existing ACTIVE assignments for this driver
-    await db.vehicle_assignments.update_many(
-        {"driver_id": driver_id, "status": "ACTIVE"},
-        {"$set": {"status": "ENDED", "ended_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    async def create_active_assignment(self):
+        """Create ACTIVE assignment on VEH_A"""
+        self.assignment_id = str(uuid.uuid4())
+        assignment = {
+            "id": self.assignment_id,
+            "tenant_id": self.tenant_id,
+            "driver_id": self.driver_id,
+            "vehicle_id": self.vehicle_a_id,
+            "status": "ACTIVE",
+            "assignment_started_at": datetime.now(timezone.utc).isoformat(),
+            "segment_started_at": datetime.now(timezone.utc).isoformat(),
+            "source": "TEST",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self.db.vehicle_assignments.insert_one(assignment)
+        print(f"✓ Created ACTIVE assignment on VEH_A: {self.assignment_id}")
     
-    assignment_id = TEST_ASSIGNMENT_ID
-    assignment = {
-        "id": assignment_id,
-        "tenant_id": TENANT_ID,
-        "driver_id": driver_id,
-        "vehicle_id": vehicle_id,
-        "status": "ACTIVE",
-        "assignment_started_at": datetime.now(timezone.utc).isoformat(),
-        "segment_started_at": datetime.now(timezone.utc).isoformat(),
-        "previous_vehicle_id": None,
-        "ended_at": None,
-        "ended_by": None,
-        "end_reason": None,
-        "source": "TEST_SETUP",
-        "created_by": "backend_test.py",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "last_event_id": None,
-    }
-    await db.vehicle_assignments.insert_one(dict(assignment))
-    print(f"✅ Created ACTIVE assignment: driver {driver_id} → vehicle {vehicle_id}")
-    
-    # 6. Create test trips (professional classification) for today
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Clean up any existing test trips
-    await db.trips.delete_many({"vehicle_id": vehicle_id, "tenant_id": TENANT_ID,
-                                 "start_time": {"$gte": today_start.isoformat()}})
-    
-    trips = [
-        {
-            "id": str(uuid.uuid4()),
-            "tenant_id": TENANT_ID,
-            "vehicle_id": vehicle_id,
-            "driver_id": driver_id,
-            "start_time": (today_start + timedelta(hours=8)).isoformat(),
-            "end_time": (today_start + timedelta(hours=9)).isoformat(),
-            "distance_km": 10.5,
+    async def create_other_driver_trip(self):
+        """Create a trip for another driver to verify isolation"""
+        # Create another driver
+        self.other_driver_id = str(uuid.uuid4())
+        other_driver = {
+            "id": self.other_driver_id,
+            "tenant_id": self.tenant_id,
+            "name": f"{PREFIX}OTHER_DRIVER",
+            "email": f"{PREFIX}other@test.com",
+            "active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self.db.drivers.insert_one(other_driver)
+        
+        # Create a trip for this other driver
+        now_local = datetime.now(timezone.utc).astimezone(TZ)
+        today_start = now_local.replace(hour=8, minute=0, second=0, microsecond=0)
+        
+        self.other_trip_id = str(uuid.uuid4())
+        other_trip = {
+            "id": self.other_trip_id,
+            "tenant_id": self.tenant_id,
+            "driver_id": self.other_driver_id,
+            "vehicle_id": self.vehicle_a_id,  # Same vehicle
             "classification": "professional",
-            "start_address": "Lausanne",
-            "end_address": "Genève",
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "tenant_id": TENANT_ID,
-            "vehicle_id": vehicle_id,
-            "driver_id": driver_id,
-            "start_time": (today_start + timedelta(hours=10)).isoformat(),
-            "end_time": (today_start + timedelta(hours=11)).isoformat(),
-            "distance_km": 5.3,
-            "classification": "professional",
-            "start_address": "Genève",
-            "end_address": "Nyon",
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "tenant_id": TENANT_ID,
-            "vehicle_id": vehicle_id,
-            "driver_id": driver_id,
-            "start_time": (today_start + timedelta(hours=14)).isoformat(),
-            "end_time": (today_start + timedelta(hours=14, minutes=30)).isoformat(),
-            "distance_km": 2.1,
-            "classification": "personal",
-            "start_address": "Nyon",
-            "end_address": "Nyon Centre",
-        },
-    ]
+            "auto_classified": True,
+            "distance_km": 99.9,  # Should NOT be counted
+            "start_time": (today_start + timedelta(hours=6)).astimezone(timezone.utc).isoformat(),
+            "end_time": (today_start + timedelta(hours=7)).astimezone(timezone.utc).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self.db.trips.insert_one(other_trip)
+        print(f"✓ Created trip for OTHER driver (should NOT be counted): 99.9 km")
     
-    for trip in trips:
-        await db.trips.insert_one(dict(trip))
+    async def test_km_summary_today(self):
+        """Test GET /api/livre/driver/km-summary?period=today"""
+        print("\n=== TEST: period=today ===")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{API_BASE}/livre/driver/km-summary?period=today",
+                headers={"Authorization": f"Bearer {self.driver_token}"}
+            )
+            if resp.status_code != 200:
+                raise Exception(f"GET km-summary failed: {resp.status_code} {resp.text}")
+            
+            data = resp.json()
+            print(f"Response: {data}")
+            
+            # Verify aggregation across both vehicles
+            assert data["pro_km"] == 55.4, f"Expected pro_km=55.4, got {data['pro_km']}"
+            assert data["private_km"] == 27.7, f"Expected private_km=27.7, got {data['private_km']}"
+            
+            # Verify vehicle_id is VEH_A (context, not filter)
+            assert data["vehicle_id"] == self.vehicle_a_id, \
+                f"Expected vehicle_id={self.vehicle_a_id}, got {data['vehicle_id']}"
+            
+            # Verify available
+            assert data["available"] is True, f"Expected available=True, got {data['available']}"
+            
+            # Verify private_km_source (with AVL16 flag OFF, should be GPS_FALLBACK or GPS_TRIPS_DRIVER)
+            assert data["private_km_source"] in ["GPS_FALLBACK", "GPS_TRIPS_DRIVER"], \
+                f"Expected GPS source, got {data['private_km_source']}"
+            
+            print("✓ period=today: pro_km=55.4, private_km=27.7, vehicle_id=VEH_A (context)")
+            print("✓ Aggregation across BOTH vehicles verified")
+            print("✓ vehicle_id does NOT filter km (correct)")
     
-    print(f"✅ Created {len(trips)} test trips (2 professional: 10.5 + 5.3 = 15.8 km, 1 personal: 2.1 km)")
+    async def test_km_summary_week(self):
+        """Test GET /api/livre/driver/km-summary?period=week"""
+        print("\n=== TEST: period=week ===")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{API_BASE}/livre/driver/km-summary?period=week",
+                headers={"Authorization": f"Bearer {self.driver_token}"}
+            )
+            if resp.status_code != 200:
+                raise Exception(f"GET km-summary week failed: {resp.status_code} {resp.text}")
+            
+            data = resp.json()
+            print(f"Response: {data}")
+            
+            # Should include today's trips
+            assert data["pro_km"] >= 55.4, f"Expected pro_km>=55.4, got {data['pro_km']}"
+            assert data["private_km"] >= 27.7, f"Expected private_km>=27.7, got {data['private_km']}"
+            
+            print(f"✓ period=week: pro_km={data['pro_km']}, private_km={data['private_km']}")
+            print("✓ Includes today's trips")
     
-    # 7. Generate auth token for driver
-    token = create_access_token(
-        user_id=user["id"],
-        email=user["email"],
-        role=user.get("role", "driver"),
-        extra_claims={"tenant_id": TENANT_ID}
-    )
-    print(f"✅ Generated auth token for driver")
+    async def test_km_summary_month(self):
+        """Test GET /api/livre/driver/km-summary?period=month"""
+        print("\n=== TEST: period=month ===")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{API_BASE}/livre/driver/km-summary?period=month",
+                headers={"Authorization": f"Bearer {self.driver_token}"}
+            )
+            if resp.status_code != 200:
+                raise Exception(f"GET km-summary month failed: {resp.status_code} {resp.text}")
+            
+            data = resp.json()
+            print(f"Response: {data}")
+            
+            # Should include today's trips
+            assert data["pro_km"] >= 55.4, f"Expected pro_km>=55.4, got {data['pro_km']}"
+            assert data["private_km"] >= 27.7, f"Expected private_km>=27.7, got {data['private_km']}"
+            
+            print(f"✓ period=month: pro_km={data['pro_km']}, private_km={data['private_km']}")
+            print("✓ Includes today's trips")
     
-    client.close()
-    return driver_id, vehicle_id, token
-
-
-async def cleanup_test_data(driver_id, vehicle_id):
-    """Cleanup test data created during setup."""
-    print("\n=== CLEANUP TEST DATA ===")
-    
-    client = AsyncIOMotorClient(os.environ['MONGO_URL'])
-    db = client[os.environ['DB_NAME']]
-    
-    # Clean up assignment
-    result = await db.vehicle_assignments.delete_many({
-        "driver_id": driver_id,
-        "vehicle_id": vehicle_id,
-        "source": "TEST_SETUP"
-    })
-    print(f"✅ Deleted {result.deleted_count} test assignments")
-    
-    # Clean up trips
-    result = await db.trips.delete_many({
-        "vehicle_id": vehicle_id,
-        "tenant_id": TENANT_ID
-    })
-    print(f"✅ Deleted {result.deleted_count} test trips")
-    
-    # Clean up test vehicle if it was created
-    if vehicle_id == TEST_VEHICLE_ID:
-        result = await db.vehicles.delete_many({"id": vehicle_id})
-        print(f"✅ Deleted {result.deleted_count} test vehicles")
-    
-    client.close()
-
-
-async def test_km_summary_with_assignment(token, driver_id, vehicle_id):
-    """Test 1: GET /api/livre/driver/km-summary with ACTIVE assignment (NO BLE session)."""
-    print("\n=== TEST 1: GET /api/livre/driver/km-summary (ACTIVE assignment, NO BLE) ===")
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"{BACKEND_URL}/api/livre/driver/km-summary?period=today",
-            headers={"Authorization": f"Bearer {token}"}
+    async def cleanup_test_data(self):
+        """Clean up all test data"""
+        print("\n=== CLEANUP ===")
+        
+        # Delete trips
+        result = await self.db.trips.delete_many({"id": {"$in": self.trip_ids}})
+        print(f"✓ Deleted {result.deleted_count} test trips")
+        
+        # Delete other driver trip
+        if self.other_trip_id:
+            result = await self.db.trips.delete_one({"id": self.other_trip_id})
+            print(f"✓ Deleted other driver trip")
+        
+        # Delete other driver
+        if self.other_driver_id:
+            result = await self.db.drivers.delete_one({"id": self.other_driver_id})
+            print(f"✓ Deleted other driver")
+        
+        # Delete assignment
+        if self.assignment_id:
+            result = await self.db.vehicle_assignments.delete_one({"id": self.assignment_id})
+            print(f"✓ Deleted assignment")
+        
+        # Delete vehicles
+        result = await self.db.vehicles.delete_many({
+            "id": {"$in": [self.vehicle_a_id, self.vehicle_b_id]}
+        })
+        print(f"✓ Deleted {result.deleted_count} test vehicles")
+        
+        # Verify cleanup
+        remaining_trips = await self.db.trips.count_documents({"id": {"$in": self.trip_ids}})
+        remaining_vehicles = await self.db.vehicles.count_documents({
+            "id": {"$in": [self.vehicle_a_id, self.vehicle_b_id]}
+        })
+        remaining_assignments = await self.db.vehicle_assignments.count_documents(
+            {"id": self.assignment_id}
         )
         
-        print(f"Status: {response.status_code}")
+        assert remaining_trips == 0, f"Cleanup failed: {remaining_trips} trips remaining"
+        assert remaining_vehicles == 0, f"Cleanup failed: {remaining_vehicles} vehicles remaining"
+        assert remaining_assignments == 0, f"Cleanup failed: assignment remaining"
         
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-        
-        data = response.json()
-        print(f"Response: {data}")
-        
-        # CRITICAL VERIFICATION: vehicle_id must be NON-null (proves resolve_active_vehicle is used)
-        if data.get("vehicle_id") is None:
-            print(f"❌ FAILED: vehicle_id is None (bug NOT fixed - still using BLE session only)")
-            return False
-        
-        if data.get("vehicle_id") != vehicle_id:
-            print(f"❌ FAILED: vehicle_id mismatch. Expected {vehicle_id}, got {data.get('vehicle_id')}")
-            return False
-        
-        print(f"✅ PASS: vehicle_id is {vehicle_id} (resolve_active_vehicle working)")
-        
-        # Verify available=true
-        if not data.get("available"):
-            print(f"❌ FAILED: available is False, expected True")
-            return False
-        
-        print(f"✅ PASS: available=true")
-        
-        # Verify pro_km reflects trips (should be ~15.8 km from 2 professional trips)
-        pro_km = data.get("pro_km")
-        if pro_km is None:
-            print(f"❌ FAILED: pro_km is None (should reflect trips)")
-            return False
-        
-        if pro_km < 15.0 or pro_km > 16.0:
-            print(f"⚠️  WARNING: pro_km={pro_km}, expected ~15.8 km (may be other trips in DB)")
-        else:
-            print(f"✅ PASS: pro_km={pro_km} (reflects professional trips)")
-        
-        # private_km can be None or a value (AVL16 feature may be disabled)
-        private_km = data.get("private_km")
-        print(f"ℹ️  private_km={private_km} (can be None if AVL16 disabled, or value from GPS fallback)")
-        
-        return True
-
-
-async def test_km_summary_fallback(token):
-    """Test 2: GET /api/livre/driver/km-summary with NO assignment and NO BLE session (fallback)."""
-    print("\n=== TEST 2: GET /api/livre/driver/km-summary (NO assignment, NO BLE - fallback) ===")
-    
-    # First, delete the ACTIVE assignment to test fallback
-    client_db = AsyncIOMotorClient(os.environ['MONGO_URL'])
-    db = client_db[os.environ['DB_NAME']]
-    
-    result = await db.vehicle_assignments.update_many(
-        {"status": "ACTIVE", "source": "TEST_SETUP"},
-        {"$set": {"status": "ENDED", "ended_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    print(f"✅ Temporarily ended {result.modified_count} ACTIVE assignments for fallback test")
-    client_db.close()
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"{BACKEND_URL}/api/livre/driver/km-summary?period=today",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-        
-        data = response.json()
-        print(f"Response: {data}")
-        
-        # VERIFICATION: vehicle_id should be None (honest behavior, no invention)
-        if data.get("vehicle_id") is not None:
-            print(f"⚠️  WARNING: vehicle_id is not None (may have BLE session or other assignment)")
-        else:
-            print(f"✅ PASS: vehicle_id is None (honest fallback)")
-        
-        # Verify available=false
-        if data.get("available"):
-            print(f"⚠️  WARNING: available is True (expected False without active vehicle)")
-        else:
-            print(f"✅ PASS: available=false")
-        
-        return True
-
-
-async def test_my_vehicle_with_assignment(token, driver_id, vehicle_id):
-    """Test 3: GET /api/livre/driver/my-vehicle with ACTIVE assignment (NO BLE session)."""
-    print("\n=== TEST 3: GET /api/livre/driver/my-vehicle (ACTIVE assignment, NO BLE) ===")
-    
-    # Restore ACTIVE assignment (delete existing first to avoid duplicate key error)
-    client_db = AsyncIOMotorClient(os.environ['MONGO_URL'])
-    db = client_db[os.environ['DB_NAME']]
-    
-    # Delete all ACTIVE assignments for this driver first
-    await db.vehicle_assignments.delete_many(
-        {"driver_id": driver_id, "status": "ACTIVE"}
-    )
-    
-    # Create new ACTIVE assignment
-    assignment = {
-        "id": str(uuid.uuid4()),
-        "tenant_id": TENANT_ID,
-        "driver_id": driver_id,
-        "vehicle_id": vehicle_id,
-        "status": "ACTIVE",
-        "assignment_started_at": datetime.now(timezone.utc).isoformat(),
-        "segment_started_at": datetime.now(timezone.utc).isoformat(),
-        "previous_vehicle_id": None,
-        "ended_at": None,
-        "ended_by": None,
-        "end_reason": None,
-        "source": "TEST_SETUP",
-        "created_by": "backend_test.py",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "last_event_id": None,
-    }
-    await db.vehicle_assignments.insert_one(dict(assignment))
-    print(f"✅ Restored ACTIVE assignment for test")
-    client_db.close()
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"{BACKEND_URL}/api/livre/driver/my-vehicle",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-        
-        data = response.json()
-        print(f"Response: {data}")
-        
-        # VERIFICATION: should return vehicle from assignment with current=true
-        vehicle = data.get("vehicle")
-        if not vehicle:
-            print(f"❌ FAILED: vehicle is None (should return vehicle from assignment)")
-            return False
-        
-        if vehicle.get("id") != vehicle_id:
-            print(f"❌ FAILED: vehicle.id mismatch. Expected {vehicle_id}, got {vehicle.get('id')}")
-            return False
-        
-        print(f"✅ PASS: vehicle.id={vehicle_id} (resolve_active_vehicle working)")
-        
-        # Verify current=true
-        if not data.get("current"):
-            print(f"❌ FAILED: current is False, expected True")
-            return False
-        
-        print(f"✅ PASS: current=true (vehicle from assignment marked as current)")
-        
-        return True
-
-
-async def test_odometer_with_assignment(token, driver_id, vehicle_id):
-    """Test 4: GET /api/livre/driver/vehicle/odometer with ACTIVE assignment (NO BLE session)."""
-    print("\n=== TEST 4: GET /api/livre/driver/vehicle/odometer (ACTIVE assignment, NO BLE) ===")
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"{BACKEND_URL}/api/livre/driver/vehicle/odometer",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-        
-        data = response.json()
-        print(f"Response: {data}")
-        
-        # VERIFICATION: should resolve vehicle from assignment (not 'no_active_vehicle')
-        if data.get("vehicle_id") is None:
-            print(f"❌ FAILED: vehicle_id is None (should resolve from assignment)")
-            return False
-        
-        if data.get("vehicle_id") != vehicle_id:
-            print(f"❌ FAILED: vehicle_id mismatch. Expected {vehicle_id}, got {data.get('vehicle_id')}")
-            return False
-        
-        print(f"✅ PASS: vehicle_id={vehicle_id} (resolve_active_vehicle working)")
-        
-        # Status can be UNAVAILABLE (Navixy not configured), but vehicle_id should be resolved
-        status = data.get("status")
-        if status == "UNAVAILABLE":
-            print(f"ℹ️  status=UNAVAILABLE (Navixy not configured, expected in preview)")
-        else:
-            print(f"ℹ️  status={status}")
-        
-        # Reason should NOT be 'no_active_vehicle' when assignment exists
-        reason = data.get("reason")
-        if reason == "no_active_vehicle":
-            print(f"❌ FAILED: reason='no_active_vehicle' (assignment exists, bug NOT fixed)")
-            return False
-        
-        print(f"✅ PASS: reason is not 'no_active_vehicle' (vehicle resolved from assignment)")
-        
-        return True
-
-
-async def test_sos_with_assignment(token, driver_id, vehicle_id):
-    """Test 5: POST /api/livre/driver/sos with ACTIVE assignment (NO BLE session)."""
-    print("\n=== TEST 5: POST /api/livre/driver/sos (ACTIVE assignment, NO BLE) ===")
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{BACKEND_URL}/api/livre/driver/sos",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"note": "Test SOS - vehicle resolution fix", "share_location": True}
-        )
-        
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-        
-        data = response.json()
-        print(f"Response: {data}")
-        
-        # VERIFICATION: should have vehicle_selected=true (vehicle resolved from assignment)
-        if not data.get("vehicle_selected"):
-            print(f"❌ FAILED: vehicle_selected is False (should resolve vehicle from assignment)")
-            return False
-        
-        print(f"✅ PASS: vehicle_selected=true (vehicle resolved from assignment)")
-        
-        # Verify ok=true
-        if not data.get("ok"):
-            print(f"❌ FAILED: ok is False")
-            return False
-        
-        print(f"✅ PASS: ok=true (SOS created successfully)")
-        
-        # Clean up SOS alert
-        sos_id = data.get("sos_id")
-        if sos_id:
-            client_db = AsyncIOMotorClient(os.environ['MONGO_URL'])
-            db = client_db[os.environ['DB_NAME']]
-            await db.sos_alerts.delete_one({"id": sos_id})
-            print(f"✅ Cleaned up SOS alert {sos_id}")
-            client_db.close()
-        
-        return True
-
-
-async def test_private_mode_non_regression(token):
-    """Test 6: GET /api/livre/driver/private-mode (non-regression check)."""
-    print("\n=== TEST 6: GET /api/livre/driver/private-mode (non-regression) ===")
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"{BACKEND_URL}/api/livre/driver/private-mode",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-        
-        data = response.json()
-        print(f"Response: {data}")
-        
-        # Just verify it returns successfully (feature may be disabled)
-        print(f"✅ PASS: private-mode endpoint working (non-regression)")
-        
-        # Check if vehicle_id is resolved (should use same logic)
-        vehicle_id = data.get("vehicle_id")
-        if vehicle_id:
-            print(f"✅ PASS: vehicle_id={vehicle_id} (consistent with other endpoints)")
-        else:
-            print(f"ℹ️  vehicle_id=None (feature may be disabled or no vehicle)")
-        
-        return True
+        print("✓ Cleanup verified: all test data removed")
 
 
 async def main():
-    """Main test execution."""
-    print("=" * 80)
-    print("BACKEND TEST: Vehicle Resolution Bug Fix")
-    print("Testing 4 driver endpoints with ACTIVE assignment (NO BLE session)")
-    print("=" * 80)
-    
-    # Setup
-    driver_id, vehicle_id, token = await setup_test_data()
-    if not driver_id or not vehicle_id or not token:
-        print("\n❌ SETUP FAILED: Could not create test data")
-        return
-    
-    results = []
+    ctx = TestContext()
     
     try:
-        # Run tests
-        results.append(("km-summary (with assignment)", 
-                       await test_km_summary_with_assignment(token, driver_id, vehicle_id)))
-        results.append(("km-summary (fallback)", 
-                       await test_km_summary_fallback(token)))
-        results.append(("my-vehicle (with assignment)", 
-                       await test_my_vehicle_with_assignment(token, driver_id, vehicle_id)))
-        results.append(("odometer (with assignment)", 
-                       await test_odometer_with_assignment(token, driver_id, vehicle_id)))
-        results.append(("sos (with assignment)", 
-                       await test_sos_with_assignment(token, driver_id, vehicle_id)))
-        results.append(("private-mode (non-regression)", 
-                       await test_private_mode_non_regression(token)))
+        print("=" * 80)
+        print("KM-SUMMARY DRIVER-CENTERED AGGREGATION TEST")
+        print("=" * 80)
         
-    finally:
+        # Setup
+        await ctx.setup_db()
+        await ctx.login_driver()
+        
+        # Create test data
+        await ctx.create_test_vehicles()
+        await ctx.create_test_trips()
+        await ctx.create_active_assignment()
+        await ctx.create_other_driver_trip()
+        
+        # Run tests
+        await ctx.test_km_summary_today()
+        await ctx.test_km_summary_week()
+        await ctx.test_km_summary_month()
+        
         # Cleanup
-        await cleanup_test_data(driver_id, vehicle_id)
+        await ctx.cleanup_test_data()
+        
+        print("\n" + "=" * 80)
+        print("✅ ALL TESTS PASSED")
+        print("=" * 80)
+        print("\nVERIFICATION SUMMARY:")
+        print("✓ (a) pro_km = 55.4 (sum of BOTH vehicles, NOT just VEH_A=12.7)")
+        print("✓ (b) private_km = 27.7 (sum of BOTH vehicles)")
+        print("✓ (c) vehicle_id = VEH_A (active vehicle for context, does NOT filter km)")
+        print("✓ (d) available = true")
+        print("✓ (e) private_km_source = GPS_FALLBACK (AVL16 flag OFF)")
+        print("✓ (f) period=week includes today's trips")
+        print("✓ (g) period=month includes today's trips")
+        print("✓ (h) classification=None NOT counted (5.0 km excluded)")
+        print("✓ (i) manual professional IS counted (10.0 km included)")
+        print("✓ (j) other driver trips NOT counted (isolation verified)")
+        
+    except Exception as e:
+        print(f"\n❌ TEST FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Attempt cleanup on failure
+        try:
+            await ctx.cleanup_test_data()
+        except:
+            pass
+        
+        sys.exit(1)
     
-    # Summary
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY")
-    print("=" * 80)
-    
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
-    
-    for test_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status}: {test_name}")
-    
-    print(f"\nTotal: {passed}/{total} tests passed")
-    
-    if passed == total:
-        print("\n🎉 ALL TESTS PASSED - Bug fix validated in PREVIEW")
-        print("\nVERIFIED:")
-        print("- resolve_active_vehicle() is used as PRIORITY in all 4 endpoints")
-        print("- vehicle_id is correctly resolved from ACTIVE assignment (NO BLE session)")
-        print("- km-summary returns vehicle_id + pro_km (not None)")
-        print("- my-vehicle returns vehicle from assignment with current=true")
-        print("- odometer resolves vehicle from assignment (not 'no_active_vehicle')")
-        print("- sos resolves vehicle from assignment (vehicle_selected=true)")
-        print("- Fallback behavior works (vehicle_id=None when no assignment/BLE)")
-        print("\nNOTE: This validates BACKEND LOGIC in PREVIEW.")
-        print("PROD data/AVL16/classification should be verified separately.")
-    else:
-        print(f"\n❌ {total - passed} TEST(S) FAILED - Bug fix NOT fully validated")
-        print("\nPlease review failed tests above.")
+    finally:
+        await ctx.cleanup_db()
 
 
 if __name__ == "__main__":

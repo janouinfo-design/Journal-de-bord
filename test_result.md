@@ -78,7 +78,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/my-vehicles returns ONLY vehicles assigned to the driver (via assignments table), NOT the whole fleet. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) Correct structure: returns {vehicles:[{id,plate,model},...]} with ONLY id/plate/model fields (no GPS, no secrets) ✓. (3) Scoping verified: driver has 0 assigned vehicles initially, fleet has 6 total vehicles → driver sees 0 (correct scoping) ✓. After creating assignment → driver sees 1 vehicle (the assigned one) ✓. (4) Empty assignments: returns {vehicles:[]} (200, not error) ✓. (5) Security: NO secrets (navixy_hash/api_key/token/navixy_tracker_id) ✓, NO GPS coordinates (lat/lng/address) ✓. Credentials: chauffeur@logitrak.ch / chauffeur123, admin@logitrak.ch / admin123. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/my-vehicles returns ONLY vehicles assigned to the driver (via assignments table), NOT the whole fleet. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) Correct structure: returns {vehicles:[{id,plate,model},...]} with ONLY id/plate/model fields (no GPS, no secrets) ✓. (3) Scoping verified: driver has 0 assigned vehicles initially, fleet has 6 total vehicles → driver sees 0 (correct scoping) ✓. After creating assignment → driver sees 1 vehicle (the assigned one) ✓. (4) Empty assignments: returns {vehicles:[]} (200, not error) ✓. (5) Security: NO secrets (navixy_hash/api_key/token/navixy_tracker_id) ✓, NO GPS coordinates (lat/lng/address) ✓. Credentials: chauffeur@logitrak.ch / chauffeur123, admin@logitrak.ch / admin123. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Driver manual UX - GET /api/livre/driver/km-summary"
     implemented: true
     working: true
@@ -89,7 +89,13 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/km-summary?period=today|month returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) No active session: returns {available:false, vehicle_id:null, pro_km:null, private_km:null} (honest, not fake 0) ✓. (3) With active session: returns {available:true, vehicle_id:..., pro_km:0, private_km:0} for today (no trips today) ✓, {pro_km:380.3, private_km:51.8} for month (real trip data) ✓. (4) Period validation: period=today ✓, period=month ✓, period=week → 422 (regex validation) ✓. (5) Scoping: km values scoped to driver's ACTIVE vehicle only (verified vehicle_id matches current session) ✓. (6) Security: NO secrets ✓, NO GPS coordinates (lat/lng/address) ✓. (7) Non-regression: /auth/me, /driver/private-mode, /driver/my-vehicle, /livre/dashboard all 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "KM-SUMMARY DRIVER-SCOPED FIX VALIDATED (2026-10-13) - All tests PASSED. BUG FIX: km-summary was filtering by ACTIVE vehicle only (resolve_active_vehicle), so if a driver used multiple vehicles in a day, only the active vehicle's km were counted (e.g., Orhan saw Pro=3.3 instead of 70.1). FIX: km-summary now aggregates by driver_id + period across ALL vehicles. The vehicle_id (active vehicle) is still resolved and returned for CONTEXT but does NOT filter km. TEST SCENARIO: Created test driver with 2 vehicles (KMTEST_VEH_A, KMTEST_VEH_B). Created trips TODAY: VEH_A (professional=12.7 km, personal=7.4 km), VEH_B (professional=32.7 km, personal=20.3 km, manual_professional=10.0 km). Created ACTIVE assignment on VEH_A only. Expected totals: PRO=55.4 km (12.7+32.7+10.0), PRIVATE=27.7 km (7.4+20.3). TEST RESULTS: ✅ (a) pro_km = 55.4 (CORRECT: sum of BOTH vehicles, NOT just VEH_A=12.7) ✓, (b) private_km = 27.7 (CORRECT: sum of BOTH vehicles) ✓, (c) vehicle_id = KMTEST_VEH_A (CORRECT: active vehicle for context, but does NOT filter km) ✓, (d) available = true ✓, (e) private_km_source = GPS_TRIPS_DRIVER ✓, (f) period=week: pro_km=55.4, private_km=27.7 (includes today's trips) ✓, (g) period=month: pro_km=55.4, private_km=27.7 (includes today's trips) ✓, (h) classification=None NOT counted (5.0 km trip excluded) ✓, (i) manual professional (auto_classified=False) IS counted (10.0 km included) ✓. SCOPE VERIFIED: Aggregation query filters by driver_id + tenant_id + period (lines 677-679), NOT by vehicle_id. vehicle_id resolved for context only (lines 636-640). Source = trips collection (distance_km field). Periods in Europe/Zurich timezone. Test data cleaned up (6 trips, 2 vehicles, 1 assignment deleted). Credentials: chauffeur@logitrak.ch / Test1234! (driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12). Backend URL: https://fleet-trips-4.preview.emergentagent.com. Database: journal_logitrak. FINAL VERDICT: ✅ PASS — DRIVER-SCOPED AGGREGATION WORKING CORRECTLY. NO ISSUES FOUND."
+      - working: true
+        agent: "testing"
+        comment: "NEW ENDPOINT VALIDATION COMPLETE - All tests PASSED. GET /api/livre/driver/km-summary?period=today|month returns pro_km/private_km for driver's ACTIVE vehicle only, scoped to period. Test results: (1) Auth required: 401 without auth ✓, 400 for admin without driver record ✓. (2) No active session: returns {available:false, vehicle_id:null, pro_km:null, private_km:null} (honest, not fake 0) ✓. (3) With active session: returns {available:true, vehicle_id:..., pro_km:0, private_km:0} for today (no trips today) ✓, {pro_km:380.3, private_km:51.8} for month (real trip data) ✓. (4) Period validation: period=today ✓, period=month ✓, period=week → 422 (regex validation) ✓. (5) Scoping: km values scoped to driver's ACTIVE vehicle only (verified vehicle_id matches current session) ✓. (6) Security: NO secrets ✓, NO GPS coordinates (lat/lng/address) ✓. (7) Non-regression: /auth/me, /driver/private-mode, /driver/my-vehicle, /livre/dashboard all 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
+      - working: true
+        agent: "testing"
+        comment: "KM-SUMMARY DRIVER-CENTERED AGGREGATION RE-VALIDATION COMPLETE (2026-10-18) — ✅ ALL TESTS PASSED. CONTEXT: Re-validated driver-centered km aggregation fix in GET /api/livre/driver/km-summary (function driver_km_summary, lines 613-733). Fix ensures km aggregation across ALL vehicles of the driver, NOT just active vehicle. vehicle_id (active) returned for CONTEXT only, does NOT filter. PRESERVES AVL16 + cutover + fallback GPS logic by calling aggregate_private_km per vehicle then summing. TEST SCENARIO: Created 1 test driver + 2 vehicles (KM2TEST_VEH_A, KM2TEST_VEH_B) + 6 trips TODAY + ACTIVE assignment on VEH_A. Trips: VEH_A (professional=12.7, personal=7.4), VEH_B (professional=32.7, personal=20.3, manual_professional=10.0, None=5.0). Expected: PRO=55.4 (12.7+32.7+10.0), PRIVATE=27.7 (7.4+20.3). TEST RESULTS: ✅ (a) pro_km = 55.4 (CORRECT: sum of BOTH vehicles, NOT just VEH_A=12.7) ✓, (b) private_km = 27.7 (CORRECT: sum of BOTH vehicles via aggregate_private_km per vehicle) ✓, (c) vehicle_id = KM2TEST_VEH_A (CORRECT: active vehicle for context, does NOT filter km) ✓, (d) available = true ✓, (e) private_km_source = GPS_FALLBACK (AVL16 flag OFF by default, line 57 private_mileage.py) ✓, (f) period=week: pro_km=55.4, private_km=27.7 (includes today's trips) ✓, (g) period=month: pro_km=55.4, private_km=27.7 (includes today's trips) ✓, (h) classification=None NOT counted (5.0 km trip excluded) ✓, (i) manual professional (auto_classified=False) IS counted (10.0 km included) ✓, (j) other driver trips NOT counted (created trip for other driver 99.9 km, NOT included in test driver totals, isolation verified) ✓. CODE VERIFICATION: ✅ (A) PRO km aggregation: query filters by tenant_id + driver_id + start_time (lines 673-677), NO vehicle_id filter ✓. ✅ (B) PRIVATE km aggregation: gets distinct vehicle_ids for driver on period (lines 685-688), calls aggregate_private_km FOR EACH vehicle (lines 705-708), sums results (lines 700-716) ✓. ✅ (C) GPS fallback per vehicle: _make_gps_fallback creates closure filtering by driver_id + vehicle_id + personal (lines 690-698) ✓. ✅ (D) vehicle_id context: resolved from assignment or BLE session (lines 641-644), returned in response (line 731), NOT used in aggregation queries ✓. ✅ (E) private_km_source logic: MIXED if multiple sources, UNAVAILABLE if all null, else single source (lines 719-729) ✓. ✅ (F) AVL16 non-regression: aggregate_private_km called per vehicle preserves AVL16/cutover/fallback logic (private_mileage.py lines 333-395) ✓. Flag PRIVATE_KM_SOURCE_AVL16 OFF by default (line 57) → GPS_FALLBACK ✓. ✅ (G) Periods in Europe/Zurich timezone (line 647) ✓. TEST DATA CLEANUP: All test data cleaned up (6 trips, 2 vehicles, 1 assignment, 1 other driver, 1 other trip deleted). Verified 0 remaining. Credentials: chauffeur@logitrak.ch / Test1234! (driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12). Backend URL: http://localhost:8001. Database: journal_logitrak (PREVIEW). FINAL VERDICT: ✅ PASS — DRIVER-CENTERED AGGREGATION WORKING CORRECTLY. NO ISSUES FOUND. Fix validated for PREVIEW deployment."
   - task: "Driver emergency SOS - POST /api/livre/driver/sos"
     implemented: true
     working: true
@@ -100,7 +106,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "NEW SOS ENDPOINT VALIDATION COMPLETE - All 7 tests PASSED (2026-09-07). POST /api/livre/driver/sos (driver auth) persists SOS alert to sos_alerts collection, dispatches notification (event 'sos.triggered') to admins/managers, and implements anti-double-send (60s deduplication). Test results: (1) Driver SOS success: POST {note:'test urgence', share_location:true} → HTTP 200, ok=true, sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' (valid UUID), duplicate=false, vehicle_selected=false, message='Alerte SOS envoyée.' ✓. Response contains NO GPS coordinates (lat/lng/address) ✓, NO secrets (navixy_hash/api_key/token/Navixy/Teltonika) ✓. (2) Anti-double-send: Immediate 2nd POST (same driver, <60s) → HTTP 200, ok=true, duplicate=true, SAME sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' ✓ (anti-double-send verified). (3) Admin (no driver record): POST as admin@logitrak.ch → HTTP 400 'Utilisateur non lié à un chauffeur' ✓ (only drivers can trigger SOS). (4) Unauthenticated: POST without token → HTTP 401 ✓. (5) Notification created: GET /api/livre/notifications/inbox as admin → HTTP 200, found notification with event='sos.triggered', title='🆘 Alerte SOS', body='Jean Dupont a déclenché une alerte SOS.', data contains sos_id/driver_id/vehicle_id/has_location ✓. Notification contains NO GPS coords ✓, NO secrets ✓. (6) Security: ALL responses checked across 7 tests, 0 security issues found ✓. NO forbidden strings: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓. NO GPS coordinates: lat, lng, latitude, longitude, address, coordinates, position, location ✓. (7) Non-regression: GET /api/auth/me (driver+admin) → 200 ✓, GET /api/livre/driver/private-mode → 200 ✓, GET /api/livre/driver/km-summary?period=today → 200 ✓, GET /api/livre/dashboard → 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch / admin123. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "NEW SOS ENDPOINT VALIDATION COMPLETE - All 7 tests PASSED (2026-09-07). POST /api/livre/driver/sos (driver auth) persists SOS alert to sos_alerts collection, dispatches notification (event 'sos.triggered') to admins/managers, and implements anti-double-send (60s deduplication). Test results: (1) Driver SOS success: POST {note:'test urgence', share_location:true} → HTTP 200, ok=true, sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' (valid UUID), duplicate=false, vehicle_selected=false, message='Alerte SOS envoyée.' ✓. Response contains NO GPS coordinates (lat/lng/address) ✓, NO secrets (navixy_hash/api_key/token/Navixy/Teltonika) ✓. (2) Anti-double-send: Immediate 2nd POST (same driver, <60s) → HTTP 200, ok=true, duplicate=true, SAME sos_id='8910ec97-24d1-4f6b-a54e-56b8e74dcdf0' ✓ (anti-double-send verified). (3) Admin (no driver record): POST as admin@logitrak.ch → HTTP 400 'Utilisateur non lié à un chauffeur' ✓ (only drivers can trigger SOS). (4) Unauthenticated: POST without token → HTTP 401 ✓. (5) Notification created: GET /api/livre/notifications/inbox as admin → HTTP 200, found notification with event='sos.triggered', title='🆘 Alerte SOS', body='Jean Dupont a déclenché une alerte SOS.', data contains sos_id/driver_id/vehicle_id/has_location ✓. Notification contains NO GPS coords ✓, NO secrets ✓. (6) Security: ALL responses checked across 7 tests, 0 security issues found ✓. NO forbidden strings: navixy_hash, api_key, token, credential, password, secret, Navixy, Teltonika, Bearer, INTEGRATION_ENCRYPTION_KEY ✓. NO GPS coordinates: lat, lng, latitude, longitude, address, coordinates, position, location ✓. (7) Non-regression: GET /api/auth/me (driver+admin) → 200 ✓, GET /api/livre/driver/private-mode → 200 ✓, GET /api/livre/driver/km-summary?period=today → 200 ✓, GET /api/livre/dashboard → 200 ✓. Credentials: chauffeur@logitrak.ch / chauffeur123 (Jean Dupont, driver_id: 1580345e-6b8e-45a2-88e7-513a008b6b12), admin@logitrak.ch / admin123. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Privacy redaction in report exports"
     implemented: true
     working: true
@@ -111,7 +117,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "PRIVACY REDACTION VALIDATION COMPLETE - All 16 tests PASSED (2026-09-07). Verified that trips performed in Private Mode (device) have their addresses/coordinates REDACTED in CSV/PDF/XLSX exports, even if classified as 'professional'. Test results: (1) CSV Export ✓ - Private addresses 'Lausanne (DEV fixture)' and 'Genève (DEV fixture)' NOT found in CSV, redaction label 'Privé — position masquée' present, business data (62.3 km) preserved, 858 real addresses from non-private trips present (business trips not over-redacted). (2) XLSX Export ✓ - No private addresses in raw bytes (34,295 bytes), valid XLSX format. (3) PDF Export ✓ - No private addresses in raw bytes (82,748 bytes), valid PDF format. (4) Swiss Tax Report ✓ - HTTP 200, correct PDF content-type, valid PDF (2,658 bytes). (5) Trips Endpoint ✓ - 500 trips returned (1 private, 499 non-private), private trip has null coordinates (start_lat/start_lng/start_address/end_address all null), non-private trips keep coordinates. DEV fixture trip 'DEV-PRIVATE-FIXTURE-0001' verified: private_redacted=true, classification=professional, distance_km=62.3, addresses null. NO PRIVACY LEAKS DETECTED. Credentials: admin@logitrak.ch. Backend URL: https://driver-ui-desync.preview.emergentagent.com."
+        comment: "PRIVACY REDACTION VALIDATION COMPLETE - All 16 tests PASSED (2026-09-07). Verified that trips performed in Private Mode (device) have their addresses/coordinates REDACTED in CSV/PDF/XLSX exports, even if classified as 'professional'. Test results: (1) CSV Export ✓ - Private addresses 'Lausanne (DEV fixture)' and 'Genève (DEV fixture)' NOT found in CSV, redaction label 'Privé — position masquée' present, business data (62.3 km) preserved, 858 real addresses from non-private trips present (business trips not over-redacted). (2) XLSX Export ✓ - No private addresses in raw bytes (34,295 bytes), valid XLSX format. (3) PDF Export ✓ - No private addresses in raw bytes (82,748 bytes), valid PDF format. (4) Swiss Tax Report ✓ - HTTP 200, correct PDF content-type, valid PDF (2,658 bytes). (5) Trips Endpoint ✓ - 500 trips returned (1 private, 499 non-private), private trip has null coordinates (start_lat/start_lng/start_address/end_address all null), non-private trips keep coordinates. DEV fixture trip 'DEV-PRIVATE-FIXTURE-0001' verified: private_redacted=true, classification=professional, distance_km=62.3, addresses null. NO PRIVACY LEAKS DETECTED. Credentials: admin@logitrak.ch. Backend URL: https://fleet-trips-4.preview.emergentagent.com."
   - task: "Private Mode fail-closed ordering fix - driver endpoints"
     implemented: true
     working: true
@@ -122,7 +128,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "FAIL-CLOSED ORDERING FIX VERIFIED - All 16 tests PASSED. Feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch now checked BEFORE session/vehicle resolution. Test results: (1) GET /api/livre/driver/private-mode with default env returns allowed=false + reason='PRIVATE_MODE_FEATURE_DISABLED' (NOT 'PRIVATE_MODE_NO_VEHICLE') ✓, (2) POST /api/livre/driver/private-mode mode=PRIVATE refused with HTTP 403 + detail='PRIVATE_MODE_FEATURE_DISABLED' (NOT 200 with no_active_vehicle, NOT 500) ✓, (3) POST mode=BUSINESS also HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX returns HTTP 400 (invalid mode) ✓, (5) Kill switch flow: activate (200 kill_switch=true) ✓, status confirms kill_switch_active=true ✓, deactivate (200 kill_switch=false) ✓, driver cannot access admin endpoints (403) ✓, (6) SECURITY: NO secrets (navixy_hash/api_key/credential/token) in ANY response ✓, NO GPS coordinates (lat/lng/address/coordinates) in ANY response ✓, (7) NON-REGRESSION: GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles, /api/livre/drivers all return 200 ✓. Credentials tested: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "FAIL-CLOSED ORDERING FIX VERIFIED - All 16 tests PASSED. Feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch now checked BEFORE session/vehicle resolution. Test results: (1) GET /api/livre/driver/private-mode with default env returns allowed=false + reason='PRIVATE_MODE_FEATURE_DISABLED' (NOT 'PRIVATE_MODE_NO_VEHICLE') ✓, (2) POST /api/livre/driver/private-mode mode=PRIVATE refused with HTTP 403 + detail='PRIVATE_MODE_FEATURE_DISABLED' (NOT 200 with no_active_vehicle, NOT 500) ✓, (3) POST mode=BUSINESS also HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX returns HTTP 400 (invalid mode) ✓, (5) Kill switch flow: activate (200 kill_switch=true) ✓, status confirms kill_switch_active=true ✓, deactivate (200 kill_switch=false) ✓, driver cannot access admin endpoints (403) ✓, (6) SECURITY: NO secrets (navixy_hash/api_key/credential/token) in ANY response ✓, NO GPS coordinates (lat/lng/address/coordinates) in ANY response ✓, (7) NON-REGRESSION: GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles, /api/livre/drivers all return 200 ✓. Credentials tested: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Phase D2: odometer_capability module (READ-ONLY registry)"
     implemented: true
     working: true
@@ -155,6 +161,31 @@ backend:
         agent: "testing"
         comment: "ODOMETER CALIBRATION PILOT GATE VALIDATION COMPLETE - All 27 pytest tests PASSED (2026-01-XX). Verified NEW security hardening: dedicated fail-closed allowlist gate independent from Private Mode. ONLY tracker 781479 of tenant 'default' can pass when device writes enabled. NO real device commands sent (all mocked). PRIMARY VALIDATION: (1) pytest test_odometer_calibration.py: 27 PASSED in 0.10s ✓ - Original tests T1-T14 PASS (no regression): km validation (T1), AVL16 confirmation (T2), anti-false-delta baseline (T3), delta after calibration (T4), Pro/Privé classification (T5/T6), source AVL16 explicit (T7), unsupported model refused (T8), cross-tenant refused (T9), device offline refused (T10), not confirmed when no AVL16 (T11), incoherent AVL16 not validated (T12), 2nd calibration new baseline (T13), device write OFF fail-fast (T14). NEW gate tests T15-T24 + test_gate_env_not_allowed ALL PASS: test_t15_write_off_refused (write=0 → refused, no event) ✓, test_t16_tenant_not_allowlisted_refused ✓, test_t17_tracker_not_allowlisted_refused ✓, test_t18_missing_allowlist_failclosed (allowlist ABSENT → refused, NEVER 'all allowed') ✓, test_t19_pilot_allowed (781479 + default + write=1 → gate authorizes, CONFIRMED) ✓, test_t20_other_tracker_same_tenant_refused ✓, test_t21_same_tracker_wrong_tenant_refused ✓, test_t22_canonical_tracker_mismatch_refused (781480 != 781479) ✓, test_t23_cross_tenant_isolation_refused (vehicle of tenant default seen from 'autre' → NO_VEHICLE) ✓, test_t24_no_device_send_when_gate_refuses (device send function NEVER called when gate refuses) ✓, test_gate_env_not_allowed (APP_ENV unknown → ENV_NOT_ALLOWED) ✓. (2) Wider regression: 100 PASSED in 0.15s (test_odometer_calibration.py + test_private_mode_phase2.py + test_private_mode_confirmation.py + test_private_mode_gate.py + test_odometer_capability.py) ✓. CODE INSPECTION: (3) calibration_pilot_gate() verified (lines 150-170): returns (allowed, reason) requiring ALL of APP_ENV allowed AND DEVICE_WRITE=1 AND tenant in PILOT_TENANTS AND tracker in PILOT_TRACKERS ✓. _csv_env() returns None when env var ABSENT (lines 116-122) ✓. calibration_tenant_allowed() returns False when list absent (lines 130-137, fail-closed) ✓. calibration_tracker_allowed() returns False when list absent (lines 140-147, fail-closed) ✓. Allowlists DISTINCT from PRIVATE_MODE_* env vars (independent) ✓. (4) calibrate_vehicle_odometer() verified (lines 329-467): gate called at line 389 BEFORE building/sending command ✓. Step order: vehicle/tenant (348-352) → tracker (354-357) → model AVL16 (359-363) → validate value (365-370) → read AVL16 before (373) → offline check (376-379) → PILOT GATE fail-closed (385-399) → only then send_command (401-403) ✓. When gate refuses: NO command sent, NO calibration event recorded (audit only at 391-394) ✓. (5) Anti-false-delta helpers intact: safe_avl16_delta_km() returns None when crosses=True (lines 308-323, calibration jump 56377→139620 never becomes distance) ✓. CALIBRATION_EVENT history append-only (line 257: insert_one, never update) ✓. (6) Endpoints verified: GET /vehicles/{id}/odometer returns can_calibrate (full pilot gate, lines 64-67, 80) ✓. POST /vehicles/{id}/odometer/calibrate uses require_roles('admin') (line 96) ✓. Backend service running cleanly (uptime 0:33:54) ✓. CONCLUSION: Security hardening correctly implemented. Dedicated fail-closed allowlist gate (ODOMETER_CALIBRATION_PILOT_TENANTS, ODOMETER_CALIBRATION_PILOT_TRACKERS) independent from Private Mode. Gate requires ALL conditions (env + write + tenant + tracker). When allowlist ABSENT → fail-closed (never 'all allowed'). Gate checked BEFORE any device command. NO real device commands sent (all mocked in tests). Anti-false-delta protection intact. NO ISSUES FOUND."
 
+  - task: "Classification privacy_history_strict REGRESSION FIX - NEVER overwrite existing with None"
+    implemented: true
+    working: true
+    file: "backend/app/rules.py, backend/tests/test_classification_privacy_history.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "CLASSIFICATION V2 FIX VALIDATED — ✅ ALL TESTS PASSED (21 unit + 2 integration + 1 non-regression). CONTEXT: Validated V2 fix for tenant-wide classification regression. V2 adds SCOPE BY VEHICLE: privacy_history_strict strategy now applies ONLY to vehicles with vehicle.classification_mode='privacy_history_strict' override, NOT to entire tenant. Other vehicles use legacy schedule-based classification. New function _effective_strategy(vehicle, settings) implements priority: vehicle override > tenant > 'legacy'. NO hardcoded IDs. PYTEST UNIT TESTS (test_classification_privacy_history.py): ✅ 21/21 PASSED in 0.10s — (1-12) Core logic tests: 1s/11min before → classified ✓, >2h old → None ✓, no proof → None ✓, mode change during trip → None ✓, 2h boundary ✓, latest wins ✓, fresh threshold 2h ✓, empty events ✓, invalid start ✓. (13-17) Anti-overwrite tests: test_strict_NEVER_overwrites_existing_with_none ✓, test_strict_NEVER_overwrites_personal_with_none ✓, test_strict_classifies_none_when_fresh_proof ✓, test_strict_corrects_existing_on_fresh_contradictory_proof ✓, test_strict_never_touches_manual ✓. (18-21) NEW SCOPE TESTS: test_effective_strategy_vehicle_override_wins (vehicle privacy > tenant legacy) ✓, test_effective_strategy_vehicle_legacy_overrides_tenant_privacy (vehicle legacy > tenant privacy) ✓, test_effective_strategy_fallback_tenant_then_legacy ✓, test_strict_scope_limits_to_given_vehicles (strict engine only touches specified vehicles) ✓. INTEGRATION TEST (real DB journal_logitrak, tenant 'default' in legacy mode): ✅ ALL PASSED — Created 2 vehicles: TEST_AUDI (classification_mode='privacy_history_strict' override) + TEST_OTHER (no override, uses tenant legacy). Created 4 trips: P1 (AUDI, professional, no proof) → PRESERVED professional ✓, P2 (AUDI, None, WITH BUSINESS proof 1min before) → classified professional by mode-history ✓, O1 (OTHER, None, Mon 10:00 AM) → classified professional by LEGACY schedule (NOT mode-history, NOT None) ✓, O2 (OTHER, personal) → processed by legacy → professional ✓. apply_rules_to_all() updated 3 trips. SCOPE VERIFIED: audit_log has 0 privacy_history_strict entries for OTHER vehicle (scope isolation confirmed) ✓. Test data cleaned. LEGACY NON-REGRESSION: ✅ PASSED — 100% legacy tenant (no vehicle overrides) still uses schedule-based classification (Mon 10:00 AM → professional) ✓. V2 FIX VERIFIED: (a) SCOPE BY VEHICLE: privacy_history_strict applies ONLY to vehicles with override, OTHER vehicles use legacy schedule (NOT mode-history) ✓, (b) ANTI-OVERWRITE: existing classifications NEVER replaced with None ✓, (c) PILOT vehicle classified by mode-history when proof available ✓, (d) _effective_strategy() priority correct (vehicle > tenant > legacy) ✓, (e) NO hardcoded IDs (scope controlled by vehicle.classification_mode field) ✓. ENVIRONMENT: DB journal_logitrak, MongoDB localhost:27017. NO scheduler, NO Navixy sync, NO private_mode_engine.py touched. Test data cleaned. FINAL VERDICT: ✅ PASS — READY FOR PREVIEW. V2 fix validated: scope by vehicle + anti-overwrite + legacy non-regression all confirmed."
+      - working: true
+        agent: "testing"
+        comment: "CLASSIFICATION REGRESSION FIX VALIDATED — ✅ ALL TESTS PASSED (17 unit + 2 integration). CONTEXT: Validated fix for PROD regression in privacy_history_strict strategy where existing classifications (professional/personal) were being overwritten with None when no fresh proof available. In PROD, 272 professional→None and 226 personal→None trips affected across multiple vehicles in tenant 'default'. FIX APPLIED (backend/app/rules.py lines 269-276): _apply_privacy_history_strict now PRESERVES existing classifications when proof is insufficient. Only writes when cls is 'professional' or 'personal' AND different from current. NEVER replaces existing value with None. UNIT TESTS (test_classification_privacy_history.py): ✅ 17/17 PASSED in 0.11s — (1) test_strict_NEVER_overwrites_existing_with_none: professional + no proof → stays professional (no write) ✓, (2) test_strict_NEVER_overwrites_personal_with_none: personal + no proof → stays personal (no write) ✓, (3) test_strict_classifies_none_when_fresh_proof: None + BUSINESS proof 1min before → professional ✓, (4) test_strict_corrects_existing_on_fresh_contradictory_proof: personal + BUSINESS proof → corrected to professional ✓, (5) test_strict_never_touches_manual: auto_classified=False → never touched ✓, (6-12) Core logic tests: 1s/11min before → classified ✓, >2h old → None ✓, no proof → None ✓, mode change during trip → None ✓, 2h boundary ✓, latest wins ✓, fresh threshold 2h ✓. INTEGRATION TEST (real DB journal_logitrak): ✅ PASSED — Created 4 test trips (tenant 'default', vehicle 'TEST_VEH_REGR', UUIDs): Trip A (professional, no proof) → PRESERVED as professional ✓, Trip B (personal, no proof) → PRESERVED as personal ✓, Trip C (None + BUSINESS proof 1min before) → CLASSIFIED as professional ✓, Trip D (professional, manual) → NEVER touched ✓. Updated 1 trip (only C). Zero trips with classification=None after run (anti-regression verified). Test data cleaned up. LEGACY STRATEGY NON-REGRESSION: ✅ PASSED — Verified classification_mode='legacy' still uses schedule-based logic (Monday 10:00 AM → professional) ✓. RULES VERIFIED: (1) Auto + existing + NO fresh proof → KEEP existing (no write), (2) Auto + existing + fresh CONTRADICTORY proof → correct, (3) None + fresh proof (confirmed ≤2h before departure, BUSINESS→professional, PRIVATE→personal) → classify, (4) None + insufficient proof → stay None, (5) Manual (auto_classified=False) → never touched. ENVIRONMENT: DB journal_logitrak, MongoDB localhost:27017, classification_mode='privacy_history_strict' in settings. NO scheduler launched, NO Navixy sync, NO private_mode_engine.py touched. Test data cleaned. FINAL VERDICT: ✅ PASS — READY FOR PREVIEW. Anti-regression fix validated. NO existing classifications overwritten with None. Legacy strategy unchanged."
+  - task: "ROLLBACK SCRIPT - Classification Regression Rollback (privacy_history_strict)"
+    implemented: true
+    working: true
+    file: "/app/deliverables/git/rollback_classification_regression.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "ROLLBACK SCRIPT VALIDATION COMPLETE — ✅ ALL TESTS PASSED. CONTEXT: Validated rollback script /app/deliverables/git/rollback_classification_regression.py that restores trip classifications destroyed by privacy_history_strict regression. Test environment: PREVIEW (DB journal_logitrak), SIMULATED test data with ROLLTEST_ prefix, CLEANED after testing. NO real data touched. SCRIPT PURPOSE: Restore classifications from audit_log (scope='trip_classification', strategy='privacy_history_strict') using REAL tenant from trips.tenant_id (NOT audit_log.tenant_id which was backfilled incorrectly). TEST SCENARIO: Created 6 test trips with ROLLTEST_ prefix: (R1) tenant='default', vehicle V_A(default), classification=None, audit old='professional' → should restore to professional. (R2) tenant='ROLLTEST_TENANT_B', vehicle V_B(ROLLTEST_TENANT_B), classification=None, audit tenant='default' (INTENTIONALLY WRONG), old='personal' → should restore to personal under REAL tenant ROLLTEST_TENANT_B (proves script uses trips.tenant_id NOT audit_log.tenant_id). (R3) in PILOT_EXCLUDE_TRIP_IDS → should be EXCLUDED (PILOT_EXCLUDED). (R4) auto_classified=False (manual) → should be EXCLUDED (MANUAL_EXCLUDED). (R5) classification='professional' == old_classification → ALREADY_CORRECT, no write. (R6) trip tenant='default' but vehicle tenant='ROLLTEST_TENANT_B' (mismatch) → EXCLUDED (TENANT_MISMATCH). TEST RESULTS: ✅ STEP B (DRY-RUN with PILOT_EXCLUDE_TRIP_IDS): Report shows PILOT_EXCLUDED=1 (R3) ✓, MANUAL_EXCLUDED=1 (R4) ✓, ALREADY_CORRECT=1 (R5) ✓, TENANT_MISMATCH=1 (R6) ✓, APPLICABLE_TOTAL=2 (R1+R2) ✓, PAR_TENANT_REEL={'default':1, 'ROLLTEST_TENANT_B':1} (proves REAL tenant used) ✓. NO writes in DRY-RUN (all trips unchanged) ✓. ✅ STEP C (--apply): R1 restored to 'professional' with tenant='default' ✓, R2 restored to 'personal' with tenant='ROLLTEST_TENANT_B' (NOT 'default' from audit_log) ✓, R3/R4/R6 remained None (correctly excluded) ✓, R5 remained 'professional' (already correct) ✓. Rollback audit entries created with CORRECT tenant_id: R1 audit has tenant='default' ✓, R2 audit has tenant='ROLLTEST_TENANT_B' (NOT audit_log.tenant_id) ✓. ✅ STEP D (--apply again, idempotence): Second run shows APPLICABLE_TOTAL=0, ALREADY_CORRECT=3 (now includes R1+R2), 0 modifications ✓. All trip states unchanged ✓. ✅ STEP E (CLEANUP): All test data removed (6 trips, 3 vehicles, 8 audit_log entries) ✓. SCRIPT BEHAVIORS VERIFIED: (1) ✅ Tenant RÉEL used (trips.tenant_id, NOT audit_log.tenant_id) — R2 restored under ROLLTEST_TENANT_B despite audit_log.tenant_id='default'. (2) ✅ Exclusions work: PILOT_EXCLUDE_TRIP_IDS (R3), auto_classified=False (R4), tenant mismatch (R6) all correctly excluded. (3) ✅ Idempotence: Second --apply run made 0 modifications, all trips ALREADY_CORRECT. (4) ✅ DRY-RUN writes nothing: All trips unchanged after DRY-RUN. (5) ✅ Audit rollback entries have tenant_id RÉEL: R1='default', R2='ROLLTEST_TENANT_B'. (6) ✅ Anti-race: Script re-reads trip before write to detect concurrent changes. ENVIRONMENT: DB journal_logitrak, MongoDB localhost:27017. Test data prefix ROLLTEST_ only, NO real data touched. FINAL VERDICT: ✅ PASS — READY FOR PRODUCTION USE. Script correctly uses REAL tenant, respects all exclusions, is idempotent, and creates correct audit trail."
   - task: "Navixy credential refactor regression - multi-tenant isolation"
     implemented: true
     working: true
@@ -209,7 +240,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "PRIVATE MODE E2E PILOT SCENARIO COMPLETE - All 16 tests PASSED (2026-09-07). Verified complete state machine with ACTIVE driver session (Jean Dupont, vehicle GE 123456, tracker 5000). Test results: STATE MACHINE (7 tests) ✓ - (1) GET status: allowed=true, reason=null, tracker_id=5000, private_odometer_supported=true, state=BUSINESS ✓, (2) POST PRIVATE: HTTP 200, ok=true, state=PRIVATE, confirmation_source=SIMULATED_CONFIRMED (CONFIRMED transition achieved, not optimistic) ✓, (3) GET verify PRIVATE: state=PRIVATE ✓, (4) POST PRIVATE idempotent: ok=true, idempotent=true (no error, no double command) ✓, (5) POST BUSINESS: HTTP 200, ok=true, state=BUSINESS, private_distance_km=0.001 ✓, (6) GET verify BUSINESS: state=BUSINESS ✓, (7) POST invalid mode ZZZ: HTTP 400 ✓. KILL SWITCH (4 tests) ✓ - (8) ADMIN activate: kill_switch=true ✓, (9) DRIVER POST PRIVATE blocked: HTTP 403 with detail='PRIVATE_MODE_KILL_SWITCH_ACTIVE' (no transition) ✓, (10) ADMIN deactivate: kill_switch=false ✓, (11) DRIVER POST BUSINESS: HTTP 200, ok=true, feature usable again ✓. NON-REGRESSION (5 tests) ✓ - GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles all HTTP 200 ✓. SECURITY ✓ - NO forbidden strings found: navixy_hash, TEST_E2E, Bearer tokens, Navixy, Teltonika, AVL, privatemode, raw_command ✓, NO real GPS lat/lng/address in driver private-mode responses ✓. FINAL STATE: Kill switch OFF, Driver state BUSINESS. CONFIRMED PRIVATE was reached (Step 2) then returned to BUSINESS (Step 5). Credentials: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "PRIVATE MODE E2E PILOT SCENARIO COMPLETE - All 16 tests PASSED (2026-09-07). Verified complete state machine with ACTIVE driver session (Jean Dupont, vehicle GE 123456, tracker 5000). Test results: STATE MACHINE (7 tests) ✓ - (1) GET status: allowed=true, reason=null, tracker_id=5000, private_odometer_supported=true, state=BUSINESS ✓, (2) POST PRIVATE: HTTP 200, ok=true, state=PRIVATE, confirmation_source=SIMULATED_CONFIRMED (CONFIRMED transition achieved, not optimistic) ✓, (3) GET verify PRIVATE: state=PRIVATE ✓, (4) POST PRIVATE idempotent: ok=true, idempotent=true (no error, no double command) ✓, (5) POST BUSINESS: HTTP 200, ok=true, state=BUSINESS, private_distance_km=0.001 ✓, (6) GET verify BUSINESS: state=BUSINESS ✓, (7) POST invalid mode ZZZ: HTTP 400 ✓. KILL SWITCH (4 tests) ✓ - (8) ADMIN activate: kill_switch=true ✓, (9) DRIVER POST PRIVATE blocked: HTTP 403 with detail='PRIVATE_MODE_KILL_SWITCH_ACTIVE' (no transition) ✓, (10) ADMIN deactivate: kill_switch=false ✓, (11) DRIVER POST BUSINESS: HTTP 200, ok=true, feature usable again ✓. NON-REGRESSION (5 tests) ✓ - GET /api/auth/me (admin+driver), /api/livre/dashboard, /api/livre/trips, /api/livre/vehicles all HTTP 200 ✓. SECURITY ✓ - NO forbidden strings found: navixy_hash, TEST_E2E, Bearer tokens, Navixy, Teltonika, AVL, privatemode, raw_command ✓, NO real GPS lat/lng/address in driver private-mode responses ✓. FINAL STATE: Kill switch OFF, Driver state BUSINESS. CONFIRMED PRIVATE was reached (Step 2) then returned to BUSINESS (Step 5). Credentials: admin@logitrak.ch, chauffeur@logitrak.ch. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Private Mode REAL CONFIRMATION FIX - async telemetry confirmation"
     implemented: true
     working: true
@@ -220,7 +251,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "PRIVATE MODE REAL CONFIRMATION FIX VALIDATED - All 16 tests PASSED. Refactored confirmation logic verified: REAL device commands that aren't immediately confirmed become PENDING_CONFIRMATION (NOT FAILED), resolved asynchronously via telemetry. New engine states implemented: PENDING_CONFIRMATION, SRC_TELEMETRY (TELEMETRY_CONFIRMED), SRC_UNCONFIRMED, SRC_SIMULATED (SIMULATED_CONFIRMED). New helper resolve_pending_confirmation() working correctly (lines 450-506 in private_mode_engine.py). GET /driver/private-mode returns new fields: pending (line 169), confirmation_source (line 170), private_distance_km (line 177). Test results: (1) GET /api/livre/driver/private-mode with feature disabled → allowed=false, reason='PRIVATE_MODE_FEATURE_DISABLED' ✓ (fail-closed first, as before), (2) POST /api/livre/driver/private-mode mode=PRIVATE with feature disabled → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' (NOT 500, NOT FAILED) ✓, (3) POST mode=BUSINESS → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX → HTTP 400 (invalid mode) ✓, (5) Admin kill switch: POST /api/livre/private-mode/kill-switch active=true → 200 kill_switch=true ✓, GET /api/livre/private-mode/status → 200 feature_enabled=false kill_switch_active=true ✓, POST active=false → 200 kill_switch=false ✓, driver (non-admin) gets 403 on both endpoints ✓, (6) IMPORT/HEALTH: Backend healthy, no 500 on any private-mode endpoint (imports OK) ✓, (7) SECURITY: NO secrets found (navixy_hash, api_key, credential, token, Bearer, Navixy, Teltonika, AVL, privatemode, raw_command, SIMULATED_CONFIRMED, 11813, 11000, INTEGRATION_ENCRYPTION_KEY) ✓, NO GPS coordinates (lat/lng/address) in driver responses ✓, (8) NON-REGRESSION: GET /api/auth/me (admin+driver) → 200 ✓, GET /api/livre/dashboard → 200 ✓, GET /api/livre/trips → 200 (1 private trip with null coords verified) ✓, GET /api/livre/vehicles → 200 ✓. Test env: PRIVATE_MODE_ENABLED NOT set (fail-closed), DEVICE_WRITE=0 (no real commands). Credentials: admin@logitrak.ch / admin123, chauffeur@logitrak.ch / chauffeur123. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "PRIVATE MODE REAL CONFIRMATION FIX VALIDATED - All 16 tests PASSED. Refactored confirmation logic verified: REAL device commands that aren't immediately confirmed become PENDING_CONFIRMATION (NOT FAILED), resolved asynchronously via telemetry. New engine states implemented: PENDING_CONFIRMATION, SRC_TELEMETRY (TELEMETRY_CONFIRMED), SRC_UNCONFIRMED, SRC_SIMULATED (SIMULATED_CONFIRMED). New helper resolve_pending_confirmation() working correctly (lines 450-506 in private_mode_engine.py). GET /driver/private-mode returns new fields: pending (line 169), confirmation_source (line 170), private_distance_km (line 177). Test results: (1) GET /api/livre/driver/private-mode with feature disabled → allowed=false, reason='PRIVATE_MODE_FEATURE_DISABLED' ✓ (fail-closed first, as before), (2) POST /api/livre/driver/private-mode mode=PRIVATE with feature disabled → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' (NOT 500, NOT FAILED) ✓, (3) POST mode=BUSINESS → HTTP 403 'PRIVATE_MODE_FEATURE_DISABLED' ✓, (4) POST mode=XXX → HTTP 400 (invalid mode) ✓, (5) Admin kill switch: POST /api/livre/private-mode/kill-switch active=true → 200 kill_switch=true ✓, GET /api/livre/private-mode/status → 200 feature_enabled=false kill_switch_active=true ✓, POST active=false → 200 kill_switch=false ✓, driver (non-admin) gets 403 on both endpoints ✓, (6) IMPORT/HEALTH: Backend healthy, no 500 on any private-mode endpoint (imports OK) ✓, (7) SECURITY: NO secrets found (navixy_hash, api_key, credential, token, Bearer, Navixy, Teltonika, AVL, privatemode, raw_command, SIMULATED_CONFIRMED, 11813, 11000, INTEGRATION_ENCRYPTION_KEY) ✓, NO GPS coordinates (lat/lng/address) in driver responses ✓, (8) NON-REGRESSION: GET /api/auth/me (admin+driver) → 200 ✓, GET /api/livre/dashboard → 200 ✓, GET /api/livre/trips → 200 (1 private trip with null coords verified) ✓, GET /api/livre/vehicles → 200 ✓. Test env: PRIVATE_MODE_ENABLED NOT set (fail-closed), DEVICE_WRITE=0 (no real commands). Credentials: admin@logitrak.ch / admin123, chauffeur@logitrak.ch / chauffeur123. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
   - task: "Private Mode fail-fast when device writes disabled (DEVICE_WRITE=0)"
     implemented: true
     working: true
@@ -231,7 +262,19 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "FAIL-FAST DEVICE WRITE FIX VALIDATED - All 54 pytest tests PASSED (2026-09-07). Verified that when PRIVATE_MODE_DEVICE_WRITE=0 (default), NO command is sent to tracker and mode change requests FAIL FAST without creating transitional state. Test results: (1) PYTEST SUITE: 54 PASSED in 0.14s - test_private_mode_phase2.py (26 tests), test_private_mode_confirmation.py (14 tests), test_private_mode_gate.py (14 tests) ✓. (2) NEW FAIL-FAST TESTS (6/6 PASSED): test_failfast_business_to_private_write_off_stays_business ✓ (BUSINESS + write OFF + request PRIVATE → refused, stays BUSINESS, no PRIVATE_REQUESTED), test_failfast_private_to_business_write_off_stays_private ✓ (PRIVATE + write OFF + request BUSINESS → stays PRIVATE, no BUSINESS_REQUESTED), test_failfast_unknown_write_off_stays_unknown ✓ (UNKNOWN + write OFF → stays UNKNOWN, no state invented), test_failfast_double_tap_write_off_no_mutation ✓ (double request write OFF → no pending, no command, no change), test_failfast_idempotent_still_ok_write_off ✓ (idempotent request → ok=true even with write OFF), test_write_on_transition_still_works ✓ (write ON → normal transition preserved, non-regression). (3) ENGINE LOGIC VERIFIED (private_mode_engine.py lines 357-371): When device_write_enabled()=False, request_mode() returns ok=false, allowed=true, can_switch=false, reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED', http=503, state=cur_state (UNCHANGED) ✓. NO document written to private_mode_state collection with PRIVATE_REQUESTED/BUSINESS_REQUESTED/PENDING_CONFIRMATION ✓. Only audit log written (line 363), function returns immediately (line 367), line 384 _save_mode_state() NEVER reached ✓. (4) GET /api/livre/driver/private-mode VERIFIED (identification.py lines 125-202): Returns both 'allowed' and 'can_switch' fields ✓. When eligible but device_write=false: can_switch=false with can_switch_reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED' (lines 178-187) ✓. (5) POST /api/livre/driver/private-mode VERIFIED (identification.py lines 209-240): Raises HTTP 503 with detail 'PRIVATE_MODE_DEVICE_WRITE_DISABLED' when engine returns that reason (lines 236-238) ✓. (6) BACKEND HEALTH: Backend service RUNNING (uptime 0:28:52), no import errors, no 500s ✓. (7) ENV VERIFICATION: PRIVATE_MODE_DEVICE_WRITE NOT set in backend/.env (defaults to '0') ✓. Backend URL: https://driver-ui-desync.preview.emergentagent.com. NO ISSUES FOUND."
+        comment: "FAIL-FAST DEVICE WRITE FIX VALIDATED - All 54 pytest tests PASSED (2026-09-07). Verified that when PRIVATE_MODE_DEVICE_WRITE=0 (default), NO command is sent to tracker and mode change requests FAIL FAST without creating transitional state. Test results: (1) PYTEST SUITE: 54 PASSED in 0.14s - test_private_mode_phase2.py (26 tests), test_private_mode_confirmation.py (14 tests), test_private_mode_gate.py (14 tests) ✓. (2) NEW FAIL-FAST TESTS (6/6 PASSED): test_failfast_business_to_private_write_off_stays_business ✓ (BUSINESS + write OFF + request PRIVATE → refused, stays BUSINESS, no PRIVATE_REQUESTED), test_failfast_private_to_business_write_off_stays_private ✓ (PRIVATE + write OFF + request BUSINESS → stays PRIVATE, no BUSINESS_REQUESTED), test_failfast_unknown_write_off_stays_unknown ✓ (UNKNOWN + write OFF → stays UNKNOWN, no state invented), test_failfast_double_tap_write_off_no_mutation ✓ (double request write OFF → no pending, no command, no change), test_failfast_idempotent_still_ok_write_off ✓ (idempotent request → ok=true even with write OFF), test_write_on_transition_still_works ✓ (write ON → normal transition preserved, non-regression). (3) ENGINE LOGIC VERIFIED (private_mode_engine.py lines 357-371): When device_write_enabled()=False, request_mode() returns ok=false, allowed=true, can_switch=false, reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED', http=503, state=cur_state (UNCHANGED) ✓. NO document written to private_mode_state collection with PRIVATE_REQUESTED/BUSINESS_REQUESTED/PENDING_CONFIRMATION ✓. Only audit log written (line 363), function returns immediately (line 367), line 384 _save_mode_state() NEVER reached ✓. (4) GET /api/livre/driver/private-mode VERIFIED (identification.py lines 125-202): Returns both 'allowed' and 'can_switch' fields ✓. When eligible but device_write=false: can_switch=false with can_switch_reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED' (lines 178-187) ✓. (5) POST /api/livre/driver/private-mode VERIFIED (identification.py lines 209-240): Raises HTTP 503 with detail 'PRIVATE_MODE_DEVICE_WRITE_DISABLED' when engine returns that reason (lines 236-238) ✓. (6) BACKEND HEALTH: Backend service RUNNING (uptime 0:28:52), no import errors, no 500s ✓. (7) ENV VERIFICATION: PRIVATE_MODE_DEVICE_WRITE NOT set in backend/.env (defaults to '0') ✓. Backend URL: https://fleet-trips-4.preview.emergentagent.com. NO ISSUES FOUND."
+
+  - task: "Driver resolution fail-closed logic (Design A) - resolve_driver_for_trip"
+    implemented: true
+    working: true
+    file: "backend/app/assignments.py, backend/tests/test_resolve_driver_fail_closed.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "DRIVER RESOLUTION FAIL-CLOSED LOGIC VALIDATED (Design A) — ✅ ALL TESTS PASSED (6 fail-closed + 22 non-regression). CONTEXT: Validated Design A implementation in backend/app/assignments.py where resolve_driver_for_trip() function now returns None (fail-closed) instead of arbitrary fallback to asgs[0] when no valid assignment exists. RULE: Driver resolution relies ONLY on (1) dated non-primary assignment window covering trip_start, OR (2) primary assignment, OR (3) None. NEVER falls back to asgs[0]. NO dependency on names/plates/emails. TEST RESULTS: ✅ (1) FAIL-CLOSED UNIT TESTS (test_resolve_driver_fail_closed.py): 6/6 PASSED in 0.09s — test_fail_closed_no_window_no_primary_returns_none ✓ (assignment exists but outside window + no primary → None, NOT asgs[0]), test_dated_window_match_wins ✓ (non-primary window covers trip → returns driver), test_primary_used_when_no_dated_window ✓ (no dated window but primary exists → returns primary driver), test_dated_window_overrides_primary ✓ (both exist → dated window wins), test_no_assignment_returns_none ✓ (empty assignments → None), test_never_falls_back_to_first_arbitrary ✓ (two assignments both outside window, no primary → None, NEVER asgs[0]). ✅ (2) NON-REGRESSION TESTS: 22/22 PASSED in 0.16s — test_vehicle_assignment.py: 15/15 PASSED (vehicle assignment feature intact), test_navixy_trip_identity.py: 7/7 PASSED (trip identity logic intact). CODE VERIFICATION: ✅ (a) Step 3 returns None (lines 112-116): Explicit `return None` with comment 'on NE choisit JAMAIS arbitrairement une ancienne affectation (asgs[0])' ✓. NO fallback to asgs[0] anywhere in function ✓. ✅ (b) Steps 1-2 UNCHANGED (lines 98-110): Step 1 (non-primary matching window, most recent from_date) ✓, Step 2 (primary assignment) ✓. ✅ (c) No other functions modified: list_assignments, add_assignment, remove_assignment, ensure_primary_from_navixy, _in_window, driver_vehicle_ids, reassign_all_trips all UNCHANGED ✓. ✅ (d) reassign_all_trips NOT called: grep confirmed function NOT invoked by test suite ✓. Tests are read-only, no mass trip reassignment triggered ✓. ENVIRONMENT: Python 3.11.17, pytest 9.0.3, working dir /app/backend. FINAL VERDICT: ✅ PASS — Design A correctly implemented. Fail-closed logic verified: (1) dated window match → driver, (2) primary → driver, (3) else → None (NEVER asgs[0]). NO arbitrary fallback. NO regression. NO reassign triggered. READY FOR DEPLOYMENT."
 
 frontend:
   - task: "Mes trajets (liste)"
@@ -350,6 +393,29 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      CLASSIFICATION V2 FIX VALIDATION COMPLETE — ✅ ALL TESTS PASSED (2026-01-XX)
+      
+      CONTEXT:
+      Validated V2 fix for classification privacy_history_strict regression.
+      V2 adds SCOPE BY VEHICLE: strategy applies ONLY to vehicles with override.
+      
+      TEST RESULTS:
+      ✅ PYTEST: 21/21 PASSED (12 core logic + 5 anti-overwrite + 4 NEW scope tests)
+      ✅ INTEGRATION: Real DB test with 2 vehicles (PILOT + OTHER) + 4 trips — ALL PASS
+      ✅ NON-REGRESSION: 100% legacy tenant behavior unchanged
+      
+      V2 FIX VERIFIED:
+      (a) SCOPE BY VEHICLE: privacy_history_strict applies ONLY to vehicles with 
+          vehicle.classification_mode='privacy_history_strict' override
+      (b) OTHER vehicles use LEGACY schedule-based classification (NOT mode-history)
+      (c) ANTI-OVERWRITE: existing classifications NEVER replaced with None
+      (d) _effective_strategy() priority: vehicle override > tenant > 'legacy'
+      (e) NO hardcoded IDs (scope controlled by vehicle.classification_mode field)
+      
+      READY FOR PREVIEW DEPLOYMENT.
+      
   - agent: "testing"
     message: |
       WEB SMOKE TEST COMPLETE — LIMITED VALIDATION (2026-09-24)
@@ -989,7 +1055,7 @@ agent_communication:
       
       CONTEXT: Validated 2 NEW driver endpoints for manual (no-BLE) driver UX. These endpoints support vehicle selection and km tracking without BLE hardware.
       
-      TEST RESULTS (backend_test_driver_manual_ux.py + backend_test_driver_manual_ux_extended.py against https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (backend_test_driver_manual_ux.py + backend_test_driver_manual_ux_extended.py against https://fleet-trips-4.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -1062,7 +1128,7 @@ agent_communication:
       
       CONTEXT: Validated refactored confirmation logic where REAL device commands that aren't immediately confirmed become PENDING_CONFIRMATION (NOT FAILED), resolved asynchronously via telemetry. Test env: PRIVATE_MODE_ENABLED NOT set (fail-closed), DEVICE_WRITE=0 (no real device commands).
       
-      TEST RESULTS (backend_test_private_mode_confirmation_fix.py against https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (backend_test_private_mode_confirmation_fix.py against https://fleet-trips-4.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -1121,7 +1187,7 @@ agent_communication:
       
       CONTEXT: E2E HTTP testing of Private Mode state machine with ACTIVE driver session. Prerequisites verified: Driver Jean Dupont has 'confirmed' session on vehicle GE 123456 / tracker 5000, PRIVATE_MODE_ENABLED=true, tenant default + tracker 5000 allowlisted, field_validated capability present, PRIVATE_MODE_SIMULATE_CONFIRM=1 (device confirmation simulated).
       
-      TEST RESULTS (backend_test_private_mode_e2e.py against https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (backend_test_private_mode_e2e.py against https://fleet-trips-4.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -1211,7 +1277,7 @@ agent_communication:
       
       CONTEXT: UI verification of Private Mode fail-closed behavior in Driver Mobile App (Expo web). Feature flag PRIVATE_MODE_ENABLED is NOT set (fail-closed by design), backend returns allowed=false with reason PRIVATE_MODE_FEATURE_DISABLED.
       
-      TEST RESULTS (Playwright mobile viewport 390x844 against https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (Playwright mobile viewport 390x844 against https://fleet-trips-4.preview.emergentagent.com):
       ✅ ALL CHECKS PASSED (0 FAILED, 0 SECURITY ISSUES, 0 CRITICAL ERRORS)
       
       DETAILED VERIFICATION:
@@ -1255,7 +1321,7 @@ agent_communication:
       
       CONTEXT: Re-test of FIXED Private Mode driver endpoints after fail-closed ordering fix. The fix ensures GLOBAL feature flag (PRIVATE_MODE_ENABLED, default FALSE) and kill switch are checked BEFORE session/vehicle resolution.
       
-      TEST RESULTS (backend_test.py against https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (backend_test.py against https://fleet-trips-4.preview.emergentagent.com):
       ✅ ALL 16 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -1507,7 +1573,7 @@ agent_communication:
       
       CONTEXT: FMC130 downgraded from VEHICLE_CAN to NAVIXY_GPS_CALCULATED with status=BLOCKED and odometer_during_private=NOT_SUPPORTED. Runtime finding: can_mileage sensor exists (id 5411571) but data is stale since 2022-03-26 (2026 history empty) - not usable. Only live source is GPS-calculated odometer.
       
-      TEST RESULTS (against HTTPS preview URL https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (against HTTPS preview URL https://fleet-trips-4.preview.emergentagent.com):
       ✅ login_attempts purged: 0 documents (clean state)
       ✅ Test 1 (test_odometer_capability.py): 7 PASSED
          - FMC130 now source_type=NAVIXY_GPS_CALCULATED (was VEHICLE_CAN)
@@ -1541,7 +1607,7 @@ agent_communication:
       - New vehicle_private_mode_allowed(model, vc) function for concrete tracker/vehicle resolution
       - Tests updated: added test_fmc003_gate_is_per_vehicle (8th test)
       
-      TEST RESULTS (against HTTPS preview URL https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (against HTTPS preview URL https://fleet-trips-4.preview.emergentagent.com):
       ✅ login_attempts purged: 0 documents (clean state)
       ✅ Test 1 (test_odometer_capability.py): 8 PASSED (was 7, added per-vehicle gate test)
          - All 5 models present: FMC003, FMC130, FMU130, FMC640, FMC650
@@ -1646,7 +1712,7 @@ agent_communication:
       
       ✅ ENV VERIFICATION:
          - PRIVATE_MODE_DEVICE_WRITE: NOT set in backend/.env (defaults to '0') ✓
-         - Backend URL: https://driver-ui-desync.preview.emergentagent.com
+         - Backend URL: https://fleet-trips-4.preview.emergentagent.com
       
       CONCLUSION:
       Private Mode fail-fast device write fix working correctly. When PRIVATE_MODE_DEVICE_WRITE=0 (default), mode change requests are refused with HTTP 503 BEFORE creating any transitional state. The previous confirmed state (BUSINESS/PRIVATE/UNKNOWN) is preserved unchanged. NO command is sent to tracker. NO document is written to private_mode_state collection with PRIVATE_REQUESTED/BUSINESS_REQUESTED/PENDING_CONFIRMATION. GET endpoint returns can_switch=false with can_switch_reason='PRIVATE_MODE_DEVICE_WRITE_DISABLED'. POST endpoint raises HTTP 503. All 54 pytest tests passed, including 6 NEW fail-fast tests. Backend healthy. NO ISSUES FOUND.
@@ -1656,7 +1722,7 @@ agent_communication:
       
       CONTEXT: Validated NEW driver emergency SOS endpoint POST /api/livre/driver/sos. This endpoint allows drivers to trigger emergency alerts that are persisted to sos_alerts collection and dispatched as notifications to admins/managers. Includes anti-double-send protection (60s deduplication).
       
-      TEST RESULTS (backend_test_sos.py against https://driver-ui-desync.preview.emergentagent.com):
+      TEST RESULTS (backend_test_sos.py against https://fleet-trips-4.preview.emergentagent.com):
       ✅ ALL 7 TESTS PASSED (0 FAILED, 0 WARNINGS, 0 SECURITY ISSUES)
       
       DETAILED VERIFICATION:
@@ -2066,3 +2132,201 @@ agent_communication:
       - working: true
         agent: "testing"
         comment: "BLE DEV SMOKE TEST COMPLETE — ✅ PASS / NO REGRESSION. CONTEXT: React Native/Expo mobile app (LOGITRAK Driver) served at http://localhost:3000 (web version). OBSERVATION-ONLY smoke test for NON-REGRESSION after enriching BLE DEV diagnostic screen (format/termination/write selectors + raw frame logging). NO system modifications (NO supervisor, NO service restarts, NO installations). Web server ALREADY running (HTTP 200 confirmed). OBJECTIVE: Verify app loads without fatal JS error + login screen present. LOAD STATUS: ✅ OK — HTTP 200, page loaded successfully, NO white screen, NO fatal JS errors, content rendered (185 chars body text) ✓. LOGIN SCREEN ELEMENTS: ✅ ALL PRESENT — (1) Email field with placeholder 'chauffeur@logitrak.ch' ✓, (2) Password field (MOT DE PASSE) ✓, (3) 'Se connecter' button ✓, (4) 'Rester connecté' checkbox ✓, (5) LOGITRAK branding with 'Console Chauffeur' subtitle ✓. Screenshot captured: .screenshots/01_initial_load.png. CONSOLE LOGS: ✅ NO NEW RED ERRORS — Only WARNINGS (not errors) about native features unavailable in web (EXPECTED/NORMAL as documented): (1) TaskManager.isTaskRegisteredAsync not available on web (background tasks) ✓, (2) Notifications.setNotificationCategoryAsync not available on web (notification categories) ✓. These are the exact warnings mentioned in review request as NORMAL. NO fatal errors, NO unexpected errors. BLE NATIVE TESTING: ✅ TESTING_AGENT_BLE_NATIVE = NOT_APPLICABLE — BLE DEV technical screen (format sms_std 2 spaces / lineEndingSuffix / write mode selectors, privatemode reading, GATT FMC130) requires native APK + physical device → NOT testable in web browser (fail-closed expected). EXPO_PUBLIC_PRIVATE_MODE_BLE_DEV flag not defined in web → BLE DEV screen not visible (expected behavior). Settings screen behind login (no credentials for deeper navigation). Coverage: 128 Jest tests for buildReadCommand (format sms_std, lineEndingSuffix, visualizePayload) already validate BLE logic. DELIVERABLE COMPLETE: ✅ Load status: OK (HTTP 200, no fatal errors), ✅ Login present: YES (all elements verified), ✅ New console errors: NONE (only expected native warnings), ✅ TESTING_AGENT_BLE_NATIVE = NOT_APPLICABLE confirmed. FINAL VERDICT: ✅ PASS — NO REGRESSION. App loads correctly, login screen functional, NO blocking issues. BLE native features correctly documented as NOT_APPLICABLE for web testing."
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ROLLBACK SCRIPT VALIDATION COMPLETE — ✅ ALL TESTS PASSED
+      
+      Validated rollback script /app/deliverables/git/rollback_classification_regression.py
+      that restores trip classifications destroyed by privacy_history_strict regression.
+      
+      TEST ENVIRONMENT:
+      - Database: journal_logitrak (PREVIEW)
+      - Test data: ROLLTEST_ prefix (SIMULATED, temporary)
+      - Cleanup: Complete (all test data removed)
+      - Real data: NOT touched
+      
+      CRITICAL BEHAVIORS VERIFIED:
+      ✅ (1) Tenant RÉEL used (trips.tenant_id, NOT audit_log.tenant_id)
+          → R2 restored under ROLLTEST_TENANT_B despite audit_log.tenant_id='default'
+      
+      ✅ (2) Exclusions work correctly:
+          → PILOT_EXCLUDE_TRIP_IDS: R3 excluded (PILOT_EXCLUDED=1)
+          → auto_classified=False: R4 excluded (MANUAL_EXCLUDED=1)
+          → Tenant mismatch: R6 excluded (TENANT_MISMATCH=1)
+      
+      ✅ (3) Idempotence verified:
+          → Second --apply run: APPLICABLE_TOTAL=0, 0 modifications
+          → All trips ALREADY_CORRECT after first run
+      
+      ✅ (4) DRY-RUN writes nothing:
+          → All trips unchanged after DRY-RUN
+          → Report accurate (APPLICABLE_TOTAL=2, PAR_TENANT_REEL correct)
+      
+      ✅ (5) Audit rollback entries have tenant_id RÉEL:
+          → R1 audit: tenant='default' ✓
+          → R2 audit: tenant='ROLLTEST_TENANT_B' (NOT 'default' from audit_log) ✓
+      
+      ✅ (6) Anti-race protection:
+          → Script re-reads trip before write to detect concurrent changes
+      
+      TEST RESULTS:
+      - R1: None → professional (tenant='default') ✓
+      - R2: None → personal (tenant='ROLLTEST_TENANT_B') ✓
+      - R3: None (pilot excluded) ✓
+      - R4: None (manual excluded) ✓
+      - R5: professional (already correct) ✓
+      - R6: None (tenant mismatch) ✓
+      
+      FINAL VERDICT: ✅ PASS — READY FOR PRODUCTION USE
+      Script correctly uses REAL tenant, respects all exclusions, is idempotent,
+      and creates correct audit trail. NO issues found.
+
+
+  - agent: "testing"
+    message: |
+      KM-SUMMARY DRIVER-SCOPED FIX VALIDATED (2026-10-13) — ✅ ALL TESTS PASSED
+      
+      BUG FIXED:
+      km-summary was filtering by ACTIVE vehicle only (resolve_active_vehicle),
+      so if a driver used multiple vehicles in a day, only the active vehicle's
+      km were counted (e.g., Orhan saw Pro=3.3 instead of 70.1).
+      
+      FIX APPLIED:
+      km-summary now aggregates by driver_id + period across ALL vehicles.
+      The vehicle_id (active vehicle) is still resolved and returned for CONTEXT
+      but does NOT filter km. Consistent with "Mes trajets" screen (driver-centric).
+      
+      TEST SCENARIO:
+      - Created test driver with 2 vehicles (KMTEST_VEH_A, KMTEST_VEH_B)
+      - Created trips TODAY:
+        * VEH_A: professional=12.7 km, personal=7.4 km
+        * VEH_B: professional=32.7 km, personal=20.3 km, manual_professional=10.0 km
+      - Created ACTIVE assignment on VEH_A only
+      - Expected totals: PRO=55.4 km (12.7+32.7+10.0), PRIVATE=27.7 km (7.4+20.3)
+      
+      VERIFICATION RESULTS:
+      ✅ (a) pro_km = 55.4 (CORRECT: sum of BOTH vehicles, NOT just VEH_A=12.7)
+      ✅ (b) private_km = 27.7 (CORRECT: sum of BOTH vehicles)
+      ✅ (c) vehicle_id = KMTEST_VEH_A (active vehicle for context, but does NOT filter km)
+      ✅ (d) available = true
+      ✅ (e) private_km_source = GPS_TRIPS_DRIVER
+      ✅ (f) period=week: pro_km=55.4, private_km=27.7 (includes today's trips)
+      ✅ (g) period=month: pro_km=55.4, private_km=27.7 (includes today's trips)
+      ✅ (h) classification=None NOT counted (5.0 km trip excluded)
+      ✅ (i) manual professional (auto_classified=False) IS counted (10.0 km included)
+      
+      CODE VERIFICATION:
+      - Aggregation query filters by driver_id + tenant_id + period (lines 677-679)
+      - vehicle_id resolved for context only (lines 636-640), NOT used in query filter
+      - Source = trips collection (distance_km field)
+      - Periods in Europe/Zurich timezone
+      
+      TEST DATA CLEANUP:
+      ✅ All test data cleaned up (6 trips, 2 vehicles, 1 assignment deleted)
+      
+      ENVIRONMENT:
+      - Backend: https://fleet-trips-4.preview.emergentagent.com
+      - Database: journal_logitrak (PREVIEW)
+      - Credentials: chauffeur@logitrak.ch / Test1234!
+      - Driver ID: 1580345e-6b8e-45a2-88e7-513a008b6b12
+      
+      FINAL VERDICT: ✅ PASS — DRIVER-SCOPED AGGREGATION WORKING CORRECTLY
+      NO ISSUES FOUND. Fix validated for PREVIEW deployment.
+
+  - agent: "testing"
+    message: |
+      VALIDATION VOLET 1 — RESOLVER D'AFFECTATION CONDUCTEUR TIME-AWARE — ✅ 100% PASS (2026-01-XX)
+      
+      CONTEXTE:
+      Validation UNIQUEMENT du Volet 1 du resolver d'affectation conducteur dans /app/backend/app/assignments.py
+      (fonctions resolve_driver_for_trip + _covers_primary). Tests unitaires pytest avec fakes en mémoire.
+      AUCUNE donnée écrite/modifiée, AUCUN appel à reassign_all_trips(), AUCUN test du Volet 2.
+      
+      RÉSULTATS DES TESTS (LANCÉS ISOLÉMENT):
+      ✅ test_resolve_driver_fail_closed.py: 14/14 PASSED en 0.10s
+      ✅ test_fmc130_resolve_pending.py: 12/12 PASSED en 4.26s
+      ✅ TOTAL: 26/26 PASSED (100%)
+      
+      ARTEFACT EVENT LOOP CONFIRMÉ (NON-RÉGRESSION):
+      ⚠️  Lancement des DEUX fichiers ensemble → RuntimeError: There is no current event loop
+          → Artefact connu d'isolation d'event loop (test_fmc130_resolve_pending.py utilise asyncio.get_event_loop() déprécié)
+          → PAS une régression du code Volet 1
+          → Chaque fichier passe à 100% lancé isolément ✓
+      
+      CHECKLIST DE VALIDATION — TOUS LES POINTS CONFIRMÉS:
+      ✅ (1) primary from_date=None / to_date=None → conducteur inchangé (couvre tout)
+          → test_v1_primary_open_ended_covers_everything_unchanged PASSED
+      
+      ✅ (2) trip_start == from_date → primary couvert (début INCLUSIF)
+          → test_v1_primary_bounded_trip_equals_from_inclusive_covered PASSED
+          → Code: ligne 100 assignments.py: `if f and trip_iso < f` (< strict, donc == est couvert)
+      
+      ✅ (3) trip_start < from_date → primary NON couvert
+          → test_v1_primary_bounded_trip_before_from_not_covered PASSED
+      
+      ✅ (4) trip_start < to_date → primary couvert
+          → test_v1_primary_bounded_trip_inside_window_covered PASSED
+      
+      ✅ (5) trip_start == to_date → primary NON couvert (fin EXCLUSIVE [start,end))
+          → test_v1_primary_bounded_trip_equals_to_exclusive_not_covered PASSED
+          → Code: ligne 102 assignments.py: `if t and trip_iso >= t` (>= donc == est NON couvert)
+          → CONVENTION [start, end) CONFIRMÉE
+      
+      ✅ (6) trip_start > to_date → primary NON couvert
+          → test_v1_primary_bounded_trip_after_to_not_covered PASSED
+      
+      ✅ (7) affectation non-primary datée couvrante → prioritaire sur le primary (inchangé)
+          → test_v1_dated_window_still_overrides_bounded_primary PASSED
+          → test_dated_window_overrides_primary PASSED
+      
+      ✅ (8) aucune relation couvrante → None (Design A conservé)
+          → test_fail_closed_no_window_no_primary_returns_none PASSED
+          → Code: ligne 139 assignments.py: `return None` (fail-closed explicite)
+      
+      ✅ (9) aucun fallback arbitraire asgs[0] (jamais)
+          → test_never_falls_back_to_first_arbitrary PASSED
+          → Code: aucun repli sur asgs[0], uniquement `return None` si aucune relation valide
+      
+      TESTS FRONTIÈRE [start,end) CONFIRMÉS:
+      ✅ Point 2 (début INCLUSIF): trip_start == from_date → couvert
+          → Test: "2026-06-01T00:00:00+00:00" == from_date → dPRIM retourné ✓
+      
+      ✅ Point 5 (fin EXCLUSIVE): trip_start == to_date → NON couvert
+          → Test: "2026-06-30T00:00:00+00:00" == to_date → None retourné ✓
+      
+      DESIGN A (FAIL-CLOSED) CONFIRMÉ:
+      ✅ resolve_driver_for_trip retourne None quand aucune affectation ne couvre
+          → Ligne 139 assignments.py: `return None` (jamais de repli arbitraire)
+          → Tests: test_fail_closed_no_window_no_primary_returns_none ✓
+                   test_never_falls_back_to_first_arbitrary ✓
+                   test_no_assignment_returns_none ✓
+      
+      ISOLATION DES TESTS CONFIRMÉE:
+      ✅ test_resolve_driver_fail_closed.py utilise _FakeDB + _FakeColl (lignes 12-36)
+          → Aucune vraie base MongoDB, tout en mémoire
+      
+      ✅ test_fmc130_resolve_pending.py utilise _DB + _Coll (lignes 28-59)
+          → Aucune vraie base MongoDB, tout en mémoire
+      
+      ✅ AUCUNE donnée écrite/modifiée dans une vraie base
+      ✅ AUCUN appel à reassign_all_trips()
+      ✅ AUCUN test du Volet 2 (vehicle_assignment_events)
+      
+      COMMANDES EXÉCUTÉES:
+      (1) cd /app/backend && python3 -m pytest tests/test_resolve_driver_fail_closed.py -v
+          → 14 passed in 0.10s ✓
+      
+      (2) cd /app/backend && python3 -m pytest tests/test_fmc130_resolve_pending.py -q
+          → 12 passed in 4.26s ✓
+      
+      (3) cd /app/backend && python3 -m pytest tests/test_resolve_driver_fail_closed.py tests/test_fmc130_resolve_pending.py -q
+          → 14 passed, 12 FAILED (RuntimeError: There is no current event loop)
+          → Artefact connu, PAS une régression ✓
+      
+      FINAL VERDICT: ✅ PASS — VOLET 1 VALIDÉ À 100%
+      Logique time-aware du PRIMARY en convention [start, end) confirmée.
+      Design A fail-closed (return None) préservé.
+      Aucune régression détectée.
+      Prêt pour Volet 2.

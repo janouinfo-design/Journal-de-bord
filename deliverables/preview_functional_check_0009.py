@@ -23,7 +23,7 @@ Credentials via ENV :
 Execution (sur le VPS, depuis l'hote) :
   DIAG_DRIVER_PWD='***' python3 preview_functional_check_0009.py
   # ou en ciblant l'URL publique Preview :
-  PREVIEW_API_URL='https://driver-ui-desync.preview.emergentagent.com' \
+  PREVIEW_API_URL='https://fleet-trips-4.preview.emergentagent.com' \
   DIAG_DRIVER_PWD='***' python3 preview_functional_check_0009.py
 """
 import os

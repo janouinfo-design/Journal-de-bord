@@ -83,13 +83,34 @@ def _in_window(trip_iso: str, asg: dict) -> bool:
     return True
 
 
+def _covers_primary(trip_iso: str, asg: dict) -> bool:
+    """Couverture d'un PRIMARY en convention [start, end) (fin EXCLUSIVE).
+
+    Volet 1 (Design B) : le primary devient TIME-AWARE. Un primary open-ended
+    (from_date=None, to_date=None) couvre tout -> comportement actuel INCHANGÉ.
+    Un primary fermé (to_date défini) ne couvre PLUS à partir de to_date (exclusif),
+    ce qui permettra (Volet 2/3) de neutraliser un primary stale via un cutover.
+
+    NB convention : `_in_window` (étape non-primary) reste en [from, to] inclusif
+    (hors périmètre Volet 1) ; l'harmonisation globale [start, end) est prévue au Volet 2.
+    """
+    if not trip_iso:
+        return False
+    f, t = asg.get("from_date"), asg.get("to_date")
+    if f and trip_iso < f:          # début INCLUSIF : trip == from -> couvert
+        return False
+    if t and trip_iso >= t:         # fin EXCLUSIVE : trip == to -> NON couvert
+        return False
+    return True
+
+
 async def resolve_driver_for_trip(db, vehicle_id: str, trip_start_iso: str) -> Optional[str]:
     """Return the driver_id active for `vehicle_id` at `trip_start_iso`.
 
     Resolution order:
     1) Most specific assignment whose window covers the trip date (excluding primary)
     2) Primary assignment for the vehicle
-    3) None
+    3) None (fail-closed : jamais de repli arbitraire sur asgs[0])
     """
     asgs = await list_assignments(db, vehicle_id=vehicle_id)
     if not asgs:
@@ -104,13 +125,18 @@ async def resolve_driver_for_trip(db, vehicle_id: str, trip_start_iso: str) -> O
         matches.sort(key=lambda a: a.get("from_date") or "", reverse=True)
         return matches[0]["driver_id"]
 
-    # 2) Primary
+    # 2) Primary — TIME-AWARE (Volet 1) : respecté uniquement si sa fenêtre [start, end)
+    #    couvre le trajet. Un primary open-ended (from/to=None) couvre tout (inchangé) ;
+    #    un primary fermé (to_date) ne couvre plus à partir de to_date (exclusif).
     for a in asgs:
-        if a.get("is_primary"):
+        if a.get("is_primary") and _covers_primary(trip_start_iso, a):
             return a["driver_id"]
 
-    # 3) Any
-    return asgs[0]["driver_id"]
+    # 3) Fail-closed : aucune affectation datée couvrante ET aucun primary ->
+    #    on NE choisit JAMAIS arbitrairement une ancienne affectation (asgs[0]).
+    #    Règle d'identité : la résolution repose uniquement sur des relations
+    #    valides (fenêtre datée ou primary), jamais sur un repli aveugle.
+    return None
 
 
 async def driver_vehicle_ids(db, driver_id: str) -> list[str]:

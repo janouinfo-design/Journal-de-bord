@@ -1,131 +1,136 @@
-<analysis>**original_problem_statement**: The user is finalizing the LOGITRAK mobile driver app and backend. Previously, the focus was on implementing Lot 1: Persistent Vehicle Assignments in the backend and Lot 2 in the mobile app, alongside Patch 0009 which enforces that Private Mode is ONLY confirmed via hardware telemetry (LKP + AVL16), never just by a  API acknowledgment. After deploying the backend and building the APK, the user conducted field tests. The user reported that while the backend engine works perfectly, the mobile app's UI gets stuck during mode transitions (showing Commande envoyée mais état non confirmé, infinite spinners, or falling back to Impossible de vérifier le mode). 
+<analysis>Here is the summary of the conversation history to ensure a seamless handover to the next agent.
 
-PRODUCT REQUIREMENTS:
-- **Audit and fix the mobile app's state management during mode transitions** (, ).
-- Identify why the app shows pending/unconfirmed states when the command was successfully sent.
-- Enforce strict UX rules: Fin de service (End Service) MUST be completely blocked unless the vehicle is in a fully telemetry-confirmed  state. It must be blocked during , , , or API errors.
-- Do NOT modify the backend Private Mode engine (). The backend is considered perfectly validated. The issue is purely frontend polling/state interpretation.
+### **original_problem_statement**
+The user initially reported UI synchronization issues in the React Native mobile app during Private/Professional mode transitions. As the session evolved, the user requested the integration of BLE Phase 1 (FMC130) for the mobile app (read-only mode extraction via Bluetooth). 
+Subsequently, several critical backend bugs were reported and resolved in PROD: 
+1. Missing  in Navixy sync crashing the trip classification pipeline.
+2. A flawed classification rule overriding existing trips (which was fixed via a V3 strict history mode and a mass rollback).
+3.  aggregating by active vehicle instead of the driver's total vehicles. 
+4. **Current focus**: Legacy  (open-ended primary assignments) are mistakenly attributing new trips to old drivers (e.g., driver  getting trips for vehicle ).
 
-**User's preferred language**: French (You MUST respond in French only)
+PRODUCT REQUIREMENTS for Current Task (Design B):
+- Modernize  to be time-aware and rely on  as the authoritative source for modern mobile app drivers, without breaking legacy behavior.
+- Strictly follow a 3-step rollout: Volet 1 (Primary legacy time-aware), Volet 2 (Multi-source modern resolver), Volet 3 (Stale primary cleanup).
 
-**what currently exists?**: 
-A mature FastAPI backend with a fully validated, telemetry-driven Private Mode engine (Patch 0009). The backend uses persistent vehicle assignments ( collection). The React Native mobile app connects to these new endpoints but suffers from state synchronization/polling issues during the  phase of a mode switch, leading to confusing UX and spinner locks.
+### **User's preferred language**
+French (fr) - **INSTRUCT next agent to respond in French only.**
 
-**Last working item**: 
-    - Last item agent was working: The agent just received a detailed field-test report from the user with screenshots showing the mobile app stuck during the  transition between PRO and PRIVE modes. The agent was instructed to audit the React Native flow (, polling frequency,  dependencies, and ) to find the root cause of the UI desynchronization.
-    - Status: NOT STARTED
-    - Agent Testing Done: N
-    - Which testing method agent to use? Frontend testing agent
-    - User Testing Done: Y
+### **what currently exists?**
+The backend handles trip assignment, classification, and KPI summaries. Mobile app UI desyncs are fixed, BLE Phase 1 (read-only) is implemented. The Navixy synchronization pipeline is stable. Classification V3 is deployed and a mass rollback has restored data integrity.  successfully aggregates by . The backend is currently undergoing a structural update () to prevent legacy open-ended primary assignments from stealing new trips. Design A (fail-closed fallback) is deployed. Volet 1 of Design B (making primary assignments time-aware) has been coded locally.
 
-**All Pending/In progress Issue list**: 
-  Issue 1: Mobile UI stuck/desynchronized during Mode Privé transitions (P0)
-     - Attempted fixes: None yet for this specific field-test feedback.
-     - Next debug checklist: Audit  and . Check polling frequency, timeout handling, race conditions, and how , , and  are evaluated during . Check  flow for race conditions.
-     - Why fix this issue and what will be achieved with the fix? The driver needs clear UX during the 1-2 minutes it takes for the hardware telemetry to confirm the mode switch. Currently, the app shows errors or spins indefinitely.
-     - Status: NOT STARTED
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix?: Frontend
-     - Blocked on other issue: None
+### **Last working item**
+- **Last item agent was working**: Implementing Volet 1 of Design B in . The agent modified  to apply a strict  window check () to  assignments. The code has been written and 13/13 tests pass locally.
+- **Status**: TESTING PENDING (Waiting to provide the PROD READ-ONLY simulation script to the user).
+- **Agent Testing Done**: Y (locally via Pytest and testing subagent).
+- **Which testing method agent to use?**: Provide Python scripts for the user to run on the PROD VPS (READ-ONLY) to verify behavior, as the agent lacks direct PROD DB access. 
+- **User Testing Done**: N
 
-**In progress Task List**:
-  Task 1: Enforce Fin de service Security Gate (P0)
-     - Where to resume:  (or ) and .
-     - What will be achieved with this?: Fin de service will only be allowed if  (telemetry confirmed). It will be explicitly blocked with contextual messages for , , , , or API errors.
-     - Status: NOT STARTED
-     - Should Test frontend/backend/both after fix?: Frontend
-     - Blocked on something: None
+### **All Pending/In progress Issue list**
+Issue 1: Legacy primary assignments capturing new trips incorrectly (e711 -> 09ce anomaly) (P0)
+- Attempted fixes: Design A (fail-closed fallback ) is deployed. Volet 1 of Design B (time-aware primary check) is coded in the agent's environment.
+- Next debug checklist: Provide the user with a READ-ONLY simulation script to run on PROD. This script must prove that Volet 1 has  on current data (since current primary assignments lack ).
+- Why fix this issue and what will be achieved with the fix?: Prevents old open-ended assignments from stealing new trips. Prepares the architecture for Volet 2.
+- Status: IN PROGRESS
+- Is recurring issue?: Y
+- Should Test frontend/backend/both after fix?: Backend (via user execution).
+- Blocked on other issue: None.
 
-**Upcoming and Future Tasks**:
-    Upcoming Tasks:
-    - Add comprehensive Jest tests for the mobile app covering 20+ specific scenarios requested by the user (e.g., BUSINESS confirmed -> END allowed; PRIVATE -> END blocked; PENDING -> END blocked; double-click prevention). (P0)
-    
-    Future Tasks:
-    - Integrate driver-uploaded documents into the separate FLEET ADMIN web application. (An API contract  was created in this repo, but the actual frontend integration belongs to another repo: ). (P2)
+### **In progress Task List**
+Task 1: Design B - Volet 2 (Resolver multi-source moderne) (P1)
+- Where to resume:  (after Volet 1 is deployed).
+- What will be achieved with this?:  will use  (segments) as the authoritative source for modern drivers, using an explicit cutover date/authority boundary per driver, preventing legacy fallback.
+- Status: NOT STARTED
+- Should Test frontend/backend/both after fix?: Backend.
+- Blocked on something: Volet 1 deployment.
 
-**Completed work in this session**:
-- Patch 0009: Removed  as a confirmation mechanism for hardware commands; Private Mode is now strictly telemetry-confirmed via LKP+AVL16. (DONE)
-- Lot 1 Backend: Created persistent  and  with partial unique indexes and a background reconciler. (DONE)
-- Lot 2 Mobile: Migrated mobile app to use assignment endpoints, fixed an initial infinite spinner bug caused by unstable Zustand selectors. (DONE)
-- Admin Federation: Created  endpoint to expose mobile-uploaded docs to fleet managers. (DONE)
+Task 2: Design B - Volet 3 (Nettoyage legacy) (P2)
+- Where to resume: Custom script generation.
+- What will be achieved with this?: Close (assign a ) to genuinely stale legacy primary assignments to clean up the DB.
+- Status: NOT STARTED
+- Should Test frontend/backend/both after fix?: Backend.
+- Blocked on something: Volet 2 deployment.
 
-**Earlier issues found/mentioned but not fixed**:
-   Issue 1: Fleet Admin Web UI lacks Document/Inspection views.
-   - Debug checklist: Requires accessing a separate repository ().
-   - Why to solve this issue and what will be achieved with this?: Managers cannot currently see driver uploads.
-   - Should Test frontend/backend/both after fix: Both (in the other repo)
-   - Is recurring issue? N
+### **Upcoming and Future Tasks**
+Upcoming Tasks:
+- BLE Phase 2 (P1): Implement  writing capabilities in the mobile app once the user validates BLE Phase 1 in the field.
+- Admin credentials rotation (P2): User exposed secrets via . A secret rotation is recommended.
+- Clean up corrupt DB doc (P3): Remove setting with .
 
-**Known issue recurrence from previous fork**:
-  - Issue recurrence in previous fork: Zustand selector infinite loops. (In previous steps,  returning the whole object caused infinite  loops. Ensure all new Zustand hooks use stable atomic selectors ).
-  - Recurrence count: 1
-  - Status: RESOLVED
+### **Completed work in this session**
+- Mobile UI Desync Fix (usePrivateMode polling logic) (DONE)
+- Mobile BLE Phase 1 (Read-only FMC130 Integration) (DONE)
+- Backend  KeyError 'end_date' crash fix (DONE)
+- Backend  Classification V3 (Strict privacy history, multi-tenant scoped) (DONE)
+- Mass Data Rollback (Restored 6114 trips from ) (DONE)
+- Backend  driver-centered aggregation (Design A deployed) (DONE)
+- Backend  Design A (Fail-closed fallback) (DONE)
 
-**Code Architecture**:
-- : Core telemetry confirmation engine (DO NOT TOUCH).
-- : Persistent assignment logic.
-- : Manages polling and state for the Private/Business switch.
-- : Main driver UI.
+### **Earlier issues found/mentioned but not fixed**
+Issue 1: Exposed Secrets in PROD
+- Debug checklist: Prompt user to rotate JWT, Navixy API keys, and Mongo credentials.
+- Why to solve this issue and what will be achieved with this?: Security best practice after accidental log dump.
+- Should Test frontend/backend/both after fix: NA
+- Is recurring issue?: N
 
-**Key Technical Concepts**:
-React Native, Zustand, FastAPI, MongoDB (Standalone, no transactions, using atomic updates with partial unique indexes), Hardware Telemetry (FMC130).
+### **Known issue recurrence from previous fork**
+- Issue recurrence in previous fork: Context misalignment between Agent's Git Tree and User's PROD.
+- Recurrence count: 3+
+- Status: RESOLVED (Agent now uses Python idempotent scripts or strictly generates patches against the exact blob hashes provided by the user).
+- Note: Always ask the user for the exact blob/commit hash of PROD before generating patches to avoid  conflicts.
 
-**key DB schema**:
-  - : 
-  - : Append-only history of assignments.
-  - : Volatile state of the tracker (, , ).
+### **Code Architecture**
+- : Legacy trip assignment resolver ().
+- : Modern mobile app assignments (Stateful ACTIVE docs).
+- : Navixy synchronization pipeline.
+- : Trip classification engine.
+- : Mobile BLE logic.
 
-**changes in tech stack**:
-  - Transitioned from transient BLE sessions () to persistent DB assignments () for determining the active vehicle.
+### **Key Technical Concepts**
+React Native (Expo), BLE (react-native-ble-plx), FastAPI, Python, MongoDB, Navixy Telematics API, EAS Build.
 
-**All files of reference**:
-  -  (Target for polling audit)
-  -  (Target for UI fix)
-  -  (Target for END-safety logic)
-  -  (Target for new tests)
-  -  (Created for external repo handover)
+### **key DB schema**
+- : {tenant_id, driver_id, vehicle_id, status: ACTIVE|ENDED}
+- : {type: VEHICLE_TAKEN|CHANGED|RELEASED, driver_id, from_vehicle_id, to_vehicle_id, created_at} (Historical truth for modern drivers).
+- : {driver_id, vehicle_id, from_date, to_date, is_primary} (Legacy).
+- : {scope, tenant_id, old_classification, new_classification, resulting_state} (Historical source of truth for classifications).
 
-**Areas that need refactoring**:
-- Mobile app polling and state derivation in  to prevent UI desync during the 1-2 minute telemetry confirmation window.
+### **All files of reference**
+-  (Currently modifying)
+-  (Created for data restore)
 
-**key api endpoints**:
+### **Areas that need refactoring**
+-  in  is being refactored to support time-aware boundaries (Design B).
+
+### **key api endpoints**
 - 
 - 
 
-**Critical Info for New Agent**:
-- **CRITICAL**: DO NOT modify the backend . The backend validation logic is considered perfectly stable and validated by field tests. The bug is entirely in the React Native frontend's interpretation of the backend's  /  states and its polling mechanism.
-- Fin de service (End Service) is a highly sensitive action. It must be strictly gated. If the backend reports , , or , the frontend must block the Fin de service button and tell the driver to switch back to Professionnel first.
+### **Critical Info for New Agent**
+1. **NO DIRECT DB ACCESS**: You cannot test PROD directly. You must provide  Python scripts to the user, wait for the output, and analyze it. 
+2. **ZERO WRITE POLICY**: Do NOT provide scripts with , , or  without an explicit DRY-RUN output validated by the user.
+3. **DESIGN B VOLET 1 STATE**: The code for Volet 1 ( in ) has been implemented locally. **Your immediate next step is to provide the user with a READ-ONLY PROD simulation script.** This script must simulate the behavior of Volet 1 and prove that  on the current DB (since all open primary assignments currently have /, applying the window check should change nothing yet).
 
-**documents and test reports created in this job**:
-  - 
-  -  (Various patches generated during previous steps)
+### **Last 10 User Messages and any pending HUMAN messages**
+- *Message 1*: User validated Design A deployment. The anomaly  assigning trips to  is still occurring (as expected, awaiting Design B).
+- *Message 2*: User defines the constraints for Design B: The frontend cycle (TAKE/CHANGE/END) must dictate the logic. Cutover boundaries must be respected. No .
+- *Message 3*: User validates the principle of Cutover (closing stale primary assignments with a documented technical timestamp, preserving history, future fail-closed).
+- *Message 4*: User confirms sequence: Volet 1 (Resolver legacy time-aware) -> Gate READ-ONLY (Audit vehicle_assignment_events) -> Volet 2 (Multi-source modern resolver) -> Volet 3 (Stale cleanup).
+- *Message 5*: User validates that  is the canonical historical source for modern assignments (NOT the stateful  doc which mutates on CHANGE). 
+- *Message 6*: User requests authority boundary per driver (driver becomes modern after their first event in ).
+- *Message 7*: User validates the final decision tree schema for Volet 2 and the  boundary rule.
+- *Message 8*: User runs simulation confirming driver  entered modern authority on . Therefore, trips on  after that date should fail-closed () instead of falling back to legacy.
+- *Message 9*: User gives the **GO** to prepare Volet 1 (Primary legacy time-aware via ). Must include tests and a READ-ONLY simulation proving .
+- *Message 10 (Pending)*: User specifies that the current  uses inclusive bounds . Agent modified the code to use a new  helper with . **The user is waiting for the simulation script to prove impact=0 on PROD before deployment.**
 
-**Last 10 User Messages and any pending HUMAN messages**:
-1. User confirmed Lot 1 and Lot 2 deployment.
-2. User tested the new APK in the field.
-3. User provided screenshots showing the app successfully switching to Professionnel Actif.
-4. User provided screenshots showing the app successfully sending the Privé command, but the app getting stuck with a spinner and Commande envoyée mais état non confirmé.
-5. Agent analyzed backend logs and confirmed the backend correctly registered  because the vehicle was stationary (telemetry requires movement to confirm).
-6. User noticed UI spacing issues (duplicate Conduite header). Agent fixed it in code.
-7. User asked where Fleet Managers view documents. Agent investigated and realized the Fleet Admin UI is in a separate repository.
-8. Agent and User prepared a handover document () for the separate Fleet Admin repository.
-9. User formally requested to close the backend audit and prepared to move to the other repository.
-10. **PENDING HUMAN MESSAGE**: User pivots back to  Lot 2 Mobile. User explicitly states that field testing revealed the app gets stuck in bad UI states during mode changes. User demands a strict audit of the React Native polling/state flow, strict enforcement of the Fin de service security gate, and comprehensive Jest testing. User explicitly forbids modifying the backend Private Mode engine.
+### **Project Health Check:**
+Broken (Legacy assignments stealing trips).
 
-**Project Health Check:**
-Frontend Mobile: Broken (Desync during hardware polling). Backend: Healthy.
+### **3rd Party Integrations**
+- Navixy Telematics API (Uses User credentials securely resolved via tenant context).
 
-**3rd Party Integrations**:
-- Navixy (Telematics/GPS API) — requires User Navixy Hash/Credentials (Handled securely in backend, frontend never sees secrets).
+### **Testing status**
+- Testing agent used after significant changes: YES
+- Test files created: 
 
-**Testing status**:
-  - Testing agent used after significant changes: YES
-  - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: , , 
-  - Known regressions: None backend-side. Mobile UI sync issues identified.
-
-**Credentials to test flow:**
-Not provided in plain text. (Tokens are generated via internal backend endpoints for testing).
-
-**What agent forgot to execute**:
-The previous agent successfully completed the backend tasks and was about to transition to a different repository, but the user interrupted with new critical field-test bug reports for the React Native mobile app. The agent has not yet started auditing  as requested in the final message.</analysis>
+### **What agent forgot to execute**
+The agent modified  for Volet 1 but stopped before generating the requested READ-ONLY simulation script for the user to run on PROD. The next agent must start by providing this  script to prove .</analysis>

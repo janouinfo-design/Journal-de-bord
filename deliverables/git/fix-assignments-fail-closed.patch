@@ -1,0 +1,27 @@
+diff --git a/backend/app/assignments.py b/backend/app/assignments.py
+index a0123cc..7ad3089 100644
+--- a/backend/app/assignments.py
++++ b/backend/app/assignments.py
+@@ -89,7 +89,7 @@ async def resolve_driver_for_trip(db, vehicle_id: str, trip_start_iso: str) -> O
+     Resolution order:
+     1) Most specific assignment whose window covers the trip date (excluding primary)
+     2) Primary assignment for the vehicle
+-    3) None
++    3) None (fail-closed : jamais de repli arbitraire sur asgs[0])
+     """
+     asgs = await list_assignments(db, vehicle_id=vehicle_id)
+     if not asgs:
+@@ -109,8 +109,11 @@ async def resolve_driver_for_trip(db, vehicle_id: str, trip_start_iso: str) -> O
+         if a.get("is_primary"):
+             return a["driver_id"]
+ 
+-    # 3) Any
+-    return asgs[0]["driver_id"]
++    # 3) Fail-closed : aucune affectation datée couvrante ET aucun primary ->
++    #    on NE choisit JAMAIS arbitrairement une ancienne affectation (asgs[0]).
++    #    Règle d'identité : la résolution repose uniquement sur des relations
++    #    valides (fenêtre datée ou primary), jamais sur un repli aveugle.
++    return None
+ 
+ 
+ async def driver_vehicle_ids(db, driver_id: str) -> list[str]:
