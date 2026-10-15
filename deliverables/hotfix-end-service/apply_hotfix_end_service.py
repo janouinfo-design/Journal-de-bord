@@ -235,62 +235,50 @@ REPLACEMENTS.append((
     }''',
 ))
 
+# R3 — forme PROD EXACTE : PAS de ligne vide entre `raise` et le commentaire.
 REPLACEMENTS.append((
     '''    if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
-
     # Fail-closed niveau 1/2 : feature globale + kill switch AVANT toute résolution.
     if not gate.feature_enabled():''',
     '''    if not driver_id:
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
-
     # Décision autoritaire Fin de service (applicabilité durable) pour enrichir
     # les retours anticipés. resolve_pending=False : NE déclenche PAS de résolution
     # tardive (ne change pas le comportement historique des gates FEATURE/KILL).
-    # Le retour FINAL la recalcule avec l'état final.
     _end_decision = await _resolve_end_service_decision(db, tenant_id, driver_id, resolve_pending=False)
-
     # Fail-closed niveau 1/2 : feature globale + kill switch AVANT toute résolution.
     if not gate.feature_enabled():''',
 ))
 
+# R4/R5/R6 — retours anticipés COMPACTS (forme PROD exacte, dict condensé).
 for _reason in ("gate.R_FEATURE_DISABLED", "gate.R_KILL_SWITCH", "gate.R_NO_VEHICLE"):
     REPLACEMENTS.append((
-        f'''            "reason": {_reason},
-            "can_switch": False,
-            "can_switch_reason": {_reason},
-            "vehicle_id": None,
-            "tracker_id": None,
-            "last_transition_at": None,
-            "private_odometer_supported": False,
-        }}''',
-        f'''            "reason": {_reason},
-            "can_switch": False,
-            "can_switch_reason": {_reason},
-            "vehicle_id": None,
-            "tracker_id": None,
-            "last_transition_at": None,
-            "private_odometer_supported": False,
-            "private_mode_applicable": _end_decision["private_mode_applicable"],
-            "end_service_allowed": _end_decision["end_service_allowed"],
-            "end_service_reason": _end_decision["reason"],
-        }}''',
+        f'''        return {{"state": pm.UNKNOWN, "allowed": False, "reason": {_reason},
+                "can_switch": False, "can_switch_reason": {_reason},
+                "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
+                "private_odometer_supported": False}}''',
+        f'''        return {{"state": pm.UNKNOWN, "allowed": False, "reason": {_reason},
+                "can_switch": False, "can_switch_reason": {_reason},
+                "vehicle_id": None, "tracker_id": None, "last_transition_at": None,
+                "private_odometer_supported": False,
+                "private_mode_applicable": _end_decision["private_mode_applicable"],
+                "end_service_allowed": _end_decision["end_service_allowed"],
+                "end_service_reason": _end_decision["reason"]}}''',
     ))
 
-# Retour FINAL : recalculer avec l'état final + ajouter les 3 champs.
+# R7 — forme PROD EXACTE : PAS de ligne vide avant `return {`.
 REPLACEMENTS.append((
     '''    if state_now == pm.PRIVATE:
         exposed_private_distance_km = None
     else:
         exposed_private_distance_km = st.get("private_distance_km")
-
     return {
         "state": state_now,''',
     '''    if state_now == pm.PRIVATE:
         exposed_private_distance_km = None
     else:
         exposed_private_distance_km = st.get("private_distance_km")
-
     # Décision END FINALE : applicabilité durable (stable) + ÉTAT FINAL state_now
     # (après résolution tardive PRIVATE/BUSINESS). On NE réutilise PAS la décision
     # précoce : un état PENDING -> BUSINESS doit autoriser END.
@@ -299,19 +287,19 @@ REPLACEMENTS.append((
         private_mode_applicable=_end_decision["private_mode_applicable"],
         state=state_now,
     )
-
     return {
         "state": state_now,''',
 ))
 
+# R8 — forme PROD EXACTE : commentaires inline conservés.
 REPLACEMENTS.append((
-    '''        "last_command": st.get("last_command"),
-        "command_sent_at": st.get("command_sent_at"),
-        "odometer_snapshot_status": st.get("odometer_snapshot_status"),
+    '''        "last_command": st.get("last_command"),                 # dernière commande envoyée
+        "command_sent_at": st.get("command_sent_at"),           # horodatage envoi
+        "odometer_snapshot_status": st.get("odometer_snapshot_status"),  # OK|UNAVAILABLE|INVALID
     }''',
-    '''        "last_command": st.get("last_command"),
-        "command_sent_at": st.get("command_sent_at"),
-        "odometer_snapshot_status": st.get("odometer_snapshot_status"),
+    '''        "last_command": st.get("last_command"),                 # dernière commande envoyée
+        "command_sent_at": st.get("command_sent_at"),           # horodatage envoi
+        "odometer_snapshot_status": st.get("odometer_snapshot_status"),  # OK|UNAVAILABLE|INVALID
         "private_mode_applicable": _final_end["private_mode_applicable"],
         "end_service_allowed": _final_end["end_service_allowed"],
         "end_service_reason": _final_end["reason"],
