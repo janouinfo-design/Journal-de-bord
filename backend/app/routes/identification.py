@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.auth import get_current_user
@@ -302,58 +303,96 @@ async def vehicle_assignment_change(payload: AssignIn, user=Depends(get_current_
 async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> dict:
     """Décision AUTORITAIRE « Fin de service » côté serveur (réutilisée par END).
 
-    Reproduit la résolution d'éligibilité Mode Privé (gate) + l'état courant, puis
-    applique end_service_policy.decide_end_service(). Fail-closed UNIQUEMENT pour les
-    couples réellement éligibles ; non applicable -> END autorisée.
+    SÉPARATION STRICTE (corrige la faille allowed!=applicable) :
+      - private_mode_applicable = APPLICABILITÉ DURABLE du couple (chauffeur,
+        véhicule), calculée UNIQUEMENT à partir de signaux durables (tenant pilote
+        + véhicule/tracker pilote + capability hardware ; ou, en ACCOUNT_MODEL,
+        compte lié + private_mode_enabled + modèle supporté + capability prête).
+      - Les conditions TRANSITOIRES (feature flag, kill switch, intégration Navixy
+        indisponible, erreur de lecture) NE transforment JAMAIS applicable en
+        False. Si elles empêchent de prouver BUSINESS alors que applicable=True,
+        la décision est fail-closed (END bloquée).
 
     NE MODIFIE PAS le moteur AVL16 ni la confirmation PRIVATE/BUSINESS (lecture seule).
     """
     from app import private_mode_engine as pm
     from app import private_mode_gate as gate
     from app import vehicle_assignment as va
-    from app.end_service_policy import decide_end_service
+    from app.end_service_policy import compute_private_mode_applicable, decide_end_service
     from app.tenant_context import get_tenant_doc
 
-    # Feature globale coupée / kill switch -> Mode Privé NON applicable -> END autorisée.
-    if not gate.feature_enabled():
-        return decide_end_service(private_mode_applicable=False, state=None)
+    # 1) Véhicule actif du chauffeur (affectation persistante ; fallback session BLE).
+    #    Pas de véhicule résolu -> aucun couple applicable -> END autorisée.
     try:
-        if await gate.kill_switch_active(db):
-            return decide_end_service(private_mode_applicable=False, state=None)
+        vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
+        if not vehicle_id:
+            sess = await ble_engine.get_current_session(db, driver_id)
+            vehicle_id = sess.get("vehicle_id") if sess else None
     except Exception:
-        # Lecture kill switch impossible : on ne bloque pas une Fin de service
-        # pour un couple dont on ignore encore l'éligibilité -> non applicable.
+        vehicle_id = None
+    if not vehicle_id:
         return decide_end_service(private_mode_applicable=False, state=None)
 
-    # Véhicule actif du chauffeur (affectation persistante ; fallback session BLE).
-    vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
-    if not vehicle_id:
-        sess = await ble_engine.get_current_session(db, driver_id)
-        vehicle_id = sess.get("vehicle_id") if sess else None
-    if not vehicle_id:
-        # Pas de véhicule résolu -> Mode Privé non applicable -> END autorisée.
-        return decide_end_service(private_mode_applicable=False, state=None)
-
-    vehicle = await db.vehicles.find_one(
-        {"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0}) or {}
-    tracker_id = vehicle.get("navixy_tracker_id")
-    model = pm.resolve_model(vehicle.get("model"))
+    # 2) APPLICABILITÉ DURABLE — signaux durables UNIQUEMENT, selon le rollout actif.
+    #    (feature flag / kill switch / intégration Navixy / DEVICE_WRITE NE sont PAS
+    #     consultés ici : ils ne peuvent jamais rendre applicable=False.)
     try:
+        vehicle = await db.vehicles.find_one(
+            {"id": vehicle_id, "tenant_id": tenant_id}, {"_id": 0}) or {}
+        tracker_id = vehicle.get("navixy_tracker_id")
+        model = pm.resolve_model(vehicle.get("model"))
         vc = await pm.resolve_vehicle_capability(db, tracker_id, model)
-        decision = await gate.can_use_private_mode(
-            db, tenant_id=tenant_id, tenant_doc=get_tenant_doc(tenant_id),
-            vehicle_doc=vehicle, capability=vc,
-        )
-        applicable = bool(decision.get("allowed"))
+
+        # Rollout dynamique : ACCOUNT_MODEL si activé (env), sinon LEGACY.
+        generalized = False
+        _acct_gate = getattr(gate, "account_model_gate_enabled", None)
+        if callable(_acct_gate):
+            generalized = bool(_acct_gate())
+
+        if generalized:
+            # --- ACCOUNT_MODEL : compte + modèle + profil persistant ---
+            account_ok = False
+            _acct_enabled = getattr(gate, "driver_account_private_mode_enabled", None)
+            if callable(_acct_enabled):
+                res_acct = await _acct_enabled(db, tenant_id, driver_id)
+                # helper PROD renvoie (bool, reason) ; on ne garde que le bool.
+                account_ok = bool(res_acct[0] if isinstance(res_acct, (tuple, list))
+                                  else res_acct)
+            from app.odometer_capability import (model_private_mode_supported,
+                                                 vehicle_private_profile_ready)
+            applicable_res = compute_private_mode_applicable(
+                rollout="ACCOUNT_MODEL",
+                tracker_present=bool(tracker_id),
+                account_ok=account_ok,
+                model_supported=bool(model_private_mode_supported(model)),
+                profile_ready=bool(vehicle_private_profile_ready(
+                    model, vc, tracker_id=tracker_id)),
+            )
+        else:
+            # --- LEGACY (actuellement actif en PROD) ---
+            from app.odometer_capability import vehicle_private_mode_allowed
+            applicable_res = compute_private_mode_applicable(
+                rollout="LEGACY",
+                tenant_pilot=gate.tenant_allowed(get_tenant_doc(tenant_id), tenant_id),
+                vehicle_pilot=gate.vehicle_is_pilot(vehicle),
+                tracker_present=bool(tracker_id),
+                capability_ready=bool(vehicle_private_mode_allowed(model, vc)),
+            )
+        applicable = applicable_res["private_mode_applicable"]
     except Exception:
-        # Impossible d'établir l'éligibilité -> on considère NON applicable
-        # (on ne bloque pas un véhicule dont on ne peut prouver qu'il est pilote).
-        return decide_end_service(private_mode_applicable=False, state=None)
+        # Erreur de calcul technique de l'applicabilité -> FAIL-CLOSED :
+        # on NE conclut PAS « non applicable » (ce qui ouvrirait END à tort pour
+        # un véhicule potentiellement Mode Privé). On bloque via read_error.
+        return decide_end_service(private_mode_applicable=True, state=None,
+                                  read_error=True)
 
     if not applicable:
+        # Non applicable de façon DURABLE -> Fin de service autorisée (cas Ivan/S564).
         return decide_end_service(private_mode_applicable=False, state=None)
 
-    # Éligible : lecture de l'état courant (fail-closed si illisible).
+    # 3) Éligible durable : lecture de l'état courant (fail-closed si illisible).
+    #    Un kill switch / une intégration Navixy indisponible peut faire échouer
+    #    cette lecture -> read_error=True -> END bloquée (jamais autorisée à tort).
     try:
         st = await pm.get_mode_state(db, vehicle_id)
         if st.get("state") == pm.PENDING_CONFIRMATION:
@@ -361,7 +400,8 @@ async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> d
         state_now = st.get("state", pm.UNKNOWN)
         return decide_end_service(private_mode_applicable=True, state=state_now)
     except Exception:
-        return decide_end_service(private_mode_applicable=True, state=None, read_error=True)
+        return decide_end_service(private_mode_applicable=True, state=None,
+                                  read_error=True)
 
 
 @router.post("/driver/vehicle-assignment/end")
@@ -383,14 +423,18 @@ async def vehicle_assignment_end(payload: AssignEndIn, user=Depends(get_current_
     gate_decision = await _resolve_end_service_decision(db, tenant_id, driver_id)
     if not gate_decision["end_service_allowed"]:
         # Bloqué côté serveur : l'app ne peut pas contourner la règle de sécurité.
-        return {
-            "ok": False,
-            "result": "blocked",
-            "reason": gate_decision["reason"],
-            "private_mode_applicable": gate_decision["private_mode_applicable"],
-            "end_service_allowed": False,
-            "http_status": 409,
-        }
+        # VRAI statut HTTP 409 (pas un HTTP 200 contenant "http_status": 409).
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "result": "blocked",
+                "reason": gate_decision["reason"],
+                "private_mode_applicable": gate_decision["private_mode_applicable"],
+                "end_service_allowed": False,
+                "http_status": 409,
+            },
+        )
 
     res = await va.end(db, tenant_id=tenant_id, driver_id=driver_id,
                        actor_id=user.get("email", "?"), actor_role=user.get("role", "driver"),
@@ -493,16 +537,16 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
         exposed_private_distance_km = st.get("private_distance_km")
 
     # --- DÉCISION AUTORITAIRE « Fin de service » (backend = source de vérité) ---
-    # L'app NE doit PAS déduire la règle depuis `state`. Le backend expose
-    # explicitement private_mode_applicable + end_service_allowed.
-    #   non applicable            -> END autorisée
-    #   applicable + BUSINESS      -> END autorisée
-    #   applicable + autre/illisible -> END bloquée (fail-closed)
-    from app.end_service_policy import decide_end_service
-    end_decision = decide_end_service(
-        private_mode_applicable=bool(allowed),
+    # L'app NE doit PAS déduire la règle depuis `state`. On calcule l'applicabilité
+    # DURABLE via _resolve_end_service_decision (jamais sur allowed transitoire),
+    # PUIS on recalcule la décision END avec `state_now` FINAL (après résolution
+    # tardive PRIVATE/BUSINESS) : un état passé de PENDING à BUSINESS doit autoriser
+    # END. On NE réutilise donc PAS la décision précoce pour le retour final.
+    from app.end_service_policy import decide_end_service as _decide_end
+    _applic = await _resolve_end_service_decision(db, tenant_id, driver_id)
+    end_decision = _decide_end(
+        private_mode_applicable=_applic["private_mode_applicable"],
         state=state_now,
-        read_error=False,
     )
 
     return {

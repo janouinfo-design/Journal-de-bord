@@ -2623,6 +2623,305 @@ agent_communication:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 backend:
+  - task: "CORRECTION DE CONCEPTION — Fin de service ↔ Mode Privé (séparation applicabilité durable / conditions transitoires)"
+    implemented: true
+    working: true
+    file: "backend/app/end_service_policy.py, backend/app/routes/identification.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          CORRECTION DE CONCEPTION VALIDÉE (ADAPTATION PROD ACCOUNT_MODEL/LEGACY) — ✅ TOUS LES TESTS PASSED (38/38 : 23 règle métier + 15 non-régression).
+          
+          CONTEXTE : Validation du correctif « Fin de service ↔ Mode Privé » APRÈS adaptation au modèle PROD (séparation stricte applicabilité durable / transitoire + support dynamique LEGACY/ACCOUNT_MODEL + vrai HTTP 409). PÉRIMÈTRE STRICT : exécution UNIQUEMENT des tests pytest listés. AUCUNE modification de code, AUCUNE modification de base réelle de PROD, AUCUN déploiement, AUCUNE commande device, AUCUN test AVL16 ni confirmation PRIVATE/BUSINESS.
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          COMMANDES EXÉCUTÉES
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          (1) cd /app/backend && python3 -m pytest tests/test_end_service_policy.py -v
+              → 23 passed in 0.09s ✓
+          
+          (2) cd /app/backend && python3 -m pytest tests/test_vehicle_assignment.py -q
+              → 15 passed in 0.09s ✓
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          CERTIFICATIONS DEMANDÉES
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          ✅ A. test_end_service_policy.py : 23/23 PASS — Règle métier pure + correction faille + rollout dynamique
+          
+             ROLLOUT DYNAMIQUE (LEGACY/ACCOUNT_MODEL) :
+               ✓ test_account_applicable_all_true (ACCOUNT_MODEL applicable)
+               ✓ test_account_disabled_not_applicable (account_ok=False -> applicable=false -> END allowed)
+               ✓ test_account_profile_absent_not_applicable (profile_ready=False -> applicable=false -> END allowed)
+               ✓ test_account_no_tracker_not_applicable
+               ✓ test_account_model_unsupported_not_applicable
+               ✓ test_legacy_applicable_all_true (LEGACY applicable)
+               ✓ test_legacy_not_pilot_not_applicable
+               ✓ test_legacy_capability_absent_not_applicable
+               ✓ test_legacy_no_tracker_not_applicable
+          
+             DÉCISION END (decide_end_service) :
+               ✓ test_not_applicable_allows_end (non applicable -> END allowed)
+               ✓ test_not_applicable_allows_end_even_if_state_private
+               ✓ test_applicable_business_allows_end (applicable + BUSINESS -> END allowed)
+               ✓ test_applicable_private_blocks_end (applicable + PRIVATE -> END blocked)
+               ✓ test_applicable_pending_blocks_end (applicable + PENDING -> END blocked)
+               ✓ test_applicable_requested_states_block_end (applicable + PRIVATE_REQUESTED/BUSINESS_REQUESTED -> END blocked)
+               ✓ test_applicable_unknown_blocks_end (applicable + UNKNOWN -> END blocked)
+          
+             CORRECTION FAILLE (intégration indisponible NE flippe PAS applicable) :
+               ✓ test_applicable_killswitch_state_unreadable_blocks_end
+                 → applicable + kill switch (état illisible via read_error) -> END bloquée (fail-closed, PAS autorisé)
+               ✓ test_integration_unavailable_does_not_flip_applicable
+                 → intégration indisponible NE transforme PAS applicable en false (compute n'a aucun param d'intégration)
+               ✓ test_read_error_blocks_when_applicable
+                 → erreur technique -> fail-closed (read_error -> blocked)
+          
+             CAS MÉTIER NOMMÉS (preuves PROD) :
+               ✓ test_cas_ivan_s564_legacy_not_applicable_end_allowed
+                 → Ivan/S564 (legacy non applicable : vehicle_pilot=False + capability=False) -> END allowed
+               ✓ test_cas_orhan_audi_legacy_applicable_private_blocks
+                 → Orhan/Audi (legacy applicable : pilot + capability) + PRIVATE -> END blocked
+               ✓ test_cas_orhan_audi_business_allows_end
+                 → Orhan/Audi (legacy applicable) + BUSINESS -> END allowed
+               ✓ test_cas_orhan_audi_killswitch_does_not_allow_end
+                 → Orhan/Audi (applicable + kill switch) -> END bloquée (jamais autorisée à tort)
+          
+          ✅ B. test_vehicle_assignment.py : 15/15 PASS — Non-régression affectation véhicule
+          
+             Aucune régression du flux TAKE/CHANGE/END/exclusivité suite à l'adaptation PROD.
+             Tests confirmés :
+               ✓ test_take_creates_active_assignment
+               ✓ test_take_idempotent_same_request
+               ✓ test_reopen_app_assignment_persists
+               ✓ test_pause_does_not_release
+               ✓ test_private_mode_does_not_release
+               ✓ test_change_a_to_b_success
+               ✓ test_change_a_to_b_rejected_leaves_A_unchanged (CRITIQUE : B occupé -> A inchangé)
+               ✓ test_other_driver_cannot_take_occupied_vehicle
+               ✓ test_concurrent_take_same_vehicle_only_one_wins
+               ✓ test_double_click_take_no_duplicate
+               ✓ test_end_of_service_releases_vehicle
+               ✓ test_admin_force_end_releases_vehicle
+               ✓ test_history_reconstructed_from_events_only
+               ✓ test_multitenant_isolation_same_vehicle_id
+               ✓ test_resolve_active_vehicle_none_when_no_assignment
+          
+          ✅ C. CODE VÉRIFIÉ — _resolve_end_service_decision + POST /driver/vehicle-assignment/end + GET /driver/private-mode
+          
+             Fonction _resolve_end_service_decision() (identification.py lignes 303-404) :
+               ✓ N'UTILISE PLUS `can_use_private_mode()["allowed"]` pour déterminer applicable
+               ✓ Calcule applicable via `compute_private_mode_applicable()` avec SIGNAUX DURABLES UNIQUEMENT :
+                 - Rollout dynamique : getattr(gate, "account_model_gate_enabled", None) -> ACCOUNT_MODEL sinon LEGACY (lignes 347-350)
+                 - ACCOUNT_MODEL : account_ok (driver_account_private_mode_enabled) + model_supported + profile_ready (lignes 352-370)
+                 - LEGACY : tenant_pilot (gate.tenant_allowed) + vehicle_pilot (gate.vehicle_is_pilot) + tracker_present + capability_ready (lignes 372-380)
+               ✓ N'appelle PAS feature_enabled() / kill_switch_active() / integration pour calculer applicable
+               ✓ Ces conditions transitoires ne rendent PAS applicable=false
+               ✓ Si elles empêchent de lire l'état -> read_error=True -> END bloquée (fail-closed, lignes 396-404)
+               ✓ Erreur de calcul technique de l'applicabilité -> FAIL-CLOSED (lignes 382-387 : applicable=True + read_error=True)
+          
+             POST /driver/vehicle-assignment/end (identification.py lignes 407-447) :
+               ✓ Appelle `_resolve_end_service_decision()` (ligne 423)
+               ✓ Refuse avec VRAI HTTP 409 (JSONResponse status_code=409) quand end_service_allowed=False (lignes 424-437)
+               ✓ Insère la décision AVANT l'appel à va.end() (ligne 439)
+               ✓ Retourne private_mode_applicable + end_service_allowed + reason dans tous les cas
+          
+             GET /driver/private-mode (identification.py lignes 451-572) :
+               ✓ Utilise la MÊME fonction `_resolve_end_service_decision` (ligne 545)
+               ✓ Expose private_mode_applicable, end_service_allowed, end_service_reason (lignes 569-571)
+               ✓ Cohérence GET/END garantie (même calcul applicable, même règle END)
+          
+          ✅ D. AUCUNE DONNÉE RÉELLE MODIFIÉE — AUCUNE COMMANDE DEVICE ENVOYÉE
+          
+             ✓ Tests exécutés en mémoire uniquement (fake DB dans test_end_service_policy.py et test_vehicle_assignment.py)
+             ✓ Fonction compute_private_mode_applicable() est PURE (aucun effet de bord, aucune I/O)
+             ✓ Fonction decide_end_service() est PURE (aucun effet de bord, aucune I/O)
+             ✓ AUCUNE connexion MongoDB réelle
+             ✓ AUCUNE commande Navixy/Teltonika
+             ✓ AUCUN déploiement
+             ✓ AUCUNE synchro navixy_sync
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          NOTE ENVIRONNEMENT DE TEST
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          L'environnement de test est LEGACY-only (helpers ACCOUNT_MODEL absents -> gérés par getattr défensif -> chemin LEGACY). C'est normal et correspond au rollout PROD actuel (ACCOUNT_MODEL OFF). Le code supporte dynamiquement les deux rollouts via getattr(gate, "account_model_gate_enabled", None).
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          FINAL VERDICT: ✅ PASS — ADAPTATION PROD VALIDÉE À 100%
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          Tous les points A→D confirmés explicitement:
+          ✅ A. Règle métier pure : 23/23 PASS (9 ACCOUNT_MODEL + 4 LEGACY + 7 decide + 3 faille + 4 cas métier)
+          ✅ B. Non-régression affectation : 15/15 PASS (aucune régression du flux TAKE/CHANGE/END)
+          ✅ C. _resolve_end_service_decision N'UTILISE PLUS can_use_private_mode()["allowed"] pour applicable
+               - Calcule applicable via signaux DURABLES uniquement (rollout dynamique LEGACY/ACCOUNT_MODEL)
+               - feature_enabled/kill_switch/integration NE transforment PAS applicable en false
+               - GET /driver/private-mode et POST end utilisent la MÊME fonction (cohérence)
+               - POST end retourne un VRAI HTTP 409 (JSONResponse status_code=409)
+          ✅ D. AUCUNE donnée réelle modifiée, AUCUNE commande device envoyée
+          
+          Règle métier respectée (correction faille) :
+            - NON applicable -> END AUTORISÉE (corrige le bug Ivan/S564)
+            - applicable + BUSINESS -> END AUTORISÉE
+            - applicable + autre état (PRIVATE/PENDING/REQUESTED/UNKNOWN) -> END BLOQUÉE
+            - applicable + kill switch / Navixy down (read_error) -> END BLOQUÉE (fail-closed, jamais autorisée à tort)
+            - intégration indisponible NE transforme PAS applicable en false
+          
+          Prêt pour déploiement PROD.
+      - working: true
+        agent: "testing"
+        comment: |
+          CORRECTION DE CONCEPTION VALIDÉE — ✅ TOUS LES TESTS PASSED (37/37 : 22 règle métier + 15 non-régression).
+          
+          CONTEXTE : Validation du correctif de CONCEPTION d'un correctif précédent sur la « Fin de service » ↔ Mode Privé.
+          FAILLE CORRIGÉE : le correctif initial utilisait `can_use_private_mode()["allowed"]` comme `private_mode_applicable`.
+          Or `allowed` MÉLANGE applicabilité durable ET conditions transitoires (feature flag, kill switch, intégration Navixy
+          indisponible). Donc un véhicule RÉELLEMENT Mode Privé avec kill switch actif / Navixy down aurait `allowed=False`
+          -> END aurait été autorisée À TORT.
+          
+          CORRECTION : séparation stricte entre applicabilité DURABLE et conditions transitoires.
+          - NOUVELLE fonction pure `compute_private_mode_applicable(rollout, account_linked, private_mode_enabled, model_supported,
+            capability_ready, tenant_pilot, vehicle_pilot, tracker_present)` -> applicabilité DURABLE. Aucune entrée transitoire
+            (pas de feature/kill_switch/integration).
+          - `decide_end_service(private_mode_applicable, state, read_error)` : applicable=false -> END allowed ; applicable=true
+            + BUSINESS -> allowed ; applicable=true + autre/read_error -> blocked.
+          - `_resolve_end_service_decision()` calcule désormais applicable via les SIGNAUX DURABLES (tenant pilote + véhicule pilote
+            + tracker + capability hardware), SANS consulter feature_enabled/kill_switch/integration. Erreur de calcul technique
+            -> fail-closed (applicable=true + read_error -> blocked). Lecture d'état échouée (kill switch/Navixy down) -> read_error
+            -> blocked.
+          - GET /driver/private-mode utilise la MÊME fonction `_resolve_end_service_decision` (cohérence GET/END).
+          - POST /driver/vehicle-assignment/end reste autoritaire (409/result="blocked" si end_service_allowed=false).
+          
+          PÉRIMÈTRE STRICT : exécution UNIQUEMENT des tests pytest listés. AUCUNE modification de code, AUCUNE modification de base
+          réelle, AUCUN déploiement, AUCUNE commande device. Tests en mémoire uniquement (fake DB).
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          COMMANDES EXÉCUTÉES
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          (1) cd /app/backend && python3 -m pytest tests/test_end_service_policy.py -v
+              → 22 passed in 0.09s ✓
+          
+          (2) cd /app/backend && python3 -m pytest tests/test_vehicle_assignment.py -q
+              → 15 passed in 0.09s ✓
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          CERTIFICATIONS DEMANDÉES
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          ✅ A. test_end_service_policy.py : 22/22 PASS — Règle métier pure + correction faille
+          
+             NOUVEAUX TESTS (correction faille) :
+               ✓ test_applicable_killswitch_state_unreadable_blocks_end
+                 → applicable + kill switch (état illisible via read_error) -> END bloquée (fail-closed, PAS autorisé)
+               ✓ test_integration_unavailable_does_not_flip_applicable
+                 → intégration indisponible NE transforme PAS applicable en false (compute n'a aucun param d'intégration)
+               ✓ test_read_error_blocks_when_applicable
+                 → erreur technique -> fail-closed (read_error -> blocked)
+               ✓ test_cas_orhan_audi_killswitch_does_not_allow_end
+                 → Orhan/Audi (applicable + kill switch) -> END bloquée (jamais autorisée à tort)
+          
+             CAS MÉTIER EXISTANTS (non-régression) :
+               ✓ test_account_applicable_all_true (ACCOUNT_MODEL applicable)
+               ✓ test_account_disabled_not_applicable (private_mode_enabled=False -> applicable=false -> END allowed)
+               ✓ test_account_capability_absent_not_applicable (capability/profile absent -> applicable=false -> END allowed)
+               ✓ test_account_not_linked_not_applicable
+               ✓ test_account_model_unsupported_not_applicable
+               ✓ test_legacy_applicable_all_true (LEGACY applicable)
+               ✓ test_legacy_not_pilot_not_applicable
+               ✓ test_legacy_capability_absent_not_applicable
+               ✓ test_legacy_no_tracker_not_applicable
+               ✓ test_not_applicable_allows_end (non applicable -> END allowed)
+               ✓ test_not_applicable_allows_end_even_if_state_private
+               ✓ test_applicable_business_allows_end (applicable + BUSINESS -> END allowed)
+               ✓ test_applicable_private_blocks_end (applicable + PRIVATE -> END blocked)
+               ✓ test_applicable_pending_blocks_end (applicable + PENDING -> END blocked)
+               ✓ test_applicable_requested_states_block_end (applicable + PRIVATE_REQUESTED/BUSINESS_REQUESTED -> END blocked)
+               ✓ test_applicable_unknown_blocks_end (applicable + UNKNOWN -> END blocked)
+               ✓ test_cas_ivan_s564_not_applicable_end_allowed (Ivan/S564 non applicable -> END allowed)
+               ✓ test_cas_orhan_audi_applicable_private_blocks (Orhan/Audi applicable + PRIVATE -> blocked)
+          
+          ✅ B. test_vehicle_assignment.py : 15/15 PASS — Non-régression affectation véhicule
+          
+             Aucune régression du flux TAKE/CHANGE/END/exclusivité suite à la correction de conception.
+             Tests confirmés :
+               ✓ test_take_creates_active_assignment
+               ✓ test_take_idempotent_same_request
+               ✓ test_reopen_app_assignment_persists
+               ✓ test_pause_does_not_release
+               ✓ test_private_mode_does_not_release
+               ✓ test_change_a_to_b_success
+               ✓ test_change_a_to_b_rejected_leaves_A_unchanged (CRITIQUE : B occupé -> A inchangé)
+               ✓ test_other_driver_cannot_take_occupied_vehicle
+               ✓ test_concurrent_take_same_vehicle_only_one_wins
+               ✓ test_double_click_take_no_duplicate
+               ✓ test_end_of_service_releases_vehicle
+               ✓ test_admin_force_end_releases_vehicle
+               ✓ test_history_reconstructed_from_events_only
+               ✓ test_multitenant_isolation_same_vehicle_id
+               ✓ test_resolve_active_vehicle_none_when_no_assignment
+          
+          ✅ C. CODE VÉRIFIÉ — _resolve_end_service_decision N'UTILISE PLUS can_use_private_mode()["allowed"]
+          
+             Fonction _resolve_end_service_decision() (identification.py lignes 302-376) :
+               ✓ N'UTILISE PLUS `can_use_private_mode()["allowed"]` pour déterminer applicable
+               ✓ Calcule applicable via `compute_private_mode_applicable()` avec SIGNAUX DURABLES UNIQUEMENT :
+                 - tenant_pilot (gate.tenant_allowed)
+                 - vehicle_pilot (gate.vehicle_is_pilot)
+                 - tracker_present (bool(tracker_id))
+                 - model_supported (bool(model))
+                 - capability_ready (bool(vehicle_private_mode_allowed(model, vc)))
+               ✓ N'appelle PAS feature_enabled() / kill_switch_active() / integration pour calculer applicable
+               ✓ Ces conditions transitoires ne rendent PAS applicable=false
+               ✓ Si elles empêchent de lire l'état -> read_error=True -> END bloquée (fail-closed)
+          
+             GET /driver/private-mode (identification.py lignes 418-539) :
+               ✓ Utilise la MÊME fonction `_resolve_end_service_decision` (ligne 512)
+               ✓ Cohérence GET/END garantie (même calcul applicable, même règle END)
+          
+             POST /driver/vehicle-assignment/end (identification.py lignes 378-414) :
+               ✓ Appelle `_resolve_end_service_decision()` (ligne 394)
+               ✓ Refuse avec http_status=409 + result="blocked" quand end_service_allowed=False (lignes 395-404)
+               ✓ Libère normalement le véhicule quand end_service_allowed=True (lignes 406-414)
+          
+          ✅ D. AUCUNE DONNÉE RÉELLE MODIFIÉE — AUCUNE COMMANDE DEVICE ENVOYÉE
+          
+             ✓ Tests exécutés en mémoire uniquement (fake DB dans test_end_service_policy.py et test_vehicle_assignment.py)
+             ✓ Fonction compute_private_mode_applicable() est PURE (aucun effet de bord, aucune I/O)
+             ✓ Fonction decide_end_service() est PURE (aucun effet de bord, aucune I/O)
+             ✓ PRIVATE_MODE_DEVICE_WRITE=0 confirmé (/app/backend/.env ligne 32)
+             ✓ AUCUNE connexion MongoDB réelle
+             ✓ AUCUNE commande Navixy/Teltonika
+             ✓ AUCUN déploiement
+             ✓ AUCUNE synchro navixy_sync
+          
+          ═══════════════════════════════════════════════════════════════════════════════
+          FINAL VERDICT: ✅ PASS — CORRECTION DE CONCEPTION VALIDÉE À 100%
+          ═══════════════════════════════════════════════════════════════════════════════
+          
+          Tous les points A→D confirmés explicitement:
+          ✅ A. Règle métier pure : 22/22 PASS (4 nouveaux tests faille + 18 cas métier existants)
+          ✅ B. Non-régression affectation : 15/15 PASS (aucune régression du flux TAKE/CHANGE/END)
+          ✅ C. _resolve_end_service_decision N'UTILISE PLUS can_use_private_mode()["allowed"] pour applicable
+               - Calcule applicable via signaux DURABLES uniquement (tenant/vehicle pilote, tracker, capability)
+               - feature_enabled/kill_switch/integration NE transforment PAS applicable en false
+               - GET /driver/private-mode et POST end utilisent la MÊME fonction (cohérence)
+          ✅ D. AUCUNE donnée réelle modifiée, AUCUNE commande device envoyée
+          
+          Règle métier respectée (correction faille) :
+            - NON applicable -> END AUTORISÉE (corrige le bug Ivan/S564)
+            - applicable + BUSINESS -> END AUTORISÉE
+            - applicable + autre état (PRIVATE/PENDING/REQUESTED/UNKNOWN) -> END BLOQUÉE
+            - applicable + kill switch / Navixy down (read_error) -> END BLOQUÉE (fail-closed, jamais autorisée à tort)
+            - intégration indisponible NE transforme PAS applicable en false
+          
+          Prêt pour déploiement PROD.
   - task: "BUG FIX — Fin de service bloquée à tort (véhicules non éligibles Mode Privé)"
     implemented: true
     working: true
@@ -2752,12 +3051,36 @@ metadata:
 
 test_plan:
   current_focus:
-    - "BUG FIX — Fin de service bloquée à tort (véhicules non éligibles Mode Privé)"
+    - "CORRECTION DE CONCEPTION — Fin de service ↔ Mode Privé (séparation applicabilité durable / conditions transitoires)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ CERTIFICATION COMPLÈTE — CORRECTION DE CONCEPTION « FIN DE SERVICE » VALIDÉE (37/37 TESTS PASSED).
+      
+      RÉSUMÉ EXÉCUTIF :
+      - test_end_service_policy.py : 22/22 PASSED (règle métier pure + correction faille)
+      - test_vehicle_assignment.py : 15/15 PASSED (non-régression affectation)
+      - _resolve_end_service_decision : N'UTILISE PLUS can_use_private_mode()["allowed"] pour applicable
+      - Calcule applicable via SIGNAUX DURABLES uniquement (tenant/vehicle pilote, tracker, capability)
+      - feature_enabled/kill_switch/integration NE transforment PAS applicable en false
+      - GET /driver/private-mode et POST end utilisent la MÊME fonction (cohérence)
+      - AUCUNE donnée réelle modifiée, AUCUNE commande device envoyée
+      
+      FAILLE CORRIGÉE : le correctif initial utilisait `can_use_private_mode()["allowed"]` comme
+      `private_mode_applicable`. Or `allowed` MÉLANGE applicabilité durable ET conditions transitoires
+      (feature flag, kill switch, intégration Navixy indisponible). Donc un véhicule RÉELLEMENT Mode
+      Privé avec kill switch actif / Navixy down aurait `allowed=False` -> END aurait été autorisée À TORT.
+      
+      CORRECTION : séparation stricte entre applicabilité DURABLE (signaux durables uniquement) et
+      conditions transitoires. Un véhicule réellement Mode Privé (applicable=true) dont l'état n'est
+      pas prouvé BUSINESS (kill switch actif, Navixy indisponible, erreur lecture) -> END BLOQUÉE
+      (fail-closed, jamais autorisée à tort).
+      
+      Prêt pour déploiement PROD.
   - agent: "testing"
     message: |
       ✅ CERTIFICATION COMPLÈTE — BUG FIX « FIN DE SERVICE » VALIDÉ (24/24 TESTS PASSED).
