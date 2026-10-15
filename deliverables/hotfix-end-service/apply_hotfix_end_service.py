@@ -32,19 +32,28 @@ import sys
 from datetime import datetime, timezone
 
 EXPECTED_ID_SHA256 = "443469b351cb495b6c14247e3ddf222ded61016e8d8064d940fbf9c1e503b592"
+EXPECTED_POLICY_SHA256 = "e662690cd836cb6caec5101d33b5c8334c4a255439d583e8d74689605ea1002f"
 
 # Contenu EXACT (base64) du nouveau end_service_policy.py (SHA256 e662690...).
 END_SERVICE_POLICY_B64 = (
     "IiIiUG9saXRpcXVlIEFVVE9SSVRBSVJFIMKrIEZpbiBkZSBzZXJ2aWNlIMK7IOKGlCBNb2RlIFByaXbDqS4KClPDiVBBUkFUSU9OIFNUUklDVEUgKGNvcnJpZ2UgbGEgZmFpbGxlIDogY2FuX3VzZV9wcml2YXRlX21vZGUoKS5hbGxvd2VkIE3DiUxBTkdFCmFwcGxpY2FiaWxpdMOpIGR1cmFibGUgZXQgY29uZGl0aW9ucyB0cmFuc2l0b2lyZXMg4oCUIGtpbGwgc3dpdGNoLCBmZWF0dXJlIGZsYWcsCmludMOpZ3JhdGlvbiBOYXZpeHkgaW5kaXNwb25pYmxlIOKAlCBkb25jIGFsbG93ZWQ9RmFsc2UgTkUgc2lnbmlmaWUgUEFTIMKrIE1vZGUgUHJpdsOpCm5vbiBhcHBsaWNhYmxlIMK7KS4KCkRldXggbm90aW9ucyBkaXN0aW5jdGVzIDoKCiAgMSkgcHJpdmF0ZV9tb2RlX2FwcGxpY2FibGUgPSBBUFBMSUNBQklMSVTDiSBEVVJBQkxFIGR1IGNvdXBsZSAoY2hhdWZmZXVyLCB2w6loaWN1bGUpLgogICAgIEVsbGUgTkUgZMOpcGVuZCBRVUUgZGUgc2lnbmF1eCBkdXJhYmxlcyA6CiAgICAgICAgLSByb2xsb3V0IEFDQ09VTlRfTU9ERUwgOiBjb21wdGUgY2hhdWZmZXVyIGxpw6kgKyBwcml2YXRlX21vZGVfZW5hYmxlZD1UcnVlCiAgICAgICAgICArIG1vZMOobGUgc3VwcG9ydMOpICsgY2FwYWJpbGl0eS9wcm9maWxlIHBlcnNpc3RhbnQgcHLDqnQgcG91ciBjZSB0cmFja2VyIDsKICAgICAgICAtIHJvbGxvdXQgbGVnYWN5ICAgICAgIDogdGVuYW50IHBpbG90ZSArIHbDqWhpY3VsZS90cmFja2VyIHBpbG90ZQogICAgICAgICAgKyBjYXBhYmlsaXR5IGNvbXBhdGlibGUuCiAgICAgTGVzIGNvbmRpdGlvbnMgVFJBTlNJVE9JUkVTIChmZWF0dXJlIGdsb2JhbGUsIGtpbGwgc3dpdGNoLCBpbnTDqWdyYXRpb24gTmF2aXh5CiAgICAgaW5kaXNwb25pYmxlLCBlcnJldXIgdGVjaG5pcXVlIGRlIGxlY3R1cmUpIE5FIHRyYW5zZm9ybWVudCBKQU1BSVMgYXBwbGljYWJsZQogICAgIGVuIEZhbHNlLgoKICAyKSBlbmRfc2VydmljZV9hbGxvd2VkID0gZMOpY2lzaW9uIEZpbiBkZSBzZXJ2aWNlLCDDoCBwYXJ0aXIgZGUgKGFwcGxpY2FibGUsIHN0YXRlKSA6CiAgICAgICAgYXBwbGljYWJsZT1mYWxzZSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA9PiBFTkQgQVVUT1JJU8OJRQogICAgICAgIGFwcGxpY2FibGU9dHJ1ZSArIEJVU0lORVNTIGNvbmZpcm3DqSAgICAgICAgICAgICAgID0+IEVORCBBVVRPUklTw4lFCiAgICAgICAgYXBwbGljYWJsZT10cnVlICsgUFJJVkFURS9QRU5ESU5HL1JFUVVFU1RFRC8KICAgICAgICAgICAgICAgICAgICAgICAgICBVTktOT1dOIC8gcmVhZF9lcnJvciAgICAgICAgICAgID0+IEVORCBCTE9RVcOJRSAoZmFpbC1jbG9zZWQpCgpBaW5zaSwgcG91ciB1biB2w6loaWN1bGUgUsOJRUxMRU1FTlQgTW9kZSBQcml2w6kgKGFwcGxpY2FibGU9dHJ1ZSkgZG9udCBsJ8OpdGF0IG4nZXN0CnBhcyBwcm91dsOpIEJVU0lORVNTIChraWxsIHN3aXRjaCBhY3RpZiwgTmF2aXh5IGluZGlzcG9uaWJsZSwgZXJyZXVyIGxlY3R1cmUuLi4pLApsYSBGaW4gZGUgc2VydmljZSByZXN0ZSBCTE9RVcOJRSDigJQgamFtYWlzIG91dmVydGUgcGFyIGVycmV1ci4KCk5FIE1PRElGSUUgTkkgbGUgbW90ZXVyIEFWTDE2IE5JIGxhIGxvZ2lxdWUgZGUgY29uZmlybWF0aW9uIFBSSVZBVEUvQlVTSU5FU1MuCiIiIgpmcm9tIF9fZnV0dXJlX18gaW1wb3J0IGFubm90YXRpb25zCgpmcm9tIHR5cGluZyBpbXBvcnQgT3B0aW9uYWwKCl9CVVNJTkVTUyA9ICJCVVNJTkVTUyIKCiMgUmFpc29ucyBhcHBsaWNhYmlsaXTDqSAoc3RhYmxlcywgdGVzdGFibGVzKS4KUl9BUFBMSUNBQkxFX0FDQ09VTlQgPSAiQVBQTElDQUJMRV9BQ0NPVU5UX01PREVMIgpSX0FQUExJQ0FCTEVfTEVHQUNZID0gIkFQUExJQ0FCTEVfTEVHQUNZX1BJTE9UIgpSX05PVF9BUFBMSUNBQkxFX0FDQ09VTlQgPSAiTk9UX0FQUExJQ0FCTEVfQUNDT1VOVCIKUl9OT1RfQVBQTElDQUJMRV9MRUdBQ1kgPSAiTk9UX0FQUExJQ0FCTEVfTEVHQUNZIgoKIyBSYWlzb25zIGTDqWNpc2lvbiBFTkQuClJfRU5EX09LX05PVF9BUFBMSUNBQkxFID0gIkVORF9PS19QUklWQVRFX01PREVfTk9UX0FQUExJQ0FCTEUiClJfRU5EX09LX0JVU0lORVNTID0gIkVORF9PS19CVVNJTkVTU19DT05GSVJNRUQiClJfRU5EX0JMT0NLRURfTk9UX0JVU0lORVNTID0gIkVORF9CTE9DS0VEX1BSSVZBVEVfTU9ERV9OT1RfQlVTSU5FU1MiClJfRU5EX0JMT0NLRURfVU5SRUFEQUJMRSA9ICJFTkRfQkxPQ0tFRF9QUklWQVRFX01PREVfVU5SRUFEQUJMRSIKCgpkZWYgY29tcHV0ZV9wcml2YXRlX21vZGVfYXBwbGljYWJsZSgKICAgICosCiAgICByb2xsb3V0OiBzdHIsCiAgICBhY2NvdW50X29rOiBib29sID0gRmFsc2UsCiAgICB0ZW5hbnRfcGlsb3Q6IGJvb2wgPSBGYWxzZSwKICAgIHZlaGljbGVfcGlsb3Q6IGJvb2wgPSBGYWxzZSwKICAgIHRyYWNrZXJfcHJlc2VudDogYm9vbCA9IEZhbHNlLAogICAgbW9kZWxfc3VwcG9ydGVkOiBib29sID0gRmFsc2UsCiAgICBjYXBhYmlsaXR5X3JlYWR5OiBib29sID0gRmFsc2UsCiAgICBwcm9maWxlX3JlYWR5OiBib29sID0gRmFsc2UsCikgLT4gZGljdDoKICAgICIiIkFQUExJQ0FCSUxJVMOJIERVUkFCTEUgKHB1cmUpLiBOJ3V0aWxpc2UgQVVDVU4gc2lnbmFsIHRyYW5zaXRvaXJlLgoKICAgIEFsaWduw6kgc3VyIGxlcyBoZWxwZXJzIFBST0QgKHByaXZhdGVfbW9kZV9nYXRlKSA6CgogICAgICBBQ0NPVU5UX01PREVMIChnYXRlLmFjY291bnRfbW9kZWxfZ2F0ZV9lbmFibGVkKCkgPT0gVHJ1ZSkgOgogICAgICAgIGFwcGxpY2FibGUgPSB0cmFja2VyX3ByZXNlbnQgQU5EIGFjY291bnRfb2sgQU5EIG1vZGVsX3N1cHBvcnRlZAogICAgICAgICAgICAgICAgICAgICBBTkQgcHJvZmlsZV9yZWFkeQogICAgICAgIC0gYWNjb3VudF9vayAgICAgID0gZ2F0ZS5kcml2ZXJfYWNjb3VudF9wcml2YXRlX21vZGVfZW5hYmxlZCguLi4pWzBdCiAgICAgICAgICAoY29tcHRlIGxpw6kgYWN0aWYgKyByb2xlIGRyaXZlciArIHByaXZhdGVfbW9kZV9lbmFibGVkID09IFRydWUpCiAgICAgICAgLSBtb2RlbF9zdXBwb3J0ZWQgPSBtb2RlbF9wcml2YXRlX21vZGVfc3VwcG9ydGVkKG1vZGVsKQogICAgICAgIC0gcHJvZmlsZV9yZWFkeSAgID0gdmVoaWNsZV9wcml2YXRlX3Byb2ZpbGVfcmVhZHkobW9kZWwsIGNhcGFiaWxpdHksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB0cmFja2VyX2lkPXRyYWNrZXJfaWQpCgogICAgICBMRUdBQ1kgKHJvbGxvdXQgcGFyIGTDqWZhdXQsIGFjdHVlbGxlbWVudCBhY3RpZiBlbiBQUk9EKSA6CiAgICAgICAgYXBwbGljYWJsZSA9IHRlbmFudF9waWxvdCBBTkQgdmVoaWNsZV9waWxvdCBBTkQgdHJhY2tlcl9wcmVzZW50CiAgICAgICAgICAgICAgICAgICAgIEFORCBjYXBhYmlsaXR5X3JlYWR5CiAgICAgICAgLSB0ZW5hbnRfcGlsb3QgICAgID0gZ2F0ZS50ZW5hbnRfYWxsb3dlZCh0ZW5hbnRfZG9jLCB0ZW5hbnRfaWQpCiAgICAgICAgLSB2ZWhpY2xlX3BpbG90ICAgID0gZ2F0ZS52ZWhpY2xlX2lzX3BpbG90KHZlaGljbGUpCiAgICAgICAgLSBjYXBhYmlsaXR5X3JlYWR5ID0gdmVoaWNsZV9wcml2YXRlX21vZGVfYWxsb3dlZChtb2RlbCwgY2FwYWJpbGl0eSkKCiAgICBJTVBPUlRBTlQgOiBjZXR0ZSBmb25jdGlvbiBuZSBjb25uYcOudCBQQVMgZmVhdHVyZSBmbGFnIC8ga2lsbCBzd2l0Y2ggLwogICAgaW50w6lncmF0aW9uIE5hdml4eSAvIERFVklDRV9XUklURSAvIMOpdGF0IGNvdXJhbnQgLyBlcnJldXJzIHRlY2huaXF1ZXMuCiAgICBDZXMgY29uZGl0aW9ucyB0cmFuc2l0b2lyZXMgTkUgUEVVVkVOVCBQQVMgcmVuZHJlIGFwcGxpY2FibGU9RmFsc2UuCiAgICAiIiIKICAgIGlmIHJvbGxvdXQgPT0gIkFDQ09VTlRfTU9ERUwiOgogICAgICAgIGFwcGxpY2FibGUgPSBib29sKAogICAgICAgICAgICB0cmFja2VyX3ByZXNlbnQKICAgICAgICAgICAgYW5kIGFjY291bnRfb2sKICAgICAgICAgICAgYW5kIG1vZGVsX3N1cHBvcnRlZAogICAgICAgICAgICBhbmQgcHJvZmlsZV9yZWFkeQogICAgICAgICkKICAgICAgICByZXR1cm4gewogICAgICAgICAgICAicHJpdmF0ZV9tb2RlX2FwcGxpY2FibGUiOiBhcHBsaWNhYmxlLAogICAgICAgICAgICAicmVhc29uIjogUl9BUFBMSUNBQkxFX0FDQ09VTlQgaWYgYXBwbGljYWJsZSBlbHNlIFJfTk9UX0FQUExJQ0FCTEVfQUNDT1VOVCwKICAgICAgICB9CgogICAgIyBMRUdBQ1kgKGTDqWZhdXQgOyBjaGVtaW4gYWN0dWVsbGVtZW50IGFjdGlmIGVuIFBST0QpLgogICAgYXBwbGljYWJsZSA9IGJvb2woCiAgICAgICAgdGVuYW50X3BpbG90CiAgICAgICAgYW5kIHZlaGljbGVfcGlsb3QKICAgICAgICBhbmQgdHJhY2tlcl9wcmVzZW50CiAgICAgICAgYW5kIGNhcGFiaWxpdHlfcmVhZHkKICAgICkKICAgIHJldHVybiB7CiAgICAgICAgInByaXZhdGVfbW9kZV9hcHBsaWNhYmxlIjogYXBwbGljYWJsZSwKICAgICAgICAicmVhc29uIjogUl9BUFBMSUNBQkxFX0xFR0FDWSBpZiBhcHBsaWNhYmxlIGVsc2UgUl9OT1RfQVBQTElDQUJMRV9MRUdBQ1ksCiAgICB9CgoKZGVmIGRlY2lkZV9lbmRfc2VydmljZSgKICAgICosCiAgICBwcml2YXRlX21vZGVfYXBwbGljYWJsZTogYm9vbCwKICAgIHN0YXRlOiBPcHRpb25hbFtzdHJdLAogICAgcmVhZF9lcnJvcjogYm9vbCA9IEZhbHNlLAopIC0+IGRpY3Q6CiAgICAiIiJEw6ljaXNpb24gYXV0b3JpdGFpcmUgZGUgRmluIGRlIHNlcnZpY2Ugw6AgcGFydGlyIGRlIChhcHBsaWNhYmxlLCBzdGF0ZSkuCgogICAgYHByaXZhdGVfbW9kZV9hcHBsaWNhYmxlYCBET0lUIMOqdHJlIGwnYXBwbGljYWJpbGl0w6kgRFVSQUJMRSAoamFtYWlzIGTDqXJpdsOpZQogICAgZCd1biBhbGxvd2VkIHRyYW5zaXRvaXJlKS4gYHJlYWRfZXJyb3JgL2tpbGwgc3dpdGNoL2ludMOpZ3JhdGlvbiBuJ2luZmx1ZW5jZW50CiAgICBQQVMgYXBwbGljYWJsZSA6IHMnaWxzIGVtcMOqY2hlbnQgZGUgcHJvdXZlciBCVVNJTkVTUyBhbG9ycyBxdWUgYXBwbGljYWJsZT10cnVlLAogICAgbGEgZMOpY2lzaW9uIGVzdCBmYWlsLWNsb3NlZCAoYmxvcXXDqWUpLgoKICAgIFJldHVybnM6CiAgICAgICAgeyJwcml2YXRlX21vZGVfYXBwbGljYWJsZSI6IGJvb2wsICJlbmRfc2VydmljZV9hbGxvd2VkIjogYm9vbCwgInJlYXNvbiI6IHN0cn0KICAgICIiIgogICAgaWYgbm90IHByaXZhdGVfbW9kZV9hcHBsaWNhYmxlOgogICAgICAgIHJldHVybiB7CiAgICAgICAgICAgICJwcml2YXRlX21vZGVfYXBwbGljYWJsZSI6IEZhbHNlLAogICAgICAgICAgICAiZW5kX3NlcnZpY2VfYWxsb3dlZCI6IFRydWUsCiAgICAgICAgICAgICJyZWFzb24iOiBSX0VORF9PS19OT1RfQVBQTElDQUJMRSwKICAgICAgICB9CgogICAgaWYgcmVhZF9lcnJvciBvciBub3Qgc3RhdGU6CiAgICAgICAgcmV0dXJuIHsKICAgICAgICAgICAgInByaXZhdGVfbW9kZV9hcHBsaWNhYmxlIjogVHJ1ZSwKICAgICAgICAgICAgImVuZF9zZXJ2aWNlX2FsbG93ZWQiOiBGYWxzZSwKICAgICAgICAgICAgInJlYXNvbiI6IFJfRU5EX0JMT0NLRURfVU5SRUFEQUJMRSwKICAgICAgICB9CgogICAgaWYgc3RhdGUgPT0gX0JVU0lORVNTOgogICAgICAgIHJldHVybiB7CiAgICAgICAgICAgICJwcml2YXRlX21vZGVfYXBwbGljYWJsZSI6IFRydWUsCiAgICAgICAgICAgICJlbmRfc2VydmljZV9hbGxvd2VkIjogVHJ1ZSwKICAgICAgICAgICAgInJlYXNvbiI6IFJfRU5EX09LX0JVU0lORVNTLAogICAgICAgIH0KCiAgICByZXR1cm4gewogICAgICAgICJwcml2YXRlX21vZGVfYXBwbGljYWJsZSI6IFRydWUsCiAgICAgICAgImVuZF9zZXJ2aWNlX2FsbG93ZWQiOiBGYWxzZSwKICAgICAgICAicmVhc29uIjogUl9FTkRfQkxPQ0tFRF9OT1RfQlVTSU5FU1MsCiAgICB9Cg=="
 )
 
-RESOLVER_FUNC = '''async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> dict:
+RESOLVER_FUNC = '''async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str,
+                                        resolve_pending: bool = True) -> dict:
     """Décision AUTORITAIRE « Fin de service » (applicabilité DURABLE, pas allowed).
 
     Rollout dynamique : ACCOUNT_MODEL si gate.account_model_gate_enabled() sinon
     LEGACY. Conditions transitoires (feature/kill switch/intégration/DEVICE_WRITE)
     NE rendent JAMAIS applicable=False ; si elles empêchent de lire l'état ->
-    read_error -> END bloquée (fail-closed). Erreur de calcul -> fail-closed.
+    read_error -> END bloquée (fail-closed). Erreur technique -> fail-closed.
+
+    resolve_pending :
+      - True  (POST END) : reproduit TOUTE la résolution tardive PROD du GET
+        (PENDING_CONFIRMATION, TIMEOUT->BUSINESS awaiting_async_confirm,
+        TIMEOUT->PRIVATE), via resolve_pending_confirmation() (aucune commande device).
+      - False (retours anticipés GET) : lecture d'état simple, AUCUNE résolution
+        tardive (ne pas changer le comportement historique des gates FEATURE/KILL).
     """
     from app import private_mode_engine as pm
     from app import private_mode_gate as gate
@@ -52,13 +61,17 @@ RESOLVER_FUNC = '''async def _resolve_end_service_decision(db, tenant_id: str, d
     from app.end_service_policy import compute_private_mode_applicable, decide_end_service
     from app.tenant_context import get_tenant_doc
 
+    # Résolution du véhicule actif. DISTINGUER :
+    #  - vrai "aucun véhicule" (sans erreur) -> non applicable -> END autorisée ;
+    #  - EXCEPTION technique de résolution    -> fail-closed (END bloquée).
     try:
         vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
         if not vehicle_id:
             sess = await ble_engine.get_current_session(db, driver_id)
             vehicle_id = sess.get("vehicle_id") if sess else None
     except Exception:
-        vehicle_id = None
+        return decide_end_service(private_mode_applicable=True, state=None,
+                                  read_error=True)
     if not vehicle_id:
         return decide_end_service(private_mode_applicable=False, state=None)
 
@@ -108,10 +121,27 @@ RESOLVER_FUNC = '''async def _resolve_end_service_decision(db, tenant_id: str, d
     if not applicable:
         return decide_end_service(private_mode_applicable=False, state=None)
 
+    # Éligible durable : lecture de l'état (fail-closed si illisible).
     try:
         st = await pm.get_mode_state(db, vehicle_id)
-        if st.get("state") == pm.PENDING_CONFIRMATION:
-            st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
+        if resolve_pending:
+            # MÊMES conditions que le GET PROD (résolution tardive READ-ONLY).
+            _should_resolve = (
+                st.get("state") == pm.PENDING_CONFIRMATION
+                or (
+                    st.get("state") == pm.UNKNOWN
+                    and st.get("transition_result") == pm.TRANSITION_TIMEOUT
+                    and st.get("requested_target") == pm.BUSINESS
+                    and bool(st.get("awaiting_async_confirm"))
+                )
+                or (
+                    st.get("state") == pm.UNKNOWN
+                    and st.get("transition_result") == pm.TRANSITION_TIMEOUT
+                    and st.get("requested_target") == pm.PRIVATE
+                )
+            )
+            if _should_resolve:
+                st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
         state_now = st.get("state", pm.UNKNOWN)
         return decide_end_service(private_mode_applicable=True, state=state_now)
     except Exception:
@@ -215,8 +245,10 @@ REPLACEMENTS.append((
         raise HTTPException(400, "Utilisateur non lié à un chauffeur")
 
     # Décision autoritaire Fin de service (applicabilité durable) pour enrichir
-    # les retours anticipés. Le retour FINAL la recalcule avec l'état final.
-    _end_decision = await _resolve_end_service_decision(db, tenant_id, driver_id)
+    # les retours anticipés. resolve_pending=False : NE déclenche PAS de résolution
+    # tardive (ne change pas le comportement historique des gates FEATURE/KILL).
+    # Le retour FINAL la recalcule avec l'état final.
+    _end_decision = await _resolve_end_service_decision(db, tenant_id, driver_id, resolve_pending=False)
 
     # Fail-closed niveau 1/2 : feature globale + kill switch AVANT toute résolution.
     if not gate.feature_enabled():''',
@@ -324,6 +356,14 @@ def main():
           "WRITE" if args.write else "DRY-RUN", ")")
     print("=" * 72)
 
+    # Contrôle du SHA de la policy embarquée (fail-fast).
+    if policy_sha != EXPECTED_POLICY_SHA256:
+        print(f"STOP: SHA end_service_policy.py embarquée inattendu "
+              f"({policy_sha} != {EXPECTED_POLICY_SHA256}). AUCUNE action.",
+              file=sys.stderr)
+        sys.exit(9)
+    print(f"OK: policy embarquée SHA256 = {policy_sha}")
+
     if not os.path.isfile(id_path):
         print(f"STOP: introuvable {id_path}", file=sys.stderr); sys.exit(2)
 
@@ -371,20 +411,23 @@ def main():
         print(f"STOP: SyntaxError dans la policy: {e}", file=sys.stderr); sys.exit(7)
 
     # PREUVE non-régression : driver_km_summary byte-identique avant/après.
+    # FAIL-FAST : si la fonction est introuvable, on NE peut PAS prouver la
+    # non-régression -> STOP (exigence v3).
     km_before = _extract_block(text, "driver_km_summary")
     km_after = _extract_block(new_text, "driver_km_summary")
-    if km_before:
-        same = (km_before == km_after)
-        print(f"driver_km_summary présent : byte-identique avant/après = {same} "
-              f"(sha_before={_sha256(km_before.encode())[:12]}, "
-              f"sha_after={_sha256(km_after.encode())[:12]})")
-        if not same:
-            print("STOP: driver_km_summary MODIFIÉ (hors périmètre). AUCUNE action.",
-                  file=sys.stderr)
-            sys.exit(8)
-    else:
-        print("NOTE: driver_km_summary introuvable par nom dans ce fichier "
-              "(vérifier le nom réel de la fonction KPI km si besoin).")
+    if not km_before:
+        print("STOP: driver_km_summary introuvable — preuve de non-régression KPI "
+              "impossible. AUCUNE action. (Vérifier le nom réel de la fonction KPI "
+              "km dans identification.py.)", file=sys.stderr)
+        sys.exit(10)
+    same = (km_before == km_after)
+    print(f"driver_km_summary présent : byte-identique avant/après = {same} "
+          f"(sha_before={_sha256(km_before.encode())[:12]}, "
+          f"sha_after={_sha256(km_after.encode())[:12]})")
+    if not same:
+        print("STOP: driver_km_summary MODIFIÉ (hors périmètre). AUCUNE action.",
+              file=sys.stderr)
+        sys.exit(8)
 
     print("-" * 72)
     print(f"SHA256 AVANT  identification.py = {cur_sha}")
@@ -422,17 +465,21 @@ def main():
         return
 
     # ---- WRITE réel ----
+    # Backup byte-exact HORS du repo PROD (jamais de .bak sous /opt/apps).
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    bak = f"{id_path}.bak.{ts}"
+    backup_dir = os.environ.get("HOTFIX_BACKUP_DIR", "/home/ubuntu/hotfix-end-service-backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    bak = os.path.join(backup_dir, f"identification.py.bak.{ts}")
     open(bak, "wb").write(original)
-    print(f"Backup byte-exact: {bak} (sha256={cur_sha})")
+    open(f"{bak}.sha256", "w").write(f"{cur_sha}  identification.py\n")
+    print(f"Backup byte-exact (HORS PROD): {bak} (sha256={cur_sha})")
     open(id_path, "wb").write(new_bytes)
     open(policy_path, "w", encoding="utf-8").write(policy_text)
     print("ÉCRITURE EFFECTUÉE (2 fichiers).")
     print(f"  identification.py   -> {new_sha}")
     print(f"  end_service_policy  -> {policy_sha}")
-    print("Rollback: restaurer le .bak de identification.py + supprimer "
-          "end_service_policy.py. Puis rebuild/recreate journal_backend.")
+    print(f"Rollback: cp {bak} {id_path} ; rm {policy_path} ; "
+          "puis rebuild/recreate journal_backend.")
     print("=" * 72)
 
 

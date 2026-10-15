@@ -300,7 +300,8 @@ async def vehicle_assignment_change(payload: AssignIn, user=Depends(get_current_
     return {"ok": True, **res}
 
 
-async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> dict:
+async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str,
+                                        resolve_pending: bool = True) -> dict:
     """Décision AUTORITAIRE « Fin de service » côté serveur (réutilisée par END).
 
     SÉPARATION STRICTE (corrige la faille allowed!=applicable) :
@@ -313,6 +314,11 @@ async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> d
         False. Si elles empêchent de prouver BUSINESS alors que applicable=True,
         la décision est fail-closed (END bloquée).
 
+    resolve_pending :
+      - True  (POST END) : reproduit TOUTE la résolution tardive PROD du GET.
+      - False (retours anticipés GET) : AUCUNE résolution tardive (ne change pas
+        le comportement historique des gates FEATURE_DISABLED/KILL_SWITCH).
+
     NE MODIFIE PAS le moteur AVL16 ni la confirmation PRIVATE/BUSINESS (lecture seule).
     """
     from app import private_mode_engine as pm
@@ -322,14 +328,16 @@ async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> d
     from app.tenant_context import get_tenant_doc
 
     # 1) Véhicule actif du chauffeur (affectation persistante ; fallback session BLE).
-    #    Pas de véhicule résolu -> aucun couple applicable -> END autorisée.
+    #    DISTINGUER : vrai "aucun véhicule" (sans erreur) -> non applicable -> END
+    #    autorisée ; EXCEPTION technique de résolution -> fail-closed (END bloquée).
     try:
         vehicle_id = await va.resolve_active_vehicle(db, driver_id, tenant_id)
         if not vehicle_id:
             sess = await ble_engine.get_current_session(db, driver_id)
             vehicle_id = sess.get("vehicle_id") if sess else None
     except Exception:
-        vehicle_id = None
+        return decide_end_service(private_mode_applicable=True, state=None,
+                                  read_error=True)
     if not vehicle_id:
         return decide_end_service(private_mode_applicable=False, state=None)
 
@@ -395,8 +403,24 @@ async def _resolve_end_service_decision(db, tenant_id: str, driver_id: str) -> d
     #    cette lecture -> read_error=True -> END bloquée (jamais autorisée à tort).
     try:
         st = await pm.get_mode_state(db, vehicle_id)
-        if st.get("state") == pm.PENDING_CONFIRMATION:
-            st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
+        if resolve_pending:
+            # MÊMES conditions que le GET PROD (résolution tardive READ-ONLY).
+            _should_resolve = (
+                st.get("state") == pm.PENDING_CONFIRMATION
+                or (
+                    st.get("state") == pm.UNKNOWN
+                    and st.get("transition_result") == pm.TRANSITION_TIMEOUT
+                    and st.get("requested_target") == pm.BUSINESS
+                    and bool(st.get("awaiting_async_confirm"))
+                )
+                or (
+                    st.get("state") == pm.UNKNOWN
+                    and st.get("transition_result") == pm.TRANSITION_TIMEOUT
+                    and st.get("requested_target") == pm.PRIVATE
+                )
+            )
+            if _should_resolve:
+                st = await pm.resolve_pending_confirmation(db, vehicle_id, tenant_id)
         state_now = st.get("state", pm.UNKNOWN)
         return decide_end_service(private_mode_applicable=True, state=state_now)
     except Exception:
@@ -543,7 +567,7 @@ async def driver_private_mode_get(user=Depends(get_current_user)):
     # tardive PRIVATE/BUSINESS) : un état passé de PENDING à BUSINESS doit autoriser
     # END. On NE réutilise donc PAS la décision précoce pour le retour final.
     from app.end_service_policy import decide_end_service as _decide_end
-    _applic = await _resolve_end_service_decision(db, tenant_id, driver_id)
+    _applic = await _resolve_end_service_decision(db, tenant_id, driver_id, resolve_pending=False)
     end_decision = _decide_end(
         private_mode_applicable=_applic["private_mode_applicable"],
         state=state_now,
