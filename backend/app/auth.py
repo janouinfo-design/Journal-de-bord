@@ -111,8 +111,8 @@ _SUSPENDED = {"code": "tenant_suspended", "msg": "Client suspendu — contactez 
 
 async def _resolve_tenant(request: Request, user: dict) -> dict | None:
     """Tenant effectif côté serveur. Entreprise : `user.tenant_id` uniquement.
-    Superadmin : `X-Tenant-Id` validé (existence + statut) ; invalide → 400 sur /api/livre,
-    ignoré ailleurs (/auth, /admin) pour ne jamais verrouiller la console plateforme."""
+    Superadmin : `X-Tenant-Id` validé (existence + statut) sur /api/livre (400 / 403) ;
+    hors /api/livre (/auth, /admin) jamais bloquant, pour ne pas verrouiller la console plateforme."""
     from app.db import get_raw_db
     from app.tenant_context import set_current_tenant, NO_TENANT
     raw = get_raw_db()
@@ -122,12 +122,13 @@ async def _resolve_tenant(request: Request, user: dict) -> dict | None:
             set_current_tenant(NO_TENANT)
             return None
         tenant = await raw.tenants.find_one({"id": tid}, _TENANT_PROJ)
+        livre = request.url.path.startswith("/api/livre")
         if not tenant:
-            if request.url.path.startswith("/api/livre"):
+            if livre:
                 raise HTTPException(status_code=400, detail={"code": "invalid_tenant", "msg": "Client inconnu."})
             set_current_tenant(NO_TENANT)
             return None
-        if tenant.get("status") != "active":
+        if tenant.get("status") != "active" and livre:
             raise HTTPException(status_code=403, detail=_SUSPENDED)
         set_current_tenant(tid)
         return tenant
@@ -687,7 +688,7 @@ async def list_users(current=Depends(_require_permission("users.view", legacy_ro
     from app.tenant_context import get_effective_tenant_id
     db = get_db()
     q = {}
-    tid = get_effective_tenant_id() if current.get("role") == "superadmin" else (current.get("tenant_id") or "default")
+    tid = get_effective_tenant_id() if current.get("role") == "superadmin" else current.get("tenant_id")
     if tid:
         q["tenant_id"] = tid
     rows = await db.users.find(

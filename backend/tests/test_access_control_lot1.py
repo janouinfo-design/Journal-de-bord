@@ -306,6 +306,10 @@ def test_tenant_suspended_and_account_disabled(mongo, ac_tenant):
         assert r.status_code == 403 and _code(r) == "tenant_suspended"
         r = requests.get(f"{BASE}/livre/vehicles", headers=_h(_login(SUPER), tid), timeout=15)
         assert r.status_code == 403 and _code(r) == "tenant_suspended"
+        # console plateforme jamais verrouillée : hors /livre, l'en-tête d'un client suspendu n'est pas bloquant
+        r = requests.get(f"{BASE}/auth/me", headers=_h(_login(SUPER), tid), timeout=15)
+        assert r.status_code == 200 and r.json()["tenant"]["status"] == "suspended"
+        assert requests.get(f"{BASE}/admin/tenants", headers=_h(_login(SUPER), tid), timeout=15).status_code == 200
     finally:
         mongo.tenants.update_one({"id": tid}, {"$set": {"status": "active"}})
     # compte désactivé : token encore valide → 401 account_disabled ; refresh → 401 (T23)

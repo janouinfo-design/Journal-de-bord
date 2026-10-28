@@ -1,0 +1,27 @@
+{
+  "summary": "LOT 1 access-control backend QA via the public URL. New suite /app/backend/tests/test_lot1_qa_agent.py: 25 passed, 1 skipped (on purpose), 0 failed, about 60s. Covered: legacy parity for admin/manager/driver/lecture_seule (12 open GETs, 7 restricted GETs with 'Accès refusé', classify, admin track), enriched /auth/me per role, superadmin X-Tenant-Id handling (invalid_tenant 400 on /livre, ignored on /auth/me and /admin/tenants, empty with no tenant, data with 'default'), disabled account end to end through the API (401 account_disabled on old token and on /livre, refresh 401, login refused, re-enable, legacy DELETE), role office refused (400), tenant B isolation (vehicles/trips/team users isolated, cross-tenant track 404), and on a throwaway tenant: ENFORCE (module_disabled with no superadmin bypass, permission_denied settings.edit, office GPS stripping, office track 403 positions.view, grant/revoke overrides, read-only invariant), SHADOW (not blocked, access.shadow_deny audit rows for permission/private_mode.view and module/fines, legacy roles still give 403), SUSPENDED (tenant_suspended for the tenant's admin and for superadmin; PATCH default to suspended -> 400). Cleanup checked: no lot1-qa tenants/users/trips/audit rows and no throwaway users remain. Tenant default is {status: active} with no modules_enabled or access_control_mode. All shared accounts still log in. No 5xx during the run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "auth._resolve_tenant (superadmin)", "issue": "If a superadmin sends X-Tenant-Id for a SUSPENDED tenant, the 403 tenant_suspended applies to every path, including /api/auth/me and /api/admin/*. An unknown tenant is ignored outside /api/livre, but a suspended one is not. If the frontend keeps a suspended tenant as the selected tenant, the superadmin console could lock itself (for example, PATCH /admin/tenants/{id} {status:'active'} to reactivate it would be refused while the header is sent). Found by code review, not run live."},
+      {"endpoint": "GET /api/auth/users", "issue": "The fallback current.get('tenant_id') or 'default' is still there (auth.py list_users). The DB wrapper and the tenant_missing check make it unreachable for company users, but it goes against the 'no default fallback' rule."},
+      {"endpoint": "access_control._shadow_deny", "issue": "Deduplication uses an in-memory set per process (user, kind, key, day). It is lost on restart and not shared between workers. Acceptable for a shadow mode, but deny counts are approximate."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_lot1_qa_agent.py", "/app/test_reports/pytest/lot1_qa_agent.xml"],
+  "action_items": [
+    "Optional: in _resolve_tenant, skip the tenant_suspended check for superadmin on non-/api/livre paths (as already done for invalid_tenant), so the superadmin console can always reactivate a client.",
+    "Optional: remove the 'default' fallback in /api/auth/users."
+  ],
+  "critical_code_review_comments": [
+    "Superadmin + suspended X-Tenant-Id blocks /auth and /admin (see minor issue).",
+    "The classify route writes its trip audit row straight to db.audit_log, without the log_audit schema (no id/action). This predates Lot 1 and is out of scope."
+  ],
+  "updated_files": ["/app/backend/tests/test_lot1_qa_agent.py"],
+  "success_rate": {"backend": "100% (25/25 executed; 1 skip: chauffeur has no own trips in tenant default, driver classify role gate checked through the ownership 403 'propres trajets' instead of 'Accès refusé')", "frontend": "not tested (backend only)"},
+  "seed_data_creation": "Throwaway tenant lot1-qa-<rand> with 4 users and 1 trip, created and deleted by a module fixture. A throwaway manager lot1-disabled-<rand>@example.com in tenant default, created and deleted through the API. The classify tests restore classification/auto_classified/modified_* and delete today's classify audit rows.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend && set -a && . ./.env && . ../frontend/.env && set +a && pytest tests/test_lot1_qa_agent.py. Needs SUPERADMIN_PASSWORD, MONGO_URL and DB_NAME from env. chauffeur@logitrak.ch currently has no trips of its own. Old 500s in backend.out.log (team/drivers vehicle-access, driver/vehicles) predate this run and were not investigated."
+}

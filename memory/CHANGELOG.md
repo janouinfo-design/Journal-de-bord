@@ -1,5 +1,73 @@
 # CHANGELOG — Livre de bord LOGITRAK
 
+## 28/10/2026 — PHASE 4C · LOT 1 : FONDATIONS BACKEND MODULES / PERMISSIONS — LOT 1 : PASS
+
+### Périmètre réalisé (backend uniquement, mode `legacy` actif)
+- Nouveau `backend/app/access_control.py` : `MODULES` (17), `PERMISSIONS` (53), `ROLE_TEMPLATES`
+  (admin, manager, office, driver, lecture_seule), `SENSITIVE_PERMISSIONS` (10), `WRITE_PERMISSIONS`,
+  `effective_permissions()`, `validate_override()` (règles anti-escalade, consommé au Lot 3),
+  `strip_positions()` / `must_strip_positions()`, `require_module()`, `require_permission()`, `me_payload()`.
+- `ACCESS_CONTROL_MODE=legacy` ajouté à `backend/.env` (preview). Résolution : tenant.access_control_mode > env > `legacy`.
+- `auth.py` : re-vérification `active` par requête et au refresh (401 `account_disabled`), `_resolve_tenant()`
+  (X-Tenant-Id superadmin validé : 400 `invalid_tenant` / 403 `tenant_suspended` sur `/api/livre`, non bloquant
+  ailleurs ; entreprise : `user.tenant_id` strict → 403 `tenant_missing`), cache `request.state`, `/auth/me` enrichi,
+  `/auth/register` + `/auth/users` sous `require_permission` (repli `"default"` retiré de `/auth/users`).
+- `audit.py` : erreurs d'insertion loggées (`logger.error`), `acting_tenant` superadmin.
+- Routeurs annotés `require_module` : ble, identification (drivers) · fines · fuel, fuel_statements · energy ·
+  weekly_report, monthly_report (reports) · notifications. 65 endpoints sous `require_permission(..., legacy_roles=...)`
+  dans auth, dashboard, misc, settings, team, notifications, reports — parité stricte avec l'ancienne matrice
+  `require_roles` (test T24 automatisé pour admin / manager / driver / lecture_seule).
+- Réponses d'erreur structurées `{code, msg, ...}` ; refus legacy inchangés (`"Accès refusé"` texte).
+
+### Catalogue des 53 permissions (module → permissions · rôles par défaut)
+- journal (6) : journal.view (A,M,O,L) · journal.view_self (A,D) · journal.export (A,M,O,L) · **positions.view** (A,M,L — sensible) · vehicles.edit (A,M) · vehicles.admin (A)
+- trip_classification (5) : trips.classify (A,M) · trips.classify_self (A,D) · work_schedule.view (tous) · work_schedule.edit (A,M) · privacy_policy.edit (A,M — sensible)
+- private_mode (3) : private_mode.view (A,M) · private_mode.edit (A — sensible) · private_mode.admin (A — sensible)
+- drivers (6) : drivers.view (A,M,O) · drivers.edit (A) · drivers.admin (A) · identification.view (A,M) · identification.edit (A,M) · identification.self (A,D)
+- energy (5) : energy.view (A,M,O,L) · energy.view_self (A,D) · energy.edit (A,M) · energy.admin (A — sensible) · energy.export (A,M,O,L)
+- fuel (9) : fuel.view (A,M,O,L) · fuel.view_self (A,D) · fuel.edit_self (A,D) · fuel.edit (A,O) · fuel.import (A,O) · fuel.reconcile (A,M) · fuel.statements (A,M,O) · fuel.admin (A) · fuel.export (A,M,O,L)
+- fuel_cards (2) : fuel_cards.view (A,M,O,L) · fuel_cards.edit (A,O)
+- fines (6) : fines.view (A,M,O,L) · fines.view_self (A,D) · fines.edit (A,M,O) · fines.pay (A,M,O) · fines.admin (A) · fines.export (A,M,O,L)
+- reports (2) : reports.view (A,M,O,L) · reports.admin (A,M)
+- notifications (2) : notifications.manage_self (tous) · notifications.manage_company (A)
+- plateforme-tenant (7, sans module) : users.view (A) · users.edit (A — sensible) · users.permissions (A — sensible) · users.impersonate (A — sensible) · settings.view (A,M) · settings.edit (A — sensible) · audit.view (A — sensible)
+- Contrôles : 0 doublon · 0 permission inconnue dans les templates / `require_permission` / tests · 0 permission orpheline
+  (toutes dans ≥ 1 template) · 25 liées à un endpoint dès le Lot 1, 28 portées par les templates et les routeurs
+  `require_module` en attendant la migration permission par permission des routeurs fuel / fines / energy / ble (Lot 3).
+- Écart vs spécification (~50, objectif de granularité, texte de la spec non persisté dans le workspace) : les 3
+  permissions `*_self` ajoutées pendant l'implémentation pour obtenir la parité legacy stricte du rôle driver sans
+  lui accorder la permission « entreprise » correspondante : `trips.classify_self` (driver reclasse SES trajets —
+  `PUT /trips/{id}/classify`, contrôle de propriété existant), `identification.self` (console chauffeur `/driver/*`),
+  `fuel.edit_self` (justificatifs / signalements sur SES transactions carburant). Aucune nouvelle fonctionnalité.
+
+### Décisions figées appliquées
+- Module OFF → 403 `module_disabled` ; permission insuffisante → 403 `permission_denied` ; autre tenant → 404 (proxy Mongo) ;
+  non authentifié / désactivé → 401 ; superadmin : aucun bypass de module, tenant invalide 400 / suspendu 403 sur `/livre`.
+- Rôles = modèles par défaut, surcharges `permissions_override {grant, revoke}` lues (aucune UI, aucun écrit par l'app au Lot 1).
+- `office` : présent dans les templates uniquement, non créable (`TEAM_ROLES` inchangé) ; sans `positions.view` par défaut.
+- Suppression d'utilisateur : la désactivation (`active=false`) reste la cible ; `DELETE /team/users/{id}` inchangé.
+
+### Tests
+- `tests/test_access_control_lot1.py` : 18/18 (catalogues, parité T24, résolution, overrides, modes legacy / shadow / enforce
+  sur tenant jetable, X-Tenant-Id, suspendu, compte désactivé, audit non silencieux).
+- Agent de test `test_reports/iteration_37.json` : 25/25 + 1 skip volontaire (`tests/test_lot1_qa_agent.py`), 0 critique ;
+  2 remarques mineures corrigées (console superadmin jamais verrouillée par un tenant suspendu hors `/livre` ; repli `default` `/auth/users`).
+- Ciblés : 219/219 (multitenant, administration, impersonation, driver_vehicle_access, iteration18_readonly_invite,
+  navixy_multitenant, phase3_admin_driver, private_mode_gate / phase2 / confirmation, reports_private_redaction,
+  notifications, iteration6_privacy_enforcement).
+- **Régression complète : 922 PASS / 0 FAIL / 4 SKIP / 4 warnings — 567 s (14:17:49 → 14:27:18 UTC).**
+  Baseline 878 / 1 / 3 : +44 tests (Lot 1 + QA), `test_energy_cache::test_hit_dans_ttl_e2e` connu **PASS** ce run
+  (flake environnemental, non modifié), +1 skip = skip volontaire QA. Aucune nouvelle régression.
+- Preview : backend redémarré (`legacy` chargé, `/auth/me` → `access_control_mode=legacy`), smoke 22 endpoints admin / driver
+  conformes. PROD non touchée, aucun deploy, aucune migration, 0 tenant initialisé, aucune écriture device Navixy.
+
+### Fichiers
+- Créés : `backend/app/access_control.py`, `backend/tests/test_access_control_lot1.py` (+ `backend/tests/test_lot1_qa_agent.py`
+  et `test_reports/iteration_37.json`, `test_reports/pytest/lot1_qa_agent.xml` par l'agent de test).
+- Modifiés : `backend/app/auth.py`, `backend/app/audit.py`, `backend/.env` (+1 clé), `backend/app/routes/{ble,dashboard,energy,fines,fuel,fuel_statements,identification,misc,monthly_report,notifications,reports,settings,team,weekly_report}.py`, `memory/PRD.md`, `memory/CHANGELOG.md`, `memory/test_credentials.md`.
+- Supprimés : aucun. Baseline non suivie intouchée : `.env.example`, `frontend/yarn.lock`, `logitrak-driver-app/.env.example`, `logitrak-driver-app/yarn.lock`, `yarn.lock`.
+- Effets de bord de la suite de tests (pré-existants) : `test_reports/pytest/iteration23_evidence.json` réécrit, 1 PNG de test dans `backend/storage/fuel/transactions/`.
+
 ## 26/08/2026 — MAPPING TENANT ENERGY + CAMPAGNE REAL ENERGY (energie.logitrak.ch)
 
 ### Contexte
