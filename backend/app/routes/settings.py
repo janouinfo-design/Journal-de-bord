@@ -8,7 +8,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 
-from app.auth import get_current_user, require_roles
+from app.auth import get_current_user
+from app.access_control import require_permission
 from app.db import get_db
 from app.emailer import is_smtp_configured, send_test_email
 from app.privacy_enforcer import enforce_all_vehicles, kill_switch, list_states
@@ -32,7 +33,8 @@ async def get_settings(user=Depends(get_current_user)):
 
 
 @router.put("/settings")
-async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin", "manager"))):
+async def update_settings(payload: SettingsIn, user=Depends(require_permission(
+        "privacy_policy.edit", legacy_roles=("admin", "manager"), module="trip_classification"))):
     mode = payload.mode
     if mode in ("A", "B"):
         mode = {"A": "mixte", "B": "masked"}[mode]
@@ -54,7 +56,7 @@ async def update_settings(payload: SettingsIn, user=Depends(require_roles("admin
 
 # ---------- SMTP (test d'envoi) ----------
 @router.get("/settings/smtp-status")
-async def smtp_status(user=Depends(require_roles("admin"))):
+async def smtp_status(user=Depends(require_permission("settings.edit", legacy_roles=("admin",)))):
     return {
         "configured": is_smtp_configured(),
         "host": os.environ.get("SMTP_HOST") or None,
@@ -69,7 +71,7 @@ class SmtpTestIn(BaseModel):
 
 
 @router.post("/settings/smtp-test")
-async def smtp_test(payload: SmtpTestIn, user=Depends(require_roles("admin"))):
+async def smtp_test(payload: SmtpTestIn, user=Depends(require_permission("settings.edit", legacy_roles=("admin",)))):
     from app.audit import log_audit
     if not is_smtp_configured():
         missing = [k for k in ("SMTP_HOST", "SMTP_FROM") if not os.environ.get(k)]
@@ -94,13 +96,15 @@ class ScheduleIn(BaseModel):
 
 
 @router.get("/schedule")
-async def get_schedule(driver_id: Optional[str] = None, user=Depends(get_current_user)):
+async def get_schedule(driver_id: Optional[str] = None, user=Depends(require_permission(
+        "work_schedule.view", module="trip_classification"))):
     db = get_db()
     return await _get_schedule_for(db, driver_id)
 
 
 @router.put("/schedule")
-async def put_schedule(payload: ScheduleIn, user=Depends(require_roles("admin", "manager"))):
+async def put_schedule(payload: ScheduleIn, user=Depends(require_permission(
+        "work_schedule.edit", legacy_roles=("admin", "manager"), module="trip_classification"))):
     db = get_db()
     doc = normalize_schedule(payload.driver_id, payload.days)
     await db.schedules.update_one(
@@ -113,7 +117,8 @@ async def put_schedule(payload: ScheduleIn, user=Depends(require_roles("admin", 
 
 
 @router.delete("/schedule")
-async def delete_schedule(driver_id: str, user=Depends(require_roles("admin", "manager"))):
+async def delete_schedule(driver_id: str, user=Depends(require_permission(
+        "work_schedule.edit", legacy_roles=("admin", "manager"), module="trip_classification"))):
     """Delete a per-driver override (cannot delete default)."""
     if not driver_id:
         raise HTTPException(400, "driver_id requis")
@@ -124,7 +129,8 @@ async def delete_schedule(driver_id: str, user=Depends(require_roles("admin", "m
 
 
 @router.get("/schedule/drivers-with-override")
-async def drivers_with_override(user=Depends(require_roles("admin", "manager"))):
+async def drivers_with_override(user=Depends(require_permission(
+        "work_schedule.edit", legacy_roles=("admin", "manager"), module="trip_classification"))):
     db = get_db()
     rows = await db.schedules.find(
         {"driver_id": {"$ne": None}}, {"_id": 0, "driver_id": 1},
@@ -134,7 +140,8 @@ async def drivers_with_override(user=Depends(require_roles("admin", "manager")))
 
 # ---------- Privacy Phase 1 — Tracker compatibility scan ----------
 @router.get("/privacy/tracker-compatibility")
-async def privacy_tracker_compat(user=Depends(require_roles("admin", "manager"))):
+async def privacy_tracker_compat(user=Depends(require_permission(
+        "private_mode.view", legacy_roles=("admin", "manager"), module="private_mode"))):
     """Scan every vehicle's tracker and report whether a privacy/sleep command exists.
 
     PHASE 1 ONLY: discovery — no command is ever sent.
@@ -145,7 +152,8 @@ async def privacy_tracker_compat(user=Depends(require_roles("admin", "manager"))
 
 @router.get("/privacy/tracker-compatibility/{vehicle_id}")
 async def privacy_tracker_compat_one(
-    vehicle_id: str, user=Depends(require_roles("admin", "manager")),
+    vehicle_id: str, user=Depends(require_permission(
+        "private_mode.view", legacy_roles=("admin", "manager"), module="private_mode")),
 ):
     db = get_db()
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
@@ -156,7 +164,8 @@ async def privacy_tracker_compat_one(
 
 # ---------- Privacy Phase 2 — Enforcement (real or simulated) ----------
 @router.get("/privacy/enforcement-config")
-async def privacy_enforcement_config(user=Depends(require_roles("admin", "manager"))):
+async def privacy_enforcement_config(user=Depends(require_permission(
+        "private_mode.view", legacy_roles=("admin", "manager"), module="private_mode"))):
     db = get_db()
     s = await db.settings.find_one({"id": "default"}, {"_id": 0}) or {}
     return {
@@ -167,7 +176,8 @@ async def privacy_enforcement_config(user=Depends(require_roles("admin", "manage
 
 @router.put("/privacy/enforcement-config")
 async def privacy_enforcement_config_update(
-    payload: dict, user=Depends(require_roles("admin")),
+    payload: dict, user=Depends(require_permission(
+        "private_mode.edit", legacy_roles=("admin",), module="private_mode")),
 ):
     db = get_db()
     update = {}
@@ -193,19 +203,22 @@ async def privacy_enforcement_config_update(
 
 
 @router.get("/privacy/state")
-async def privacy_state(user=Depends(require_roles("admin", "manager"))):
+async def privacy_state(user=Depends(require_permission(
+        "private_mode.view", legacy_roles=("admin", "manager"), module="private_mode"))):
     db = get_db()
     return {"rows": await list_states(db)}
 
 
 @router.post("/privacy/enforce-now")
-async def privacy_enforce_now(user=Depends(require_roles("admin"))):
+async def privacy_enforce_now(user=Depends(require_permission(
+        "private_mode.edit", legacy_roles=("admin",), module="private_mode"))):
     db = get_db()
     return await enforce_all_vehicles(db)
 
 
 @router.post("/privacy/kill-switch")
-async def privacy_kill_switch(user=Depends(require_roles("admin"))):
+async def privacy_kill_switch(user=Depends(require_permission(
+        "private_mode.admin", legacy_roles=("admin",), module="private_mode"))):
     db = get_db()
     return await kill_switch(db)
 
@@ -213,7 +226,8 @@ async def privacy_kill_switch(user=Depends(require_roles("admin"))):
 
 # ---------- Mode Privé (chauffeur) — kill switch + statut pilote (admin) ----------
 @router.get("/private-mode/status")
-async def private_mode_status(user=Depends(require_roles("admin"))):
+async def private_mode_status(user=Depends(require_permission(
+        "private_mode.edit", legacy_roles=("admin",), module="private_mode"))):
     """Statut non sensible du dispositif pilote Mode Privé (jamais de secret)."""
     from app import private_mode_gate as gate
     db = get_db()
@@ -228,7 +242,8 @@ class KillSwitchIn(BaseModel):
 
 
 @router.post("/private-mode/kill-switch")
-async def private_mode_kill_switch(payload: KillSwitchIn, user=Depends(require_roles("admin"))):
+async def private_mode_kill_switch(payload: KillSwitchIn, user=Depends(require_permission(
+        "private_mode.admin", legacy_roles=("admin",), module="private_mode"))):
     """Active/désactive immédiatement le kill switch Mode Privé (backend autoritaire).
     Empêche toute NOUVELLE activation ; n'altère pas un véhicule déjà en PRIVATE."""
     from app import private_mode_gate as gate

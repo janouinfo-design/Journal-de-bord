@@ -6,12 +6,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user, require_roles
+from app.access_control import require_module
 from app.db import get_db
 from app import ble_engine
 
 from app.routes._helpers import resolve_driver_id_for_user
 
-router = APIRouter(tags=["ble"])
+router = APIRouter(tags=["ble"], dependencies=[Depends(require_module("drivers"))])
 
 
 # ---------- Tags ----------

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.audit import log_audit
 from app.auth import get_current_user, require_roles
+from app.access_control import require_module
 from app.db import get_db
 from app.fuel_engine import (
     CARD_STATUSES, PRODUCT_TYPES, apply_match, card_fingerprint, dedup_key,
@@ -27,7 +28,7 @@ from app.fuel_anomalies import ANOMALY_STATUSES, detect_for_tx_ids, run_full_sca
 from app.fuel_import import INTERNAL_FIELDS, guess_mapping, normalize_row, parse_file
 from app.tenant_context import get_effective_tenant_id
 
-router = APIRouter(prefix="/fuel", tags=["fuel"])
+router = APIRouter(prefix="/fuel", tags=["fuel"], dependencies=[Depends(require_module("fuel"))])
 
 READ_ROLES = ("admin", "manager", "lecture_seule")
 MATCH_ROLES = ("admin", "manager")

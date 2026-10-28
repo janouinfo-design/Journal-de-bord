@@ -30,13 +30,14 @@ from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user, require_roles
+from app.access_control import require_module
 from app.db import get_db
 from app.fines_engine import identify_driver
 from app.fines_exporter import export_csv, export_excel, export_pdf
 from app.ocr_engine import extract_fine_from_document
 from app.routes._helpers import now_iso, resolve_driver_id_for_user
 
-router = APIRouter(tags=["fines"])
+router = APIRouter(tags=["fines"], dependencies=[Depends(require_module("fines"))])
 
 # --- Domain constants ------------------------------------------------------
 STATUSES = [

@@ -17,12 +17,13 @@ from pymongo.errors import DuplicateKeyError
 
 from app import energy_cache, energy_client
 from app.auth import require_roles
+from app.access_control import require_module
 from app.db import get_db
 from app.navixy_sync import powertrain_from_fuel_type
 from app.routes._helpers import filter_trips_query, get_settings_doc
 from app.tenant_context import get_effective_tenant_id
 
-router = APIRouter(prefix="/energy", tags=["energy"])
+router = APIRouter(prefix="/energy", tags=["energy"], dependencies=[Depends(require_module("energy"))])
 
 READ_ROLES = ("admin", "manager", "lecture_seule")
 TRIP_ROLES = ("admin", "manager", "lecture_seule", "driver")

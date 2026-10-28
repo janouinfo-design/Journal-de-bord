@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.auth import get_current_user
+from app.access_control import require_module
 from app.db import get_db
 from app import ble_engine
 
@@ -22,7 +23,7 @@ from app.routes._helpers import resolve_driver_id_for_user
 from app.vehicle_access import (get_authorized_vehicles_for_driver,
                                 get_authorized_vehicle_ids_for_driver)
 
-router = APIRouter(tags=["identification"])
+router = APIRouter(tags=["identification"], dependencies=[Depends(require_module("drivers"))])
 
 
 @router.get("/driver/vehicles")

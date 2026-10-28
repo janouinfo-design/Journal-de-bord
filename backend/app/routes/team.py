@@ -14,7 +14,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
 from app.audit import log_audit
-from app.auth import get_current_user, require_roles, hash_password, IMP_ACCESS_TTL_MIN
+from app.auth import hash_password, IMP_ACCESS_TTL_MIN
+from app.access_control import require_permission
 from app.db import get_db, get_raw_db
 from app.emailer import is_smtp_configured, send_invitation_email
 from app.tenant_context import get_effective_tenant_id
@@ -47,7 +48,7 @@ class TeamUserUpdate(BaseModel):
 
 
 @router.get("/users")
-async def team_list_users(current=Depends(require_roles("admin"))):
+async def team_list_users(current=Depends(require_permission("users.view", legacy_roles=("admin",)))):
     tid = _tenant_or_400()
     raw = get_raw_db()
     users = await raw.users.find(
@@ -63,7 +64,7 @@ async def team_list_users(current=Depends(require_roles("admin"))):
 
 
 @router.post("/users")
-async def team_create_user(payload: TeamUserIn, current=Depends(require_roles("admin"))):
+async def team_create_user(payload: TeamUserIn, current=Depends(require_permission("users.edit", legacy_roles=("admin",)))):
     tid = _tenant_or_400()
     if payload.role not in TEAM_ROLES:
         raise HTTPException(400, f"Rôle invalide ({', '.join(TEAM_ROLES)})")
@@ -85,7 +86,7 @@ async def team_create_user(payload: TeamUserIn, current=Depends(require_roles("a
 
 @router.patch("/users/{user_id}")
 async def team_update_user(user_id: str, payload: TeamUserUpdate,
-                           current=Depends(require_roles("admin"))):
+                           current=Depends(require_permission("users.edit", legacy_roles=("admin",)))):
     tid = _tenant_or_400()
     raw = get_raw_db()
     target = await raw.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0})
@@ -117,7 +118,7 @@ async def team_update_user(user_id: str, payload: TeamUserUpdate,
 
 
 @router.delete("/users/{user_id}")
-async def team_delete_user(user_id: str, current=Depends(require_roles("admin"))):
+async def team_delete_user(user_id: str, current=Depends(require_permission("users.edit", legacy_roles=("admin",)))):
     tid = _tenant_or_400()
     raw = get_raw_db()
     target = await raw.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0})
@@ -138,7 +139,7 @@ class ImpersonateIn(BaseModel):
 @router.post("/users/{user_id}/impersonate")
 async def team_impersonate_user(user_id: str, request: Request,
                                 payload: Optional[ImpersonateIn] = None,
-                                current=Depends(require_roles("admin"))):
+                                current=Depends(require_permission("users.impersonate", legacy_roles=("admin",)))):
     """Génère un token d'aperçu à usage unique (60 s) pour « Se connecter comme… »."""
     tid = _tenant_or_400()
     if current.get("impersonated_by"):
@@ -196,7 +197,7 @@ def _imp_status(rec: dict, now: datetime) -> str:
 
 @router.get("/impersonation-sessions")
 async def list_impersonation_sessions(tenant_id: Optional[str] = None,
-                                      current=Depends(require_roles("admin"))):
+                                      current=Depends(require_permission("users.view", legacy_roles=("admin",)))):
     """Historique des sessions « Se connecter comme… » — lecture seule, non modifiable."""
     raw = get_raw_db()
     if current.get("role") == "superadmin":
@@ -264,7 +265,8 @@ DRIVER_FIELDS = ("name", "first_name", "last_name", "internal_number", "phone",
 
 
 @router.get("/drivers")
-async def team_list_drivers(user=Depends(require_roles("admin", "manager"))):
+async def team_list_drivers(user=Depends(require_permission(
+        "drivers.view", legacy_roles=("admin", "manager"), module="drivers"))):
     tid = _tenant_or_400()
     db = get_db()
     drivers = await db.drivers.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
@@ -316,7 +318,8 @@ async def team_list_drivers(user=Depends(require_roles("admin", "manager"))):
 
 
 @router.post("/drivers")
-async def team_create_driver(payload: DriverIn, current=Depends(require_roles("admin"))):
+async def team_create_driver(payload: DriverIn, current=Depends(require_permission(
+        "drivers.edit", legacy_roles=("admin",), module="drivers"))):
     _tenant_or_400()
     db = get_db()
     doc = {"id": str(uuid.uuid4()),
@@ -357,7 +360,8 @@ async def team_create_driver(payload: DriverIn, current=Depends(require_roles("a
 
 @router.patch("/drivers/{driver_id}")
 async def team_update_driver(driver_id: str, payload: DriverUpdate,
-                             current=Depends(require_roles("admin"))):
+                             current=Depends(require_permission(
+                                 "drivers.edit", legacy_roles=("admin",), module="drivers"))):
     _tenant_or_400()
     db = get_db()
     driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
@@ -418,7 +422,8 @@ class GrantAccessIn(BaseModel):
 
 @router.post("/drivers/{driver_id}/grant-access")
 async def grant_driver_access(driver_id: str, payload: GrantAccessIn,
-                              current=Depends(require_roles("admin"))):
+                              current=Depends(require_permission(
+                                  "drivers.admin", legacy_roles=("admin",), module="drivers"))):
     """Crée un compte utilisateur (rôle chauffeur) lié à ce chauffeur — accès PWA."""
     tid = _tenant_or_400()
     db = get_db()
@@ -460,7 +465,8 @@ async def _find_driver_account(raw, tid: str, driver: dict) -> Optional[dict]:
 
 
 @router.post("/drivers/{driver_id}/reset-password")
-async def reset_driver_password(driver_id: str, current=Depends(require_roles("admin"))):
+async def reset_driver_password(driver_id: str, current=Depends(require_permission(
+        "drivers.admin", legacy_roles=("admin",), module="drivers"))):
     """Génère un mot de passe temporaire (affiché UNE SEULE FOIS, jamais loggé,
     jamais relisible) et force le changement à la prochaine connexion."""
     tid = _tenant_or_400()
@@ -492,7 +498,8 @@ AUDIT_EVENT_ACTIONS = [
 
 
 @router.get("/drivers/{driver_id}/overview")
-async def driver_overview(driver_id: str, current=Depends(require_roles("admin", "manager"))):
+async def driver_overview(driver_id: str, current=Depends(require_permission(
+        "drivers.view", legacy_roles=("admin", "manager"), module="drivers"))):
     """Fiche admin chauffeur : identité, compte, méthodes d'identification,
     session actuelle, historique sessions + événements. Aucune donnée inventée."""
     tid = _tenant_or_400()
@@ -585,7 +592,8 @@ class InviteIn(BaseModel):
 @router.post("/drivers/{driver_id}/invite")
 async def invite_driver(driver_id: str, payload: InviteIn, request: Request,
                         background_tasks: BackgroundTasks,
-                        current=Depends(require_roles("admin"))):
+                        current=Depends(require_permission(
+                            "drivers.admin", legacy_roles=("admin",), module="drivers"))):
     """Envoie une invitation par email (lien de création de mot de passe, valable 7 jours).
     Si le SMTP n'est pas configuré, retourne le lien à copier manuellement."""
     tid = _tenant_or_400()
@@ -643,7 +651,8 @@ class VehicleAccessIn(BaseModel):
 
 @router.get("/drivers/{driver_id}/vehicle-access")
 async def get_driver_vehicle_access(driver_id: str,
-                                    current=Depends(require_roles("admin", "manager"))):
+                                    current=Depends(require_permission(
+                                        "drivers.view", legacy_roles=("admin", "manager"), module="drivers"))):
     _tenant_or_400()
     db = get_db()
     from app.vehicle_access import get_vehicle_access, active_vehicle_query
@@ -665,7 +674,8 @@ async def get_driver_vehicle_access(driver_id: str,
 
 @router.put("/drivers/{driver_id}/vehicle-access")
 async def set_driver_vehicle_access(driver_id: str, payload: VehicleAccessIn,
-                                    current=Depends(require_roles("admin"))):
+                                    current=Depends(require_permission(
+                                        "drivers.edit", legacy_roles=("admin",), module="drivers"))):
     """Source d'autorité des véhicules visibles par le chauffeur. Admin uniquement."""
     _tenant_or_400()
     db = get_db()
@@ -720,7 +730,8 @@ async def set_driver_vehicle_access(driver_id: str, payload: VehicleAccessIn,
 
 @router.post("/drivers/{driver_id}/link-user")
 async def link_driver_user(driver_id: str, payload: LinkUserIn,
-                           current=Depends(require_roles("admin"))):
+                           current=Depends(require_permission(
+                               "drivers.edit", legacy_roles=("admin",), module="drivers"))):
     tid = _tenant_or_400()
     db = get_db()
     raw = get_raw_db()
@@ -737,7 +748,8 @@ async def link_driver_user(driver_id: str, payload: LinkUserIn,
 
 
 @router.post("/drivers/{driver_id}/unlink-user")
-async def unlink_driver_user(driver_id: str, current=Depends(require_roles("admin"))):
+async def unlink_driver_user(driver_id: str, current=Depends(require_permission(
+        "drivers.edit", legacy_roles=("admin",), module="drivers"))):
     tid = _tenant_or_400()
     db = get_db()
     raw = get_raw_db()

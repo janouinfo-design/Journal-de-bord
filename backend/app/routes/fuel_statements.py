@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.audit import log_audit
 from app.auth import require_roles
+from app.access_control import require_module
 from app.db import get_db
 from app.fuel_statements import (
     build_lines, closed_overlap, compute_totals, get_lines, late_transactions,
@@ -23,7 +24,8 @@ from app.fuel_statements import (
 from app.fuel_statements_exporter import build_csv, build_excel, build_pdf
 from app.tenant_context import get_effective_tenant_id, get_tenant_doc
 
-router = APIRouter(prefix="/fuel/statements", tags=["fuel-statements"])
+router = APIRouter(prefix="/fuel/statements", tags=["fuel-statements"],
+                   dependencies=[Depends(require_module("fuel"))])
 
 READ_ROLES = ("admin", "manager", "lecture_seule")
 

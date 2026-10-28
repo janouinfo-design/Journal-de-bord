@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from app.auth import require_roles
+from app.access_control import require_module
 from app.db import get_db, get_raw_db
 from app.emailer import is_smtp_configured
 from app.tenant_context import get_effective_tenant_id
@@ -23,7 +24,7 @@ from app.weekly_driver_report import (
     previous_week_monday,
 )
 
-router = APIRouter(tags=["weekly-report"])
+router = APIRouter(tags=["weekly-report"], dependencies=[Depends(require_module("reports"))])
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 

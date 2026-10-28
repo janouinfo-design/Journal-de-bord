@@ -59,6 +59,9 @@ def _set_auth_cookies(response: Response, access: str, refresh: str):
 
 
 async def get_current_user(request: Request):
+    cached = getattr(request.state, "current_user", None)
+    if cached is not None:
+        return cached
     from app.db import get_db
     db = get_db()
     # Bearer (session d'aperçu par onglet) prioritaire sur le cookie
@@ -77,6 +80,8 @@ async def get_current_user(request: Request):
         user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
             raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+        if user.get("active") is False:
+            raise HTTPException(status_code=401, detail={"code": "account_disabled", "msg": "Compte désactivé."})
         # Rôle « Lecture seule » : blocage serveur de toute action d'écriture
         if user.get("role") == "lecture_seule" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
             _p = request.url.path
@@ -89,16 +94,57 @@ async def get_current_user(request: Request):
                 "session_id": payload.get("imp_session_id"),
                 "auth_source": payload.get("auth_source"),
             }
-        from app.tenant_context import set_current_tenant, NO_TENANT
-        if user.get("role") == "superadmin":
-            set_current_tenant(request.headers.get("X-Tenant-Id") or NO_TENANT)
-        else:
-            set_current_tenant(user.get("tenant_id") or "default")
+        tenant_doc = await _resolve_tenant(request, user)
+        request.state.tenant_doc = tenant_doc
+        request.state.current_user = user
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expiré")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token invalide")
+
+
+_TENANT_PROJ = {"_id": 0, "id": 1, "name": 1, "status": 1, "modules_enabled": 1,
+                "access_control_mode": 1, "pack": 1, "limits": 1}
+_SUSPENDED = {"code": "tenant_suspended", "msg": "Client suspendu — contactez Logitrak."}
+
+
+async def _resolve_tenant(request: Request, user: dict) -> dict | None:
+    """Tenant effectif côté serveur. Entreprise : `user.tenant_id` uniquement.
+    Superadmin : `X-Tenant-Id` validé (existence + statut) ; invalide → 400 sur /api/livre,
+    ignoré ailleurs (/auth, /admin) pour ne jamais verrouiller la console plateforme."""
+    from app.db import get_raw_db
+    from app.tenant_context import set_current_tenant, NO_TENANT
+    raw = get_raw_db()
+    if user.get("role") == "superadmin":
+        tid = (request.headers.get("X-Tenant-Id") or "").strip()
+        if not tid:
+            set_current_tenant(NO_TENANT)
+            return None
+        tenant = await raw.tenants.find_one({"id": tid}, _TENANT_PROJ)
+        if not tenant:
+            if request.url.path.startswith("/api/livre"):
+                raise HTTPException(status_code=400, detail={"code": "invalid_tenant", "msg": "Client inconnu."})
+            set_current_tenant(NO_TENANT)
+            return None
+        if tenant.get("status") != "active":
+            raise HTTPException(status_code=403, detail=_SUSPENDED)
+        set_current_tenant(tid)
+        return tenant
+    tid = user.get("tenant_id")
+    if not tid:
+        raise HTTPException(status_code=403, detail={"code": "tenant_missing",
+                                                     "msg": "Aucune entreprise associée à ce compte."})
+    tenant = await raw.tenants.find_one({"id": tid}, _TENANT_PROJ)
+    if tenant and tenant.get("status") != "active":
+        raise HTTPException(status_code=403, detail=_SUSPENDED)
+    set_current_tenant(tid)
+    return tenant
+
+
+def _require_permission(*perms, **kw):
+    from app.access_control import require_permission
+    return require_permission(*perms, **kw)
 
 
 async def get_user_from_request(req) -> dict | None:
@@ -518,7 +564,8 @@ async def invitation_accept(token: str, payload: InvitationAcceptIn, response: R
 
 
 @router.post("/register")
-async def register(payload: RegisterIn, response: Response, current=Depends(require_roles("admin"))):
+async def register(payload: RegisterIn, response: Response,
+                   current=Depends(_require_permission("users.edit", legacy_roles=("admin",)))):
     from app.db import get_db
     from app.tenant_context import get_effective_tenant_id
     import uuid
@@ -610,6 +657,8 @@ async def refresh(payload: RefreshIn, request: Request, response: Response):
     user = await db.users.find_one({"id": decoded["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+    if user.get("active") is False:
+        raise HTTPException(status_code=401, detail={"code": "account_disabled", "msg": "Compte désactivé."})
 
     new_access = create_access_token(user["id"], user["email"], user["role"])
     new_refresh = create_refresh_token(user["id"])
@@ -618,12 +667,16 @@ async def refresh(payload: RefreshIn, request: Request, response: Response):
 
 
 @router.get("/me")
-async def me(user=Depends(get_current_user)):
-    return {"user": user}
+async def me(request: Request, user=Depends(get_current_user)):
+    from app.access_control import me_payload
+    tenant_doc = getattr(request.state, "tenant_doc", None)
+    tenant = ({"id": tenant_doc.get("id"), "name": tenant_doc.get("name"), "status": tenant_doc.get("status")}
+              if tenant_doc else None)
+    return {"user": user, "tenant": tenant, **me_payload(user, tenant_doc)}
 
 
 @router.get("/users")
-async def list_users(current=Depends(require_roles("admin"))):
+async def list_users(current=Depends(_require_permission("users.view", legacy_roles=("admin",)))):
     """List all registered users (admin only).
 
     Used by the notification preferences panel to target a specific user

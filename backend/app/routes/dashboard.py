@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends
 
-from app.auth import get_current_user
+from app.access_control import require_permission
 from app.db import get_db
 from app.navixy_sync import LEGACY_FUEL_META
 
@@ -27,7 +27,7 @@ async def dashboard(
     vehicle_id: Optional[str] = None,
     group: Optional[str] = None,
     company: Optional[str] = None,
-    user=Depends(get_current_user),
+    user=Depends(require_permission("journal.view", "journal.view_self")),
 ):
     db = get_db()
     settings = await get_settings_doc(db)

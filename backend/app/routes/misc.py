@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.assignments import (
@@ -25,7 +25,7 @@ from app.assignments import (
     reassign_all_trips,
     remove_assignment,
 )
-from app.auth import get_current_user, require_roles
+from app.access_control import require_permission, must_strip_positions, strip_positions
 from app.db import get_db
 from app.navixy_client import (
     NavixyError,
@@ -52,7 +52,7 @@ router = APIRouter(tags=["misc"])
 
 # ---------- Bootstrap ----------
 @router.post("/bootstrap")
-async def bootstrap(force: bool = False, user=Depends(require_roles("admin"))):
+async def bootstrap(force: bool = False, user=Depends(require_permission("settings.edit", legacy_roles=("admin",)))):
     """Seed mock data and run rule engine."""
     from app.mock_navixy import seed_mock_data
     db = get_db()
@@ -64,12 +64,12 @@ async def bootstrap(force: bool = False, user=Depends(require_roles("admin"))):
 
 # ---------- Navixy live sync ----------
 @router.get("/navixy/status")
-async def navixy_status(user=Depends(require_roles("admin", "manager"))):
+async def navixy_status(user=Depends(require_permission("settings.view", legacy_roles=("admin", "manager")))):
     return {"configured": navixy_configured()}
 
 
 @router.post("/navixy/sync")
-async def navixy_sync_endpoint(days: int = 30, user=Depends(require_roles("admin"))):
+async def navixy_sync_endpoint(days: int = 30, user=Depends(require_permission("settings.edit", legacy_roles=("admin",)))):
     """Pull live data from Navixy: trackers, employees, zones, tracks."""
     if not navixy_configured():
         raise HTTPException(400, "Clé d'intégration LOGITRAK non configurée")
@@ -91,7 +91,7 @@ class SchedulerIn(BaseModel):
 
 
 @router.get("/navixy/scheduler")
-async def scheduler_get(user=Depends(require_roles("admin", "manager"))):
+async def scheduler_get(user=Depends(require_permission("settings.view", legacy_roles=("admin", "manager")))):
     db = get_db()
     state = await get_sched_state(db)
     state["configured"] = navixy_configured()
@@ -99,7 +99,7 @@ async def scheduler_get(user=Depends(require_roles("admin", "manager"))):
 
 
 @router.put("/navixy/scheduler")
-async def scheduler_put(payload: SchedulerIn, user=Depends(require_roles("admin"))):
+async def scheduler_put(payload: SchedulerIn, user=Depends(require_permission("settings.edit", legacy_roles=("admin",)))):
     try:
         new_state = await reconfig_sched(payload.enabled, payload.interval_min, payload.days)
     except ValueError as e:
@@ -109,7 +109,7 @@ async def scheduler_put(payload: SchedulerIn, user=Depends(require_roles("admin"
 
 
 @router.post("/navixy/scheduler/run-now")
-async def scheduler_run_now(user=Depends(require_roles("admin"))):
+async def scheduler_run_now(user=Depends(require_permission("settings.edit", legacy_roles=("admin",)))):
     if not navixy_configured():
         raise HTTPException(400, "Clé d'intégration LOGITRAK non configurée")
     try:
@@ -130,7 +130,7 @@ class AssignmentIn(BaseModel):
 @router.get("/assignments")
 async def assignments_list(
     vehicle_id: Optional[str] = None, driver_id: Optional[str] = None,
-    user=Depends(get_current_user),
+    user=Depends(require_permission("journal.view", "journal.view_self")),
 ):
     db = get_db()
     rows = await list_assignments(db, vehicle_id=vehicle_id)
@@ -147,7 +147,7 @@ async def assignments_list(
 
 @router.post("/assignments")
 async def assignments_create(
-    payload: AssignmentIn, user=Depends(require_roles("admin", "manager")),
+    payload: AssignmentIn, user=Depends(require_permission("vehicles.edit", legacy_roles=("admin", "manager"))),
 ):
     db = get_db()
     veh = await db.vehicles.find_one({"id": payload.vehicle_id}, {"_id": 0})
@@ -169,7 +169,7 @@ async def assignments_create(
 
 @router.delete("/assignments/{assignment_id}")
 async def assignments_delete(
-    assignment_id: str, user=Depends(require_roles("admin", "manager")),
+    assignment_id: str, user=Depends(require_permission("vehicles.edit", legacy_roles=("admin", "manager"))),
 ):
     db = get_db()
     ok = await remove_assignment(db, assignment_id)
@@ -181,13 +181,13 @@ async def assignments_delete(
 
 # ---------- Master data ----------
 @router.get("/drivers")
-async def list_drivers(user=Depends(get_current_user)):
+async def list_drivers(user=Depends(require_permission("journal.view", "journal.view_self"))):
     db = get_db()
     return await db.drivers.find({"tenant_id": "default"}, {"_id": 0}).to_list(500)
 
 
 @router.get("/vehicles")
-async def list_vehicles(user=Depends(get_current_user)):
+async def list_vehicles(user=Depends(require_permission("journal.view", "journal.view_self"))):
     db = get_db()
     return await db.vehicles.find({"tenant_id": "default"}, {"_id": 0}).to_list(500)
 
@@ -210,7 +210,7 @@ class VehicleFuelTypeIn(BaseModel):
 @router.put("/vehicles/{vehicle_id}/fuel-type")
 async def set_vehicle_fuel_type(
     vehicle_id: str, payload: VehicleFuelTypeIn,
-    user=Depends(require_roles("admin")),
+    user=Depends(require_permission("vehicles.admin", legacy_roles=("admin",))),
 ):
     """Motorisation prouvée uniquement — jamais déduite du nom/plaque/modèle.
     Influence le garde-fou legacy 0,085 pour les NOUVELLES synchros seulement."""
@@ -235,7 +235,7 @@ async def set_vehicle_fuel_type(
 @router.put("/vehicles/{vehicle_id}/mode")
 async def set_vehicle_mode(
     vehicle_id: str, payload: VehicleModeIn,
-    user=Depends(require_roles("admin", "manager")),
+    user=Depends(require_permission("vehicles.edit", legacy_roles=("admin", "manager"))),
 ):
     if payload.mode not in ("always_pro", "always_perso", "mixte"):
         raise HTTPException(400, "Mode invalide")
@@ -248,13 +248,13 @@ async def set_vehicle_mode(
 
 
 @router.get("/geofences")
-async def list_geofences(user=Depends(get_current_user)):
+async def list_geofences(user=Depends(require_permission("journal.view", "journal.view_self"))):
     db = get_db()
     return await db.geofences.find({"tenant_id": "default"}, {"_id": 0}).to_list(500)
 
 
 @router.get("/groups")
-async def list_groups(user=Depends(get_current_user)):
+async def list_groups(user=Depends(require_permission("journal.view", "journal.view_self"))):
     """Distinct fleet groups derived from the first token of vehicle plates."""
     db = get_db()
     rows = await db.vehicles.find({"tenant_id": "default"}, {"_id": 0, "plate": 1}).to_list(1000)
@@ -263,7 +263,7 @@ async def list_groups(user=Depends(get_current_user)):
 
 
 @router.get("/companies")
-async def list_companies(user=Depends(get_current_user)):
+async def list_companies(user=Depends(require_permission("journal.view", "journal.view_self"))):
     """Distinct tenants/companies. Currently mono-tenant — exposed for future multi-tenant."""
     db = get_db()
     tenants = await db.vehicles.distinct("tenant_id")
@@ -275,6 +275,7 @@ async def list_companies(user=Depends(get_current_user)):
 # ---------- Trips ----------
 @router.get("/trips")
 async def list_trips(
+    request: Request,
     classification: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -283,7 +284,7 @@ async def list_trips(
     group: Optional[str] = None,
     company: Optional[str] = None,
     limit: int = 500,
-    user=Depends(get_current_user),
+    user=Depends(require_permission("journal.view", "journal.view_self")),
 ):
     db = get_db()
     settings = await get_settings_doc(db)
@@ -295,6 +296,8 @@ async def list_trips(
     # Confidentialité Phase 1 (classification personal) + Phase 2 (mode PRIVATE device).
     from app.private_mode_engine import redact_private_trip
     trips = [redact_private_trip(apply_privacy(t, settings, user["role"])) for t in trips]
+    if must_strip_positions(request, user):
+        trips = strip_positions(trips)
     return {"trips": trips, "settings_mode": settings.get("mode"),
             "fuel_l_meta": LEGACY_FUEL_META}
 
@@ -306,7 +309,8 @@ class ClassifyIn(BaseModel):
 @router.put("/trips/{trip_id}/classify")
 async def classify_trip_route(
     trip_id: str, payload: ClassifyIn,
-    user=Depends(require_roles("admin", "manager", "driver")),
+    user=Depends(require_permission("trips.classify", "trips.classify_self",
+                                    legacy_roles=("admin", "manager", "driver"), module="trip_classification")),
 ):
     if payload.classification not in ("professional", "personal"):
         raise HTTPException(400, "Classification invalide")
@@ -344,7 +348,7 @@ async def classify_trip_route(
 @router.get("/trips/{trip_id}/track")
 async def trip_track(
     trip_id: str, refresh: bool = False,
-    user=Depends(get_current_user),
+    user=Depends(require_permission("positions.view", "journal.view_self")),
 ):
     """Return the polyline of a trip as a list of `[lng, lat]` points.
 
@@ -434,6 +438,6 @@ async def trip_track(
 
 # ---------- Audit log ----------
 @router.get("/audit-log")
-async def audit_log(limit: int = 100, user=Depends(require_roles("admin"))):
+async def audit_log(limit: int = 100, user=Depends(require_permission("audit.view", legacy_roles=("admin",)))):
     db = get_db()
     return await db.audit_log.find({}, {"_id": 0}).sort("at", -1).to_list(limit)

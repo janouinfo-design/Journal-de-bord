@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import get_current_user, require_roles
+from app.access_control import require_permission, require_module
 from app.db import get_db
 from app.notifications_service import (
     dispatch,
@@ -14,29 +14,30 @@ from app.notifications_service import (
     set_preferences,
 )
 
-router = APIRouter(tags=["notifications"])
+router = APIRouter(tags=["notifications"], dependencies=[Depends(require_module("notifications"))])
 
 
 @router.get("/notifications/catalog")
-async def notifications_catalog(user=Depends(get_current_user)):
+async def notifications_catalog(user=Depends(require_permission("notifications.manage_self"))):
     """List of supported events + default channels — used by the preferences UI."""
     return {"events": event_catalog_public()}
 
 
 @router.get("/notifications/preferences")
-async def notifications_get_prefs(user=Depends(get_current_user)):
+async def notifications_get_prefs(user=Depends(require_permission("notifications.manage_self"))):
     """Get the current user's notification preferences (push/email/sms per event)."""
     return await get_preferences(get_db(), user["id"])
 
 
 @router.put("/notifications/preferences")
-async def notifications_put_prefs(payload: dict, user=Depends(get_current_user)):
+async def notifications_put_prefs(payload: dict, user=Depends(require_permission("notifications.manage_self"))):
     """Update the current user's notification preferences."""
     return await set_preferences(get_db(), user["id"], payload or {})
 
 
 @router.post("/notifications/test")
-async def notifications_test(payload: dict, user=Depends(require_roles("admin"))):
+async def notifications_test(payload: dict, user=Depends(require_permission(
+        "notifications.manage_company", legacy_roles=("admin",)))):
     """Admin-only: trigger a test notification for a known event.
 
     Body: `{event: 'ble.conflict'|..., user_ids?: [], driver_ids?: [], payload?: {...}}`
@@ -54,7 +55,7 @@ async def notifications_test(payload: dict, user=Depends(require_roles("admin"))
 
 @router.get("/notifications/inbox")
 async def notifications_inbox(unread_only: bool = False, limit: int = 30,
-                              user=Depends(get_current_user)):
+                              user=Depends(require_permission("notifications.manage_self"))):
     """Centre de notifications in-app de l'utilisateur courant (isolé par tenant)."""
     db = get_db()
     q: dict = {"user_id": user["id"]}
@@ -68,7 +69,7 @@ async def notifications_inbox(unread_only: bool = False, limit: int = 30,
 
 
 @router.post("/notifications/inbox/{notif_id}/read")
-async def notifications_mark_read(notif_id: str, user=Depends(get_current_user)):
+async def notifications_mark_read(notif_id: str, user=Depends(require_permission("notifications.manage_self"))):
     r = await get_db().user_notifications.update_one(
         {"id": notif_id, "user_id": user["id"]},
         {"$set": {"read": True, "read_at": datetime.now(timezone.utc).isoformat()}})
@@ -78,7 +79,7 @@ async def notifications_mark_read(notif_id: str, user=Depends(get_current_user))
 
 
 @router.post("/notifications/inbox/read-all")
-async def notifications_mark_all_read(user=Depends(get_current_user)):
+async def notifications_mark_all_read(user=Depends(require_permission("notifications.manage_self"))):
     r = await get_db().user_notifications.update_many(
         {"user_id": user["id"], "read": False},
         {"$set": {"read": True, "read_at": datetime.now(timezone.utc).isoformat()}})

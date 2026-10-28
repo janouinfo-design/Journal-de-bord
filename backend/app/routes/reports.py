@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from app.auth import get_current_user
+from app.access_control import require_permission
 from app.db import get_db
 from app.reports import (
     swiss_tax_report_pdf,
@@ -33,7 +33,7 @@ async def export_report(
     vehicle_id: Optional[str] = None,
     group: Optional[str] = None,
     company: Optional[str] = None,
-    user=Depends(get_current_user),
+    user=Depends(require_permission("reports.view", "journal.view_self", module="reports")),
 ):
     db = get_db()
     settings = await get_settings_doc(db)
@@ -114,7 +114,7 @@ async def tax_swiss_report(
     year: int = Query(...),
     driver_id: Optional[str] = None,
     vehicle_id: Optional[str] = None,
-    user=Depends(get_current_user),
+    user=Depends(require_permission("reports.view", "journal.view_self", module="reports")),
 ):
     db = get_db()
     start = f"{year}-01-01T00:00:00+00:00"
