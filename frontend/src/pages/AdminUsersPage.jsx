@@ -13,7 +13,7 @@ import {
 import { Users, Plus, Trash2, Eye } from "lucide-react";
 import ImpersonateDialog from "@/components/livre/ImpersonateDialog";
 
-const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", lecture_seule: "Lecture seule", superadmin: "Super Admin" };
+const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", office: "Office (administratif)", driver: "Chauffeur", lecture_seule: "Lecture seule", superadmin: "Super Admin" };
 const EMPTY = { email: "", name: "", password: "", role: "driver", tenant_id: "" };
 
 export default function AdminUsersPage() {
@@ -149,6 +149,7 @@ export default function AdminUsersPage() {
                       <SelectContent>
                         <SelectItem value="admin">Admin</SelectItem>
                         <SelectItem value="manager">Gestionnaire</SelectItem>
+                        <SelectItem value="office">Office (administratif)</SelectItem>
                         <SelectItem value="driver">Chauffeur</SelectItem>
                         <SelectItem value="lecture_seule">Lecture seule</SelectItem>
                       </SelectContent>
@@ -221,6 +222,7 @@ export default function AdminUsersPage() {
                   <SelectContent>
                     <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="manager">Gestionnaire</SelectItem>
+                    <SelectItem value="office">Office (administratif)</SelectItem>
                     <SelectItem value="driver">Chauffeur</SelectItem>
                     <SelectItem value="lecture_seule">Lecture seule</SelectItem>
                   </SelectContent>

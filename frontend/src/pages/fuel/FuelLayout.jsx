@@ -9,9 +9,8 @@ import { Gauge, ReceiptText, CreditCard, GitMerge, Upload, Settings2, ListChecks
 const BASE = "/livre/energie/approvisionnements";
 
 export default function FuelLayout() {
-  const { user } = useAuth();
+  const { user, can, hasModule } = useAuth();
   const role = user?.role;
-  const isAdmin = role === "admin" || role === "superadmin";
 
   let tabs;
   if (role === "driver") {
@@ -20,15 +19,14 @@ export default function FuelLayout() {
     ];
   } else {
     tabs = [
-      { to: `${BASE}/apercu`, label: "Aperçu", icon: Gauge, testId: "subtab-fuel-overview" },
-      { to: `${BASE}/transactions`, label: "Transactions", icon: ReceiptText, testId: "subtab-fuel-transactions" },
-      { to: `${BASE}/cartes`, label: "Cartes carburant", icon: CreditCard, testId: "subtab-fuel-cards" },
-      ...(role === "manager" || isAdmin
-        ? [{ to: `${BASE}/rapprochements`, label: "Rapprochements", icon: GitMerge, testId: "subtab-fuel-matching" }] : []),
-      { to: `${BASE}/decomptes`, label: "Décomptes", icon: FileCheck2, testId: "subtab-fuel-statements" },
-      ...(isAdmin ? [{ to: `${BASE}/importations`, label: "Importations", icon: Upload, testId: "subtab-fuel-imports" }] : []),
-      ...(isAdmin ? [{ to: `${BASE}/parametres`, label: "Paramètres", icon: Settings2, testId: "subtab-fuel-settings" }] : []),
-    ];
+      { to: `${BASE}/apercu`, label: "Aperçu", icon: Gauge, testId: "subtab-fuel-overview", perms: ["fuel.view"] },
+      { to: `${BASE}/transactions`, label: "Transactions", icon: ReceiptText, testId: "subtab-fuel-transactions", perms: ["fuel.view"] },
+      { to: `${BASE}/cartes`, label: "Cartes carburant", icon: CreditCard, testId: "subtab-fuel-cards", module: "fuel_cards", perms: ["fuel_cards.view"] },
+      { to: `${BASE}/rapprochements`, label: "Rapprochements", icon: GitMerge, testId: "subtab-fuel-matching", perms: ["fuel.reconcile"] },
+      { to: `${BASE}/decomptes`, label: "Décomptes", icon: FileCheck2, testId: "subtab-fuel-statements", perms: ["fuel.view"] },
+      { to: `${BASE}/importations`, label: "Importations", icon: Upload, testId: "subtab-fuel-imports", perms: ["fuel.import"] },
+      { to: `${BASE}/parametres`, label: "Paramètres", icon: Settings2, testId: "subtab-fuel-settings", perms: ["fuel.admin"] },
+    ].filter((t) => hasModule(t.module) && can(...t.perms));
   }
 
   return (

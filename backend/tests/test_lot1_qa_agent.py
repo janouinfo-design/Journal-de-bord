@@ -161,7 +161,7 @@ def test_me_enriched(role):
     b = r.json()
     assert b["user"]["role"] == role and "password_hash" not in b["user"]
     assert b["tenant"]["id"] == "default" and b["tenant"]["status"] == "active"
-    assert b["access_control_mode"] == "legacy"
+    assert b["access_control_mode"] in ("legacy", "shadow")  # default : jamais enforce sans GO
     for m in ("journal", "fuel", "fines", "energy", "reports", "notifications", "drivers"):
         assert m in b["modules_enabled"], m
     assert "documents" not in b["modules_enabled"] and "ev_charging" not in b["modules_enabled"]

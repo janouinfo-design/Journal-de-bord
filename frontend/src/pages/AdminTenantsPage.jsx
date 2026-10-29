@@ -8,8 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Building2, Plus, Pencil, KeyRound, RefreshCw, AlertTriangle, Link2 } from "lucide-react";
+import { Building2, Plus, Pencil, KeyRound, RefreshCw, AlertTriangle, Link2, Boxes } from "lucide-react";
 import NavixyAccessDialog from "@/components/admin/NavixyAccessDialog";
+import TenantModulesDialog, { MODE_META } from "@/components/admin/TenantModulesDialog";
 
 const EMPTY = { name: "", navixy_hash: "" };
 
@@ -28,6 +29,18 @@ export default function AdminTenantsPage() {
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(null);
   const [accessDlg, setAccessDlg] = useState(null);
+  const [modulesDlg, setModulesDlg] = useState(null);
+  const [catalog, setCatalog] = useState(null);
+
+  async function openModules(t) {
+    try {
+      const cat = catalog || (await api.get("/admin/modules/catalog")).data;
+      setCatalog(cat);
+      setModulesDlg(t);
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+    }
+  }
 
   async function syncNow(t) {
     setSyncing(t.id);
@@ -134,13 +147,14 @@ export default function AdminTenantsPage() {
               <th className="px-4 py-3">Utilisateurs</th>
               <th className="px-4 py-3">Véhicules</th>
               <th className="px-4 py-3">Trajets</th>
+              <th className="px-4 py-3">Modules</th>
               <th className="px-4 py-3">Synchro Navixy</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">Chargement…</td></tr>
+              <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">Chargement…</td></tr>
             ) : tenants.map((t) => (
               <tr key={t.id} data-testid={`tenant-row-${t.id}`} className="border-b border-slate-100 hover:bg-slate-50/60">
                 <td className="px-4 py-3 font-medium text-slate-800">{t.name}
@@ -162,6 +176,18 @@ export default function AdminTenantsPage() {
                 <td className="px-4 py-3">{t.stats?.users ?? 0}</td>
                 <td className="px-4 py-3">{t.stats?.vehicles ?? 0}</td>
                 <td className="px-4 py-3">{t.stats?.trips ?? 0}</td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <button data-testid={`tenant-modules-${t.id}`} type="button" onClick={() => openModules(t)}
+                          className="group inline-flex items-center gap-2 text-left" title="Modules & licences">
+                    <span className="text-xs font-medium text-slate-700 group-hover:underline">
+                      {(t.modules_effective || []).length} modules
+                    </span>
+                    <span data-testid={`tenant-mode-${t.id}`}
+                          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${MODE_META[t.access_control_mode_effective]?.cls || ""}`}>
+                      {MODE_META[t.access_control_mode_effective]?.label || t.access_control_mode_effective}
+                    </span>
+                  </button>
+                </td>
                 <td className="px-4 py-3">
                   {(() => {
                     const h = syncHealth(t);
@@ -193,6 +219,10 @@ export default function AdminTenantsPage() {
                   )}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <Button data-testid={`tenant-modules-btn-${t.id}`} variant="ghost" size="sm"
+                          title="Modules & licences" onClick={() => openModules(t)}>
+                    <Boxes className="w-4 h-4" />
+                  </Button>
                   <Button data-testid={`tenant-navixy-access-${t.id}`} variant="ghost" size="sm"
                           title="Accès Navixy" onClick={() => setAccessDlg(t)}>
                     <Link2 className="w-4 h-4" />
@@ -251,6 +281,9 @@ export default function AdminTenantsPage() {
       </Dialog>
 
       {accessDlg && <NavixyAccessDialog tenant={accessDlg} onClose={() => setAccessDlg(null)} />}
+      {modulesDlg && catalog && (
+        <TenantModulesDialog tenant={modulesDlg} catalog={catalog} onClose={() => setModulesDlg(null)} onSaved={load} />
+      )}
     </div>
   );
 }

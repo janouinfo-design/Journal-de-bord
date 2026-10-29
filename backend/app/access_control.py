@@ -141,7 +141,7 @@ ROLE_TEMPLATES = {
         "private_mode.view",
         "drivers.view", "identification.view", "identification.edit",
         "energy.view", "energy.edit", "energy.export",
-        "fuel.view", "fuel.reconcile", "fuel.statements", "fuel.export", "fuel_cards.view",
+        "fuel.view", "fuel.reconcile", "fuel.export", "fuel_cards.view",
         "fines.view", "fines.edit", "fines.pay", "fines.export",
         "reports.view", "reports.admin",
         "notifications.manage_self", "settings.view",
@@ -303,18 +303,21 @@ def require_module(code: str):
     return _dep
 
 
-def require_permission(*perms: str, legacy_roles: tuple | None = None, module: str | None = None):
+def require_permission(*perms: str, legacy_roles: tuple | None = None, module: str | None = None,
+                       parity_exempt: tuple = ()):
     """Autorise si l'utilisateur détient l'UNE des permissions.
 
     legacy_roles : rôles autorisés par l'ancien `require_roles` (None = tout utilisateur
     authentifié). Appliqués en mode legacy et shadow pour conserver le comportement actuel.
+    parity_exempt : rôles dont l'écart legacy ↔ permissions est assumé et documenté (test T24).
     """
     for p in perms:
         if p not in PERMISSIONS:
             raise ValueError(f"permission inconnue: {p}")
     if module and module not in MODULES:
         raise ValueError(f"module inconnu: {module}")
-    REGISTRY.append({"perms": perms, "legacy_roles": legacy_roles, "module": module})
+    REGISTRY.append({"perms": perms, "legacy_roles": legacy_roles, "module": module,
+                     "parity_exempt": tuple(parity_exempt)})
 
     async def _dep(request: Request, user=Depends(get_current_user)):
         role = user.get("role")
@@ -347,4 +350,42 @@ def me_payload(user: dict, tenant_doc: dict | None) -> dict:
         "access_control_mode": resolve_mode(tenant_doc),
         "modules_enabled": enabled_modules(tenant_doc),
         "permissions_effective": sorted(effective_permissions(user, tenant_doc)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lot 2 / Lot 3 — catalogues exposés et normalisation des modules d'un client
+# ---------------------------------------------------------------------------
+def normalize_modules(flags: dict | None) -> dict:
+    """Dict complet code → bool ; un module dont une dépendance est OFF est forcé OFF."""
+    flags = flags or {}
+    out = {c: bool(flags.get(c, spec["legacy_default"])) for c, spec in MODULES.items()}
+    changed = True
+    while changed:
+        changed = False
+        for c, spec in MODULES.items():
+            if out[c] and any(not out[d] for d in spec["depends_on"]):
+                out[c] = False
+                changed = True
+    return out
+
+
+def modules_catalog() -> list[dict]:
+    return [{"code": c, **spec} for c, spec in MODULES.items()]
+
+
+def permissions_catalog(tenant_doc: dict | None) -> dict:
+    enabled_list = enabled_modules(tenant_doc)
+    enabled = set(enabled_list)
+    return {
+        "modules": [{"code": c, "label": MODULES[c]["label"], "category": MODULES[c]["category"]} for c in enabled_list],
+        "permissions": [
+            {"code": p, "module": s["module"], "label": s["label"],
+             "sensitive": p in SENSITIVE_PERMISSIONS, "write": p in WRITE_PERMISSIONS,
+             "available": s["module"] is None or s["module"] in enabled}
+            for p, s in PERMISSIONS.items()
+        ],
+        "role_templates": {r: sorted(expand(set(t))) for r, t in ROLE_TEMPLATES.items()},
+        "roles": list(TENANT_ROLES),
+        "sensitive_blocked_roles": list(_NO_SENSITIVE_GRANT_ROLES),
     }

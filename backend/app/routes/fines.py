@@ -29,8 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
-from app.auth import get_current_user, require_roles
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db
 from app.fines_engine import identify_driver
 from app.fines_exporter import export_csv, export_excel, export_pdf
@@ -172,7 +171,7 @@ async def _audit(db, action: str, fine_id: str, actor: dict, diff: dict | None =
 @router.post("/fines/ocr-extract")
 async def ocr_extract(
     file: UploadFile = File(...),
-    user=Depends(require_roles(*ROLES_RW)),
+    user=Depends(require_permission("fines.edit", legacy_roles=ROLES_RW)),
 ):
     """Phase 5 — Run OCR on an uploaded fine document and return structured fields.
 
@@ -231,7 +230,7 @@ async def ocr_extract(
 
 
 @router.get("/fines/mine")
-async def list_my_fines(user=Depends(get_current_user)):
+async def list_my_fines(user=Depends(require_permission("fines.view", "fines.view_self", legacy_roles=None))):
     """List fines belonging to the current driver — accessible to any authenticated user.
 
     The endpoint resolves the driver record linked to the user's email and returns
@@ -267,7 +266,7 @@ async def list_my_fines(user=Depends(get_current_user)):
 
 @router.get("/fines/export")
 async def export_fines(
-    user=Depends(require_roles(*ROLES_RW)),
+    user=Depends(require_permission("fines.export", legacy_roles=ROLES_RW)),
     fmt: str = Query("csv", pattern="^(csv|excel|pdf)$"),
     status: Optional[str] = None,
     vehicle_id: Optional[str] = None,
@@ -364,7 +363,7 @@ def io_iter(data: bytes):
 
 
 @router.get("/fines/meta")
-async def fines_meta(user=Depends(get_current_user)):
+async def fines_meta(user=Depends(require_permission("fines.view", "fines.view_self", legacy_roles=None))):
     """Static enums + lightweight vehicle/driver lists for form selects."""
     db = get_db()
     vehicles = await db.vehicles.find(
@@ -384,7 +383,7 @@ async def fines_meta(user=Depends(get_current_user)):
 
 @router.get("/fines")
 async def list_fines(
-    user=Depends(require_roles(*ROLES_RW)),
+    user=Depends(require_permission("fines.view", legacy_roles=ROLES_RW)),
     status: Optional[str] = None,
     vehicle_id: Optional[str] = None,
     driver_id: Optional[str] = None,
@@ -462,7 +461,7 @@ async def list_fines(
 
 
 @router.post("/fines")
-async def create_fine(payload: FineIn, user=Depends(require_roles(*ROLES_RW))):
+async def create_fine(payload: FineIn, user=Depends(require_permission("fines.edit", legacy_roles=ROLES_RW))):
     """Create a new fine. Default status = `received`."""
     _validate_enums(payload.status, payload.infraction_type, payload.priority)
     db = get_db()
@@ -521,7 +520,7 @@ async def create_fine(payload: FineIn, user=Depends(require_roles(*ROLES_RW))):
 
 
 @router.post("/fines/{fine_id}/identify-driver")
-async def identify_driver_endpoint(fine_id: str, user=Depends(require_roles(*ROLES_RW))):
+async def identify_driver_endpoint(fine_id: str, user=Depends(require_permission("fines.edit", legacy_roles=ROLES_RW))):
     """Recompute driver identification for an existing fine and persist the result.
 
     Returns the candidates so the UI can show every source considered.
@@ -558,7 +557,7 @@ async def identify_driver_endpoint(fine_id: str, user=Depends(require_roles(*ROL
 
 
 @router.get("/fines/{fine_id}/identify-candidates")
-async def identify_candidates(fine_id: str, user=Depends(require_roles(*ROLES_RW))):
+async def identify_candidates(fine_id: str, user=Depends(require_permission("fines.view", legacy_roles=ROLES_RW))):
     """Read-only preview of all driver candidates (no persistence)."""
     db = get_db()
     fine = await db.fines.find_one({"id": fine_id, "tenant_id": "default"}, {"_id": 0})
@@ -571,7 +570,7 @@ async def identify_candidates(fine_id: str, user=Depends(require_roles(*ROLES_RW
 
 
 @router.get("/fines/{fine_id}")
-async def get_fine(fine_id: str, user=Depends(require_roles(*ROLES_RW))):
+async def get_fine(fine_id: str, user=Depends(require_permission("fines.view", legacy_roles=ROLES_RW))):
     db = get_db()
     fine = await db.fines.find_one({"id": fine_id, "tenant_id": "default"}, {"_id": 0})
     if not fine:
@@ -580,7 +579,7 @@ async def get_fine(fine_id: str, user=Depends(require_roles(*ROLES_RW))):
 
 
 @router.patch("/fines/{fine_id}")
-async def update_fine(fine_id: str, payload: FineUpdate, user=Depends(require_roles(*ROLES_RW))):
+async def update_fine(fine_id: str, payload: FineUpdate, user=Depends(require_permission("fines.edit", legacy_roles=ROLES_RW))):
     db = get_db()
     existing = await db.fines.find_one({"id": fine_id, "tenant_id": "default"}, {"_id": 0})
     if not existing:
@@ -618,7 +617,7 @@ async def update_fine(fine_id: str, payload: FineUpdate, user=Depends(require_ro
 
 
 @router.delete("/fines/{fine_id}")
-async def delete_fine(fine_id: str, user=Depends(require_roles(*ROLES_DELETE))):
+async def delete_fine(fine_id: str, user=Depends(require_permission("fines.admin", legacy_roles=ROLES_DELETE))):
     db = get_db()
     existing = await db.fines.find_one({"id": fine_id, "tenant_id": "default"}, {"_id": 0})
     if not existing:
@@ -629,7 +628,7 @@ async def delete_fine(fine_id: str, user=Depends(require_roles(*ROLES_DELETE))):
 
 
 @router.get("/fines/stats/summary")
-async def fines_summary(user=Depends(require_roles(*ROLES_RW))):
+async def fines_summary(user=Depends(require_permission("fines.view", legacy_roles=ROLES_RW))):
     """High-level KPIs for the dashboard widget (Phase 3 wiring)."""
     db = get_db()
     base = {"tenant_id": "default"}
@@ -669,7 +668,7 @@ async def upload_document(
     fine_id: str,
     file: UploadFile = File(...),
     kind: str = Form("libre"),
-    user=Depends(require_roles(*ROLES_RW)),
+    user=Depends(require_permission("fines.edit", legacy_roles=ROLES_RW)),
 ):
     """Attach a document (PDF or image) to a fine.
 
@@ -729,7 +728,7 @@ async def upload_document(
 @router.get("/fines/{fine_id}/documents/{doc_id}/download")
 async def download_document(
     fine_id: str, doc_id: str,
-    user=Depends(require_roles(*ROLES_RW)),
+    user=Depends(require_permission("fines.view", legacy_roles=ROLES_RW)),
 ):
     db = get_db()
     fine = await db.fines.find_one(
@@ -770,7 +769,7 @@ async def download_document(
 @router.delete("/fines/{fine_id}/documents/{doc_id}")
 async def delete_document(
     fine_id: str, doc_id: str,
-    user=Depends(require_roles(*ROLES_RW)),
+    user=Depends(require_permission("fines.edit", legacy_roles=ROLES_RW)),
 ):
     db = get_db()
     fine = await db.fines.find_one(
@@ -806,7 +805,7 @@ async def delete_document(
 
 # --- Extended stats (Phase 3) ----------------------------------------------
 @router.get("/fines/stats/extended")
-async def fines_stats_extended(user=Depends(require_roles(*ROLES_RW))):
+async def fines_stats_extended(user=Depends(require_permission("fines.view", legacy_roles=ROLES_RW))):
     """KPIs + top 10 rankings + 12-month evolution for the analytics page."""
     db = get_db()
     base = {"tenant_id": "default"}

@@ -8,6 +8,7 @@ export const TEST_IDS = {
     demoAdmin: "auth-demo-admin",
     demoManager: "auth-demo-manager",
     demoDriver: "auth-demo-driver",
+    demoReadonly: "auth-demo-readonly",
     demoSuperadmin: "auth-demo-superadmin",
   },
   layout: {

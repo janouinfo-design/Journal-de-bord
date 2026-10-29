@@ -16,8 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.audit import log_audit
-from app.auth import get_current_user, require_roles
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db
 from app.fuel_engine import (
     CARD_STATUSES, PRODUCT_TYPES, apply_match, card_fingerprint, dedup_key,
@@ -113,7 +112,7 @@ class AssignmentIn(BaseModel):
 
 
 @router.get("/cards")
-async def list_cards(status: Optional[str] = None, user=Depends(require_roles(*READ_ROLES))):
+async def list_cards(status: Optional[str] = None, user=Depends(require_permission("fuel_cards.view", legacy_roles=READ_ROLES, module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     q = {"status": status} if status else {}
@@ -141,7 +140,7 @@ async def list_cards(status: Optional[str] = None, user=Depends(require_roles(*R
 
 
 @router.post("/cards")
-async def create_card(payload: CardIn, user=Depends(require_roles("admin"))):
+async def create_card(payload: CardIn, user=Depends(require_permission("fuel_cards.edit", legacy_roles=("admin",), module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     if payload.assignment_type not in ASSIGNMENT_TYPES:
@@ -195,7 +194,7 @@ async def create_card(payload: CardIn, user=Depends(require_roles("admin"))):
 
 
 @router.get("/cards/{card_id}")
-async def get_card(card_id: str, user=Depends(require_roles(*READ_ROLES))):
+async def get_card(card_id: str, user=Depends(require_permission("fuel_cards.view", legacy_roles=READ_ROLES, module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     card = await db.fuel_cards.find_one({"id": card_id}, CARD_PUBLIC_PROJECTION)
@@ -207,7 +206,7 @@ async def get_card(card_id: str, user=Depends(require_roles(*READ_ROLES))):
 
 
 @router.patch("/cards/{card_id}")
-async def update_card(card_id: str, payload: CardUpdate, user=Depends(require_roles("admin"))):
+async def update_card(card_id: str, payload: CardUpdate, user=Depends(require_permission("fuel_cards.edit", legacy_roles=("admin",), module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     card = await db.fuel_cards.find_one({"id": card_id}, {"_id": 0})
@@ -231,7 +230,7 @@ async def update_card(card_id: str, payload: CardUpdate, user=Depends(require_ro
 
 
 @router.post("/cards/{card_id}/status")
-async def set_card_status(card_id: str, payload: CardStatusIn, user=Depends(require_roles("admin"))):
+async def set_card_status(card_id: str, payload: CardStatusIn, user=Depends(require_permission("fuel_cards.edit", legacy_roles=("admin",), module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     if payload.status not in CARD_STATUSES:
@@ -256,7 +255,7 @@ async def set_card_status(card_id: str, payload: CardStatusIn, user=Depends(requ
 
 
 @router.post("/cards/{card_id}/assignments")
-async def add_assignment(card_id: str, payload: AssignmentIn, user=Depends(require_roles("admin"))):
+async def add_assignment(card_id: str, payload: AssignmentIn, user=Depends(require_permission("fuel_cards.edit", legacy_roles=("admin",), module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     if payload.type not in ASSIGNMENT_TYPES:
@@ -288,7 +287,7 @@ async def add_assignment(card_id: str, payload: AssignmentIn, user=Depends(requi
 
 @router.post("/cards/{card_id}/documents")
 async def upload_card_document(card_id: str, file: UploadFile = File(...),
-                               user=Depends(require_roles("admin"))):
+                               user=Depends(require_permission("fuel_cards.edit", legacy_roles=("admin",), module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     if not await db.fuel_cards.find_one({"id": card_id}, {"_id": 0, "id": 1}):
@@ -297,7 +296,7 @@ async def upload_card_document(card_id: str, file: UploadFile = File(...),
 
 
 @router.get("/cards/{card_id}/documents/{doc_id}/download")
-async def download_card_document(card_id: str, doc_id: str, user=Depends(require_roles(*READ_ROLES))):
+async def download_card_document(card_id: str, doc_id: str, user=Depends(require_permission("fuel_cards.view", legacy_roles=READ_ROLES, module="fuel_cards"))):
     _tenant_or_400()
     db = get_db()
     card = await db.fuel_cards.find_one({"id": card_id}, {"_id": 0, "documents": 1})
@@ -373,7 +372,7 @@ async def list_transactions(date_from: Optional[str] = None, date_to: Optional[s
                             source: Optional[str] = None, q: Optional[str] = None,
                             fx_status: Optional[str] = None,
                             page: int = 1, page_size: int = 50,
-                            user=Depends(require_roles(*READ_ROLES))):
+                            user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     page_size = min(max(page_size, 1), 200)
@@ -398,7 +397,7 @@ async def _driver_id_of(db, user) -> Optional[str]:
 
 
 @router.get("/my-transactions")
-async def my_transactions(page: int = 1, page_size: int = 50, user=Depends(get_current_user)):
+async def my_transactions(page: int = 1, page_size: int = 50, user=Depends(require_permission("fuel.view", "fuel.view_self", legacy_roles=None))):
     """Chauffeur : uniquement ses propres transactions."""
     _tenant_or_400()
     if user.get("role") != "driver":
@@ -417,7 +416,7 @@ async def my_transactions(page: int = 1, page_size: int = 50, user=Depends(get_c
 
 
 @router.get("/transactions/{tx_id}")
-async def get_transaction(tx_id: str, user=Depends(get_current_user)):
+async def get_transaction(tx_id: str, user=Depends(require_permission("fuel.view", "fuel.view_self", legacy_roles=None))):
     _tenant_or_400()
     db = get_db()
     tx = await db.fuel_transactions.find_one({"id": tx_id}, {"_id": 0})
@@ -441,7 +440,7 @@ async def get_transaction(tx_id: str, user=Depends(get_current_user)):
 
 
 @router.post("/transactions")
-async def create_manual_transaction(payload: ManualTxIn, user=Depends(require_roles("admin"))):
+async def create_manual_transaction(payload: ManualTxIn, user=Depends(require_permission("fuel.edit", legacy_roles=("admin",)))):
     tid = _tenant_or_400()
     db = get_db()
     if not payload.reason.strip():
@@ -507,7 +506,7 @@ class MatchPatchIn(BaseModel):
 
 
 @router.patch("/transactions/{tx_id}/match")
-async def manual_match(tx_id: str, payload: MatchPatchIn, user=Depends(require_roles(*MATCH_ROLES))):
+async def manual_match(tx_id: str, payload: MatchPatchIn, user=Depends(require_permission("fuel.reconcile", legacy_roles=MATCH_ROLES))):
     _tenant_or_400()
     db = get_db()
     if not payload.reason.strip():
@@ -557,7 +556,7 @@ class MatchRunIn(BaseModel):
 
 
 @router.post("/match/run")
-async def run_matching(payload: MatchRunIn, user=Depends(require_roles(*MATCH_ROLES))):
+async def run_matching(payload: MatchRunIn, user=Depends(require_permission("fuel.reconcile", legacy_roles=MATCH_ROLES))):
     _tenant_or_400()
     db = get_db()
     q = {"match_status": {"$in": ["unmatched", "matched_review"]}} if payload.only_unmatched \
@@ -579,7 +578,7 @@ async def run_matching(payload: MatchRunIn, user=Depends(require_roles(*MATCH_RO
 
 @router.post("/transactions/{tx_id}/documents")
 async def upload_tx_document(tx_id: str, file: UploadFile = File(...),
-                             user=Depends(get_current_user)):
+                             user=Depends(require_permission("fuel.edit_self", "fuel.edit", "fuel.reconcile", legacy_roles=None))):
     _tenant_or_400()
     db = get_db()
     tx = await db.fuel_transactions.find_one({"id": tx_id}, {"_id": 0, "id": 1, "driver_id": 1})
@@ -595,7 +594,7 @@ async def upload_tx_document(tx_id: str, file: UploadFile = File(...),
 
 
 @router.get("/transactions/{tx_id}/documents/{doc_id}/download")
-async def download_tx_document(tx_id: str, doc_id: str, user=Depends(get_current_user)):
+async def download_tx_document(tx_id: str, doc_id: str, user=Depends(require_permission("fuel.view", "fuel.view_self", legacy_roles=None))):
     _tenant_or_400()
     db = get_db()
     tx = await db.fuel_transactions.find_one({"id": tx_id}, {"_id": 0, "documents": 1, "driver_id": 1})
@@ -613,7 +612,7 @@ class IssueIn(BaseModel):
 
 
 @router.post("/transactions/{tx_id}/report-issue")
-async def report_tx_issue(tx_id: str, payload: IssueIn, user=Depends(get_current_user)):
+async def report_tx_issue(tx_id: str, payload: IssueIn, user=Depends(require_permission("fuel.edit_self", "fuel.edit", "fuel.reconcile", legacy_roles=None))):
     """Signaler une erreur sur une transaction (chauffeur : uniquement les siennes)."""
     _tenant_or_400()
     db = get_db()
@@ -676,13 +675,13 @@ def _serve_document(sub: str, entity_id: str, documents: list, doc_id: str):
 # IMPORTS CSV / XLSX
 # ============================================================
 @router.get("/import-fields")
-async def import_fields(user=Depends(require_roles("admin"))):
+async def import_fields(user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     return INTERNAL_FIELDS
 
 
 @router.post("/imports")
 async def upload_import(file: UploadFile = File(...), provider: str = Form("Autre"),
-                        user=Depends(require_roles("admin"))):
+                        user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     data = await file.read()
@@ -752,7 +751,7 @@ async def _cards_cache(db):
 
 
 @router.post("/imports/{job_id}/mapping")
-async def apply_mapping(job_id: str, payload: MappingIn, user=Depends(require_roles("admin"))):
+async def apply_mapping(job_id: str, payload: MappingIn, user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     tid = _tenant_or_400()
     db = get_db()
     job = await db.fuel_import_jobs.find_one({"id": job_id}, {"_id": 0})
@@ -819,7 +818,7 @@ async def apply_mapping(job_id: str, payload: MappingIn, user=Depends(require_ro
 
 @router.get("/imports/{job_id}/rows")
 async def import_rows(job_id: str, status: Optional[str] = None, page: int = 1, page_size: int = 50,
-                      user=Depends(require_roles("admin"))):
+                      user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     q = {"job_id": job_id}
@@ -883,7 +882,7 @@ async def _row_to_transaction(db, job, row, user, forced_reason=None):
 
 
 @router.post("/imports/{job_id}/confirm")
-async def confirm_import(job_id: str, user=Depends(require_roles("admin"))):
+async def confirm_import(job_id: str, user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     job = await db.fuel_import_jobs.find_one({"id": job_id}, {"_id": 0})
@@ -925,7 +924,7 @@ class ForceRowIn(BaseModel):
 
 @router.post("/imports/{job_id}/rows/{row_id}/force")
 async def force_import_row(job_id: str, row_id: str, payload: ForceRowIn,
-                           user=Depends(require_roles("admin"))):
+                           user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     """Importe une ligne de la file de vérification (doublon probable) avec motif."""
     _tenant_or_400()
     db = get_db()
@@ -949,7 +948,7 @@ async def force_import_row(job_id: str, row_id: str, payload: ForceRowIn,
 
 
 @router.get("/imports")
-async def list_imports(user=Depends(require_roles("admin"))):
+async def list_imports(user=Depends(require_permission("fuel.import", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     return await db.fuel_import_jobs.find({}, {"_id": 0, "columns": 0, "mapping": 0}) \
@@ -960,7 +959,7 @@ async def list_imports(user=Depends(require_roles("admin"))):
 # PARAMÈTRES + VUE D'ENSEMBLE
 # ============================================================
 @router.get("/settings")
-async def fuel_settings(user=Depends(require_roles(*READ_ROLES))):
+async def fuel_settings(user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     return await get_fuel_settings(get_db())
 
@@ -983,7 +982,7 @@ _ANOMALY_SETTING_KEYS = {"tank_enabled": bool, "tank_tolerance_pct": (int, float
 
 
 @router.put("/settings")
-async def update_fuel_settings(payload: FuelSettingsIn, user=Depends(require_roles("admin"))):
+async def update_fuel_settings(payload: FuelSettingsIn, user=Depends(require_permission("fuel.admin", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     changes = payload.model_dump(exclude_unset=True, exclude_none=True)
@@ -1026,7 +1025,7 @@ async def update_fuel_settings(payload: FuelSettingsIn, user=Depends(require_rol
 
 @router.get("/overview")
 async def fuel_overview(date_from: Optional[str] = None, date_to: Optional[str] = None,
-                        user=Depends(require_roles(*READ_ROLES))):
+                        user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     q = _tx_query(date_from, date_to, None, None, None, None, None, None)
@@ -1075,7 +1074,7 @@ async def fuel_overview(date_from: Optional[str] = None, date_to: Optional[str] 
 # WIDGET CARBURANT (tableau de bord principal)
 # ============================================================
 @router.get("/widget")
-async def fuel_widget(user=Depends(require_roles(*READ_ROLES))):
+async def fuel_widget(user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     """Chiffres du mois courant (fuseau du tenant, date comptable sinon transaction),
     comparaison mois précédent, files à traiter et état du décompte mensuel."""
     _tenant_or_400()
@@ -1142,7 +1141,7 @@ async def fuel_widget(user=Depends(require_roles(*READ_ROLES))):
 @router.get("/anomalies")
 async def list_anomalies(status: Optional[str] = None, severity: Optional[str] = None,
                          type: Optional[str] = None,
-                         user=Depends(require_roles(*READ_ROLES))):
+                         user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     q = {}
@@ -1176,7 +1175,7 @@ async def list_anomalies(status: Optional[str] = None, severity: Optional[str] =
 
 
 @router.post("/anomalies/scan")
-async def scan_anomalies(user=Depends(require_roles(*MATCH_ROLES))):
+async def scan_anomalies(user=Depends(require_permission("fuel.reconcile", legacy_roles=MATCH_ROLES))):
     """Analyse toutes les transactions du client avec les seuils configurés."""
     _tenant_or_400()
     db = get_db()
@@ -1195,7 +1194,7 @@ class AnomalyDecisionIn(BaseModel):
 
 @router.post("/anomalies/{anomaly_id}/decide")
 async def decide_anomaly(anomaly_id: str, payload: AnomalyDecisionIn,
-                         user=Depends(require_roles(*MATCH_ROLES))):
+                         user=Depends(require_permission("fuel.reconcile", legacy_roles=MATCH_ROLES))):
     _tenant_or_400()
     db = get_db()
     actions = {"justify": "justified", "correct": "corrected", "reject": "rejected"}
@@ -1225,7 +1224,7 @@ async def decide_anomaly(anomaly_id: str, payload: AnomalyDecisionIn,
 # CAPACITÉS DES VÉHICULES (prérequis règle « volume > réservoir »)
 # ============================================================
 @router.get("/vehicles-capacities")
-async def vehicles_capacities(user=Depends(require_roles("admin"))):
+async def vehicles_capacities(user=Depends(require_permission("vehicles.admin", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     return await db.vehicles.find(
@@ -1240,7 +1239,7 @@ class VehicleCapacityIn(BaseModel):
 
 @router.patch("/vehicles/{vehicle_id}/capacity")
 async def set_vehicle_capacity(vehicle_id: str, payload: VehicleCapacityIn,
-                               user=Depends(require_roles("admin"))):
+                               user=Depends(require_permission("vehicles.admin", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     veh = await db.vehicles.find_one({"id": vehicle_id},
@@ -1265,7 +1264,7 @@ async def set_vehicle_capacity(vehicle_id: str, payload: VehicleCapacityIn,
 # TAUX DE CHANGE (BCE)
 # ============================================================
 @router.get("/fx/status")
-async def fx_status(user=Depends(require_roles(*READ_ROLES))):
+async def fx_status(user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     state = await db.app_state.find_one({"id": FX_STATE_ID}, {"_id": 0}) or {}
@@ -1284,7 +1283,7 @@ async def fx_status(user=Depends(require_roles(*READ_ROLES))):
 
 
 @router.get("/fx/rates")
-async def fx_rates(date: Optional[str] = None, user=Depends(require_roles(*READ_ROLES))):
+async def fx_rates(date: Optional[str] = None, user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     d = (date or _now())[:10]
@@ -1298,7 +1297,7 @@ async def fx_rates(date: Optional[str] = None, user=Depends(require_roles(*READ_
 
 
 @router.post("/fx/sync")
-async def fx_sync(user=Depends(require_roles("admin"))):
+async def fx_sync(user=Depends(require_permission("fuel.admin", legacy_roles=("admin",)))):
     """Synchronisation manuelle BCE + conversion des transactions en attente."""
     _tenant_or_400()
     from app.db import get_raw_db
@@ -1320,7 +1319,7 @@ async def fx_sync(user=Depends(require_roles("admin"))):
 # DONNÉES DE RÉFÉRENCE (selects du frontend)
 # ============================================================
 @router.get("/refs")
-async def fuel_refs(user=Depends(require_roles(*READ_ROLES))):
+async def fuel_refs(user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     vehicles = await db.vehicles.find({}, {"_id": 0, "id": 1, "plate": 1, "model": 1,

@@ -14,8 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.auth import get_current_user
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db
 from app import ble_engine
 
@@ -27,7 +26,7 @@ router = APIRouter(tags=["identification"], dependencies=[Depends(require_module
 
 
 @router.get("/driver/vehicles")
-async def driver_vehicles(user=Depends(get_current_user)):
+async def driver_vehicles(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     """Véhicules que le chauffeur connecté a le DROIT d'utiliser.
 
     Source d'autorité : vehicle_access (ALL/SELECTED/SINGLE) — tenant issu de
@@ -45,7 +44,7 @@ async def driver_vehicles(user=Depends(get_current_user)):
 
 
 @router.get("/driver/current-session")
-async def driver_current_session(user=Depends(get_current_user)):
+async def driver_current_session(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     db = get_db()
     driver_id = await resolve_driver_id_for_user(db, user)
     if not driver_id:
@@ -55,7 +54,7 @@ async def driver_current_session(user=Depends(get_current_user)):
 
 
 @router.get("/driver/fleet-tags")
-async def driver_fleet_tags(user=Depends(get_current_user)):
+async def driver_fleet_tags(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     """Return all BLE tags registered for the tenant, enriched with vehicle info.
 
     Used by the chauffeur PWA to display the list of expected beacons (with a
@@ -97,7 +96,7 @@ async def driver_fleet_tags(user=Depends(get_current_user)):
 
 
 @router.post("/driver/manual-mode")
-async def driver_manual_mode(payload: dict, user=Depends(get_current_user)):
+async def driver_manual_mode(payload: dict, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     mode = payload.get("mode")
     if mode not in ("professional", "personal"):
         raise HTTPException(400, "mode doit être 'professional' ou 'personal'")
@@ -119,7 +118,7 @@ class ClaimIn(BaseModel):
 
 
 @router.post("/driver/claim")
-async def driver_claim(payload: ClaimIn, user=Depends(get_current_user)):
+async def driver_claim(payload: ClaimIn, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """« Je conduis » — confirmation explicite du conducteur (source APP).
 
     Atomique côté serveur : un seul conducteur actif par véhicule ; toute
@@ -143,7 +142,7 @@ async def driver_claim(payload: ClaimIn, user=Depends(get_current_user)):
 
 
 @router.post("/driver/stop")
-async def driver_stop(user=Depends(get_current_user)):
+async def driver_stop(user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """« Je m'arrête » — clôture volontaire de la session active du chauffeur.
     Idempotent : sans session active → réponse propre (pas d'erreur 500).
     Un chauffeur ne peut clôturer que SA session, dans SON tenant."""
@@ -156,7 +155,7 @@ async def driver_stop(user=Depends(get_current_user)):
 
 # ---------- Phase 2 — Bascule Privé / Professionnel (backend autoritaire) ----------
 @router.get("/driver/private-mode")
-async def driver_private_mode_get(user=Depends(get_current_user)):
+async def driver_private_mode_get(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     """État courant Privé/Professionnel du véhicule de la session du chauffeur.
     Retour : {state, allowed, reason, vehicle_id, tracker_id, last_transition_at, capability}.
     Aucune position exposée. Backend autoritaire (gate centrale fail-closed)."""
@@ -240,7 +239,7 @@ class PrivateModeIn(BaseModel):
 
 
 @router.post("/driver/private-mode")
-async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(get_current_user)):
+async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """Intention métier de bascule : {"mode": "PRIVATE"|"BUSINESS"}.
     Le backend résout véhicule/tracker/capability, applique la commande (GATED) et confirme.
     Aucun tracker_id/raw command/tenant libre accepté depuis le frontend."""
@@ -274,7 +273,7 @@ async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(get_curre
 
 
 @router.get("/driver/my-vehicle")
-async def driver_my_vehicle(user=Depends(get_current_user)):
+async def driver_my_vehicle(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     """Véhicule actuel (session en cours) ou dernier véhicule utilisé.
     Données réelles uniquement — aucun champ inventé (pas de SoC/carburant)."""
     db = get_db()
@@ -303,7 +302,7 @@ class SosIn(BaseModel):
 
 
 @router.post("/driver/sos")
-async def driver_sos(payload: SosIn, user=Depends(get_current_user)):
+async def driver_sos(payload: SosIn, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """Déclenche une alerte SOS. Persiste l'alerte + notifie les gestionnaires/admins.
 
     Contexte capturé (si disponible) : chauffeur, véhicule actif, horodatage. La POSITION
@@ -368,7 +367,7 @@ async def driver_sos(payload: SosIn, user=Depends(get_current_user)):
 
 
 @router.get("/driver/my-vehicles")
-async def driver_my_vehicles(user=Depends(get_current_user)):
+async def driver_my_vehicles(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     """Véhicules AFFECTÉS au chauffeur (sélection manuelle, mode sans BLE).
     Ne retourne JAMAIS toute la flotte — uniquement les véhicules assignés au chauffeur,
     dans son tenant. Champs non sensibles seulement (aucune position)."""
@@ -398,7 +397,7 @@ async def driver_my_vehicles(user=Depends(get_current_user)):
 @router.get("/driver/km-summary")
 async def driver_km_summary(
     period: str = Query("today", regex="^(today|month)$"),
-    user=Depends(get_current_user),
+    user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",))),
 ):
     """Km Pro / Km Privé du chauffeur pour SON véhicule actif, sur la période demandée.
 
@@ -449,7 +448,7 @@ async def driver_km_summary(
 @router.get("/driver/vehicle/odometer")
 async def driver_vehicle_odometer(
     vehicle_id: Optional[str] = Query(default=None),
-    user=Depends(get_current_user),
+    user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",))),
 ):
     """Lecture READ-ONLY de l'odomètre matériel du véhicule (audit odomètre).
 
@@ -496,7 +495,7 @@ async def driver_vehicle_odometer(
 
 
 @router.get("/driver/my-profile")
-async def driver_my_profile(user=Depends(get_current_user)):
+async def driver_my_profile(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
     """Profil mobile : compte, tag BLE associé, dernière détection. Jamais de mot de passe."""
     db = get_db()
     driver_id = await resolve_driver_id_for_user(db, user)
@@ -526,7 +525,7 @@ class PushTokenIn(BaseModel):
 
 
 @router.post("/driver/push-token")
-async def register_push_token(payload: PushTokenIn, user=Depends(get_current_user)):
+async def register_push_token(payload: PushTokenIn, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """Register or refresh the Expo push token for the authenticated user.
 
     Behaviour:
@@ -565,7 +564,7 @@ async def register_push_token(payload: PushTokenIn, user=Depends(get_current_use
 
 
 @router.delete("/driver/push-token")
-async def delete_push_token(token: str = Query(...), user=Depends(get_current_user)):
+async def delete_push_token(token: str = Query(...), user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """Deactivate a push token (soft-delete). Used on explicit user logout."""
     db = get_db()
     res = await db.push_tokens.update_one(

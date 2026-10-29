@@ -4,12 +4,11 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Users, Eye, Gauge } from "lucide-react";
 
 export default function AdministrationLayout() {
-  const { user } = useAuth();
-  const isAdmin = ["admin", "superadmin"].includes(user?.role);
+  const { can } = useAuth();
   const tabs = [
-    ...(isAdmin ? [{ to: "/livre/administration/utilisateurs", label: "Utilisateurs", icon: Users, testId: "subtab-team-users" }] : []),
-    ...(isAdmin ? [{ to: "/livre/administration/apercus", label: "Aperçus", icon: Eye, testId: "subtab-team-impersonation" }] : []),
-    ...(isAdmin ? [{ to: "/livre/administration/kilometrage", label: "Kilométrage", icon: Gauge, testId: "subtab-odometer" }] : []),
+    ...(can("users.view") ? [{ to: "/livre/administration/utilisateurs", label: "Utilisateurs", icon: Users, testId: "subtab-team-users" }] : []),
+    ...(can("users.impersonate") ? [{ to: "/livre/administration/apercus", label: "Aperçus", icon: Eye, testId: "subtab-team-impersonation" }] : []),
+    ...(can("vehicles.admin") ? [{ to: "/livre/administration/kilometrage", label: "Kilométrage", icon: Gauge, testId: "subtab-odometer" }] : []),
   ];
   return (
     <div data-testid="administration-page" className="space-y-5">

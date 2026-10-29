@@ -23,37 +23,44 @@ import NotificationsBell from "@/components/layout/NotificationsBell";
 const ROLE_LABEL = {
   admin: "Administrateur",
   manager: "Gestionnaire flotte",
+  office: "Office (administratif)",
   driver: "Chauffeur",
   lecture_seule: "Lecture seule",
   superadmin: "Super Admin Logitrak",
 };
 
-// Horizontal top-nav tabs. Each item can be restricted by role. When null/undefined
-// the item is visible to everyone.
+// Horizontal top-nav tabs. `roles` = liste blanche legacy (vues « self » du chauffeur),
+// `module` = module client requis, `perms` = l'une des permissions requise.
+// Sans restriction, l'onglet est visible par tous.
 const TABS = [
   { to: "/livre/dashboard",       label: "Vue d'ensemble",  icon: LayoutDashboard, testId: "nav-dashboard" },
-  { to: "/livre/history/pro",     label: "Journal & trajets", icon: Briefcase,     testId: "nav-history",       roles: ["admin", "manager", "lecture_seule"],
-    matchPrefix: "/livre/history" },
-  { to: "/livre/conducteurs/vue-densemble", label: "Conducteurs", icon: Users,     testId: "nav-drivers",       roles: ["admin", "manager"],
-    matchPrefix: "/livre/conducteurs" },
-  { to: "/livre/energie/apercu",  label: "Énergie & carburant", icon: Fuel,        testId: "nav-energy",        roles: ["admin", "manager", "lecture_seule"],
-    matchPrefix: "/livre/energie" },
-  { to: "/livre/energie/approvisionnements/mes-transactions", label: "Mes transactions", icon: Fuel, testId: "nav-my-fuel", roles: ["driver"],
-    matchPrefix: "/livre/energie" },
-  { to: "/livre/amendes",         label: "Amendes",         icon: ShieldAlert,     testId: "nav-fines",         roles: ["admin", "manager", "lecture_seule"],
-    matchPrefix: "/livre/amendes" },
-  { to: "/livre/mes-amendes",     label: "Mes amendes",     icon: ShieldAlert,     testId: "nav-my-fines",      roles: ["driver"] },
-  { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console", roles: ["driver"] },
-  { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",       roles: ["admin", "manager", "lecture_seule"] },
-  { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration", roles: ["admin"] },
-  { to: "/livre/settings",        label: "Paramètres",      icon: Settings,        testId: TEST_IDS.layout.navSettings, roles: ["admin", "manager"] },
+  { to: "/livre/history/pro",     label: "Journal & trajets", icon: Briefcase,     testId: "nav-history",
+    module: "journal", perms: ["journal.view"], matchPrefix: "/livre/history" },
+  { to: "/livre/conducteurs/vue-densemble", label: "Conducteurs", icon: Users,     testId: "nav-drivers",
+    module: "drivers", perms: ["drivers.view"], matchPrefix: "/livre/conducteurs" },
+  { to: "/livre/energie/apercu",  label: "Énergie & carburant", icon: Fuel,        testId: "nav-energy",
+    perms: ["energy.view", "fuel.view"], matchPrefix: "/livre/energie" },
+  { to: "/livre/energie/approvisionnements/mes-transactions", label: "Mes transactions", icon: Fuel, testId: "nav-my-fuel",
+    roles: ["driver"], module: "fuel", perms: ["fuel.view_self"], matchPrefix: "/livre/energie" },
+  { to: "/livre/amendes",         label: "Amendes",         icon: ShieldAlert,     testId: "nav-fines",
+    module: "fines", perms: ["fines.view"], matchPrefix: "/livre/amendes" },
+  { to: "/livre/mes-amendes",     label: "Mes amendes",     icon: ShieldAlert,     testId: "nav-my-fines",
+    roles: ["driver"], module: "fines", perms: ["fines.view_self"] },
+  { to: "/driver",                label: "Console PWA",     icon: Smartphone,      testId: "nav-driver-console",
+    roles: ["driver"], module: "drivers", perms: ["identification.self"] },
+  { to: "/livre/reports/tax-swiss", label: "Rapports",      icon: Receipt,         testId: "nav-reports",
+    module: "reports", perms: ["reports.view"] },
+  { to: "/livre/administration",  label: "Administration",  icon: UserCog,         testId: "nav-administration",
+    perms: ["users.view", "users.impersonate", "vehicles.admin"] },
+  { to: "/livre/settings",        label: "Paramètres",      icon: Settings,        testId: TEST_IDS.layout.navSettings,
+    perms: ["settings.view"] },
   { to: "/admin/clients",         label: "Clients",         icon: Building2,       testId: "nav-admin-tenants", roles: ["superadmin"] },
   { to: "/admin/utilisateurs",    label: "Utilisateurs",    icon: Users,           testId: "nav-admin-users",   roles: ["superadmin"] },
   { to: "/admin/audit",           label: "Audit",           icon: ScrollText,      testId: "nav-admin-audit",   roles: ["superadmin"] },
 ];
 
 export default function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout, can, hasModule } = useAuth();
   const navigate = useNavigate();
   const initials = (user?.name || user?.email || "?")
     .split(" ").map((s) => s[0]).slice(0, 2).join("").toUpperCase();
@@ -73,12 +80,15 @@ export default function AppLayout() {
   const saTenant = isSuperAdmin ? localStorage.getItem("sa_tenant_id") : null;
 
   const visibleTabs = TABS.filter((t) => {
+    if (t.module && !hasModule(t.module)) return false;
     if (isSuperAdmin) {
       if (t.roles?.includes("superadmin")) return true;
       // Onglets métier visibles seulement quand un client est sélectionné
       return !!saTenant && (!t.roles || t.roles.includes("admin"));
     }
-    return !t.roles || t.roles.includes(user?.role);
+    if (t.roles && !t.roles.includes(user?.role)) return false;
+    if (t.perms && !can(...t.perms)) return false;
+    return true;
   });
 
   return (
@@ -107,7 +117,7 @@ export default function AppLayout() {
           <div className="flex items-center gap-3">
             {isSuperAdmin && <TenantSwitcher />}
             <NotificationsBell />
-            {(user?.role === "admin" || user?.role === "manager") && <ConflictInbox />}
+            {!isSuperAdmin && can("trips.classify") && <ConflictInbox />}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button data-testid={TEST_IDS.layout.userMenu}

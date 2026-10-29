@@ -12,8 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
-from app.auth import require_roles
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db, get_raw_db
 from app.emailer import is_smtp_configured
 from app.tenant_context import get_effective_tenant_id
@@ -58,7 +57,7 @@ async def _config_payload(db, tid: str) -> dict:
 
 
 @router.get("/reports/weekly-driver/config")
-async def get_weekly_report_config(user=Depends(require_roles("admin", "manager"))):
+async def get_weekly_report_config(user=Depends(require_permission("reports.admin", legacy_roles=("admin", "manager")))):
     tid = _tenant_or_400()
     return await _config_payload(get_db(), tid)
 
@@ -70,7 +69,7 @@ class WeeklyReportConfigIn(BaseModel):
 
 @router.put("/reports/weekly-driver/config")
 async def put_weekly_report_config(payload: WeeklyReportConfigIn,
-                                   user=Depends(require_roles("admin", "manager"))):
+                                   user=Depends(require_permission("reports.admin", legacy_roles=("admin", "manager")))):
     tid = _tenant_or_400()
     db = get_db()
     old = await get_report_config(db)
@@ -100,7 +99,7 @@ async def put_weekly_report_config(payload: WeeklyReportConfigIn,
 async def download_weekly_report(
     week: str = Query(..., description="Date du lundi de la semaine (YYYY-MM-DD)"),
     format: str = Query("pdf", pattern="^(pdf|xlsx)$"),
-    user=Depends(require_roles("admin", "manager")),
+    user=Depends(require_permission("reports.admin", legacy_roles=("admin", "manager"))),
 ):
     tid = _tenant_or_400()
     try:

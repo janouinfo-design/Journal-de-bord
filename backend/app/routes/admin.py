@@ -12,13 +12,13 @@ from pydantic import BaseModel, EmailStr
 
 from app.audit import log_audit
 from app.auth import get_current_user, hash_password
+from app.access_control import (MODES, TENANT_ROLES, enabled_modules, resolve_mode,
+                                normalize_modules, modules_catalog)
 from app.db import get_raw_db
 from app.tenancy import fetch_navixy_identity, BUSINESS_COLLECTIONS
 from app.tenant_context import refresh_tenant_cache
 
 router = APIRouter(prefix="/admin", tags=["superadmin"])
-
-TENANT_ROLES = ("admin", "manager", "driver", "lecture_seule")
 
 
 async def require_superadmin(user=Depends(get_current_user)):
@@ -40,6 +40,11 @@ def _tenant_out(t: dict) -> dict:
     # Statut non sensible (jamais la valeur) : credential chiffré ou clair legacy.
     h = t.get("navixy_hash")
     out["navixy_credential_encrypted"] = bool(h and str(h).startswith("enc::"))
+    # Lot 2 — modules & mode de contrôle (valeurs stockées + résolution effective)
+    out["modules_enabled"] = t.get("modules_enabled")
+    out["modules_effective"] = enabled_modules(t)
+    out["access_control_mode"] = t.get("access_control_mode")
+    out["access_control_mode_effective"] = resolve_mode(t)
     return out
 
 
@@ -55,6 +60,41 @@ class TenantUpdate(BaseModel):
     navixy_hash: Optional[str] = None
     navixy_api_url: Optional[str] = None
     status: Optional[str] = None  # active | suspended
+    access_control_mode: Optional[str] = None  # legacy | shadow | enforce
+
+
+class TenantModulesIn(BaseModel):
+    modules_enabled: dict[str, bool]
+
+
+@router.get("/modules/catalog")
+async def modules_catalog_endpoint(current=Depends(require_superadmin)):
+    return {"modules": modules_catalog(), "modes": list(MODES)}
+
+
+@router.put("/tenants/{tenant_id}/modules")
+async def update_tenant_modules(tenant_id: str, payload: TenantModulesIn, current=Depends(require_superadmin)):
+    """Active / coupe les modules d'un client (dépendances forcées, audit before/after)."""
+    db = get_raw_db()
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(404, "Client introuvable")
+    unknown = sorted(set(payload.modules_enabled) - set(m["code"] for m in modules_catalog()))
+    if unknown:
+        raise HTTPException(400, {"code": "unknown_module", "modules": unknown, "msg": "Module inconnu."})
+    before = enabled_modules(tenant)
+    new_flags = normalize_modules({**(tenant.get("modules_enabled") or
+                                     {m["code"]: m["legacy_default"] for m in modules_catalog()}),
+                                  **payload.modules_enabled})
+    await db.tenants.update_one({"id": tenant_id}, {"$set": {"modules_enabled": new_flags}})
+    await refresh_tenant_cache(db)
+    fresh = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    after = enabled_modules(fresh)
+    await log_audit("tenant.modules_update", current,
+                    {"before": before, "after": after,
+                     "enabled": sorted(set(after) - set(before)), "disabled": sorted(set(before) - set(after))},
+                    tenant_id=tenant_id)
+    return _tenant_out(fresh)
 
 
 @router.get("/tenants")
@@ -125,6 +165,10 @@ async def update_tenant(tenant_id: str, payload: TenantUpdate, current=Depends(r
         if tenant_id == "default" and payload.status == "suspended":
             raise HTTPException(400, "Le tenant Logitrak par défaut ne peut pas être suspendu")
         updates["status"] = payload.status
+    if payload.access_control_mode is not None:
+        if payload.access_control_mode not in MODES:
+            raise HTTPException(400, "Mode invalide (legacy | shadow | enforce)")
+        updates["access_control_mode"] = payload.access_control_mode
     if payload.navixy_api_url is not None:
         updates["navixy_api_url"] = payload.navixy_api_url.rstrip("/")
     if payload.navixy_hash is not None:
@@ -147,10 +191,12 @@ async def update_tenant(tenant_id: str, payload: TenantUpdate, current=Depends(r
         raise HTTPException(400, "Aucun champ à mettre à jour")
     await db.tenants.update_one({"id": tenant_id}, {"$set": updates})
     await refresh_tenant_cache(db)
-    await log_audit("tenant.update", current,
-                    {"fields": [k for k in updates if k != "navixy_hash"] +
-                     (["navixy_hash"] if "navixy_hash" in updates else [])},
-                    tenant_id=tenant_id)
+    audit_details = {"fields": [k for k in updates if k != "navixy_hash"] +
+                     (["navixy_hash"] if "navixy_hash" in updates else [])}
+    if "access_control_mode" in updates:
+        audit_details["before"] = {"access_control_mode": resolve_mode(tenant)}
+        audit_details["after"] = {"access_control_mode": updates["access_control_mode"]}
+    await log_audit("tenant.update", current, audit_details, tenant_id=tenant_id)
     fresh = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
     return _tenant_out(fresh)
 

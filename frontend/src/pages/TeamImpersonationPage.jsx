@@ -16,7 +16,7 @@ const STATUS = {
   denied:  { label: "Refusé",     cls: "bg-rose-100 text-rose-700 border-rose-200" },
   pending: { label: "En attente", cls: "bg-sky-100 text-sky-700 border-sky-200" },
 };
-const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", driver: "Chauffeur", lecture_seule: "Lecture seule" };
+const ROLE_LABEL = { admin: "Admin", manager: "Gestionnaire", office: "Office (administratif)", driver: "Chauffeur", lecture_seule: "Lecture seule" };
 const SOURCE_LABEL = {
   super_admin_impersonation: "Super Admin",
   admin_client_impersonation: "Admin Client",

@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.auth import require_roles
+from app.access_control import require_permission
 from app.db import get_db
 from app import odometer_calibration as oc
 
@@ -25,7 +25,7 @@ def _tenant_of(user) -> str:
 
 
 @router.get("/vehicles/{vehicle_id}/odometer")
-async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_roles("admin"))):
+async def get_vehicle_odometer_state(vehicle_id: str, user=Depends(require_permission("vehicles.admin", legacy_roles=("admin",), module="journal"))):
     """État odomètre télématique d'un véhicule + historique de calibration (READ-ONLY).
 
     Retour : {vehicle, telematics_km, source, last_update, capability, can_calibrate,
@@ -105,7 +105,7 @@ class CalibrateIn(BaseModel):
 
 @router.post("/vehicles/{vehicle_id}/odometer/calibrate")
 async def calibrate_vehicle_odometer_route(
-    vehicle_id: str, payload: CalibrateIn, user=Depends(require_roles("admin"))):
+    vehicle_id: str, payload: CalibrateIn, user=Depends(require_permission("vehicles.admin", legacy_roles=("admin",), module="journal"))):
     """Recalibre la baseline AVL16 du véhicule depuis le km tableau de bord.
 
     - RBAC admin/superadmin (driver/manager -> 403 via require_roles).

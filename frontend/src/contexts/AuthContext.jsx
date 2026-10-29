@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { api, formatApiErrorDetail, IMP_TOKEN_KEY } from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -45,11 +45,30 @@ function exchangeImpersonationToken() {
   return _impExchangePromise;
 }
 
+const EMPTY_ACCESS = { tenant: null, modules: [], permissions: [], mode: "legacy" };
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);     // user object | null
+  const [access, setAccess] = useState(EMPTY_ACCESS); // modules / permissions effectives (/auth/me)
   const [loading, setLoading] = useState(true);
   const [impersonationEnded, setImpersonationEnded] = useState(false);
   const [impersonationError, setImpersonationError] = useState(null);
+
+  const applyMe = useCallback((data) => {
+    setUser(data.user);
+    setAccess({
+      tenant: data.tenant || null,
+      modules: data.modules_enabled || [],
+      permissions: data.permissions_effective || [],
+      mode: data.access_control_mode || "legacy",
+    });
+  }, []);
+
+  const refreshMe = useCallback(async () => {
+    const { data } = await api.get("/auth/me");
+    applyMe(data);
+    return data;
+  }, [applyMe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,32 +80,31 @@ export function AuthProvider({ children }) {
       } else if (NAVIXY_SSO_KEY) {
         // SSO Navixy : si l'iframe a été chargée avec ?session_key=..., connexion auto
         try {
-          const { data } = await api.post("/auth/navixy-sso", { session_key: NAVIXY_SSO_KEY });
-          if (!cancelled) {
-            setUser(data.user);
-            setLoading(false);
-          }
-          return;
+          await api.post("/auth/navixy-sso", { session_key: NAVIXY_SSO_KEY });
         } catch (e) {
           console.debug("[AuthContext] SSO Navixy échoué, fallback login classique:", e);
         }
       }
       try {
         const { data } = await api.get("/auth/me");
-        if (!cancelled) setUser(data.user);
+        if (!cancelled) applyMe(data);
       } catch (e) {
-        if (!cancelled) setUser(null);
+        if (!cancelled) { setUser(null); setAccess(EMPTY_ACCESS); }
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [applyMe]);
 
   async function login(email, password) {
     try {
       const { data } = await api.post("/auth/login", { email, password });
-      setUser(data.user);
+      try {
+        await refreshMe();
+      } catch (e) {
+        setUser(data.user);
+      }
       return { ok: true };
     } catch (e) {
       return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message };
@@ -115,11 +133,22 @@ export function AuthProvider({ children }) {
       console.debug("[AuthContext] logout request failed (will still clear local state):", e);
     }
     setUser(null);
+    setAccess(EMPTY_ACCESS);
   }
+
+  // can(...perms) : vrai si l'utilisateur détient l'UNE des permissions (superadmin : toujours).
+  // hasModule(code) : module activé pour le client courant.
+  const helpers = useMemo(() => ({
+    can: (...perms) => user?.role === "superadmin" || perms.length === 0
+      || perms.some((p) => access.permissions.includes(p)),
+    hasModule: (code) => !code || access.modules.includes(code),
+  }), [user?.role, access]);
 
   return (
     <AuthContext.Provider value={{
-      user, loading, login, logout,
+      user, loading, login, logout, refreshMe,
+      tenant: access.tenant, modules: access.modules, permissions: access.permissions,
+      accessMode: access.mode, ...helpers,
       endImpersonation, impersonationEnded, impersonationError,
       clearImpersonationError: () => setImpersonationError(null),
     }}>

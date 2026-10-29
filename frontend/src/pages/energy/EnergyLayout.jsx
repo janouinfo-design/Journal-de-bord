@@ -4,17 +4,17 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Gauge, Zap, Fuel, AlertTriangle, Scale } from "lucide-react";
 
 export default function EnergyLayout() {
-  const { user } = useAuth();
+  const { user, can, hasModule } = useAuth();
   const isDriver = user?.role === "driver";
 
   const tabs = isDriver ? [] : [
-    { to: "/livre/energie/apercu", label: "Vue d'ensemble", icon: Gauge, testId: "subtab-energy-overview" },
-    { to: "/livre/energie/consommations", label: "Consommations", icon: Zap, testId: "subtab-energy-consumption" },
+    { to: "/livre/energie/apercu", label: "Vue d'ensemble", icon: Gauge, testId: "subtab-energy-overview", module: "energy", perms: ["energy.view"] },
+    { to: "/livre/energie/consommations", label: "Consommations", icon: Zap, testId: "subtab-energy-consumption", module: "energy", perms: ["energy.view"] },
     { to: "/livre/energie/approvisionnements", label: "Approvisionnements", icon: Fuel,
-      testId: "subtab-energy-supply", matchPrefix: "/livre/energie/approvisionnements" },
-    { to: "/livre/energie/rapprochement", label: "Rapprochement", icon: Scale, testId: "subtab-energy-reconciliation" },
-    { to: "/livre/energie/anomalies", label: "Anomalies", icon: AlertTriangle, testId: "subtab-energy-anomalies" },
-  ];
+      testId: "subtab-energy-supply", matchPrefix: "/livre/energie/approvisionnements", module: "fuel", perms: ["fuel.view"] },
+    { to: "/livre/energie/rapprochement", label: "Rapprochement", icon: Scale, testId: "subtab-energy-reconciliation", module: "energy", perms: ["energy.view"] },
+    { to: "/livre/energie/anomalies", label: "Anomalies", icon: AlertTriangle, testId: "subtab-energy-anomalies", module: "fuel", perms: ["fuel.view"] },
+  ].filter((t) => hasModule(t.module) && can(...t.perms));
 
   return (
     <div data-testid="energy-page" className="space-y-5">

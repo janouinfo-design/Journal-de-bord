@@ -5,8 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import get_current_user, require_roles
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db
 from app import ble_engine
 
@@ -17,19 +16,19 @@ router = APIRouter(tags=["ble"], dependencies=[Depends(require_module("drivers")
 
 # ---------- Tags ----------
 @router.get("/ble/tags")
-async def ble_tags_list(user=Depends(require_roles("admin", "manager"))):
+async def ble_tags_list(user=Depends(require_permission("identification.view", legacy_roles=("admin", "manager")))):
     return await ble_engine.list_tags(get_db())
 
 
 @router.post("/ble/tags")
-async def ble_tags_upsert(payload: dict, user=Depends(require_roles("admin"))):
+async def ble_tags_upsert(payload: dict, user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     if not payload.get("vehicle_id") or not payload.get("identifier"):
         raise HTTPException(400, "vehicle_id et identifier sont requis")
     return await ble_engine.upsert_tag(get_db(), payload)
 
 
 @router.delete("/ble/tags/{tag_id}")
-async def ble_tags_delete(tag_id: str, user=Depends(require_roles("admin"))):
+async def ble_tags_delete(tag_id: str, user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     ok = await ble_engine.delete_tag(get_db(), tag_id)
     if not ok:
         raise HTTPException(404, "Tag introuvable")
@@ -46,7 +45,7 @@ from app.ble_engine import normalize_identifier as _normalize
 
 
 @router.get("/ble/aliases")
-async def ble_aliases_list(user=Depends(require_roles("admin", "manager"))):
+async def ble_aliases_list(user=Depends(require_permission("identification.view", legacy_roles=("admin", "manager")))):
     db = get_db()
     rows = await db.ble_aliases.find(
         {"tenant_id": "default"}, {"_id": 0},
@@ -76,7 +75,7 @@ async def ble_aliases_list(user=Depends(require_roles("admin", "manager"))):
 
 
 @router.post("/ble/aliases")
-async def ble_aliases_create(payload: dict, user=Depends(require_roles("admin"))):
+async def ble_aliases_create(payload: dict, user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Pair an opaque alias_id (Chrome Web Bluetooth token) to an existing tag.
 
     Future detections matching `alias_id` will be resolved to the same vehicle
@@ -127,7 +126,7 @@ async def ble_aliases_create(payload: dict, user=Depends(require_roles("admin"))
 
 
 @router.delete("/ble/aliases/{alias_db_id}")
-async def ble_aliases_delete(alias_db_id: str, user=Depends(require_roles("admin"))):
+async def ble_aliases_delete(alias_db_id: str, user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     db = get_db()
     r = await db.ble_aliases.delete_one(
         {"id": alias_db_id, "tenant_id": "default"},
@@ -143,7 +142,7 @@ async def ble_aliases_delete(alias_db_id: str, user=Depends(require_roles("admin
 
 # ---------- Detections & simulation ----------
 @router.post("/ble/detections")
-async def ble_ingest(payload: dict, user=Depends(get_current_user)):
+async def ble_ingest(payload: dict, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
     """Ingestion endpoint for the chauffeur PWA / native app.
 
     Payload accepts either a single detection or `{"detections": [...]}`.
@@ -166,7 +165,7 @@ async def ble_ingest(payload: dict, user=Depends(get_current_user)):
 
 
 @router.post("/ble/simulate")
-async def ble_simulate(payload: dict, user=Depends(require_roles("admin"))):
+async def ble_simulate(payload: dict, user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Admin tool: simulate a detection for a given driver."""
     db = get_db()
     driver_id = payload.get("driver_id") or await resolve_driver_id_for_user(db, user)
@@ -183,7 +182,7 @@ async def ble_sessions(
     start: Optional[str] = None, end: Optional[str] = None,
     source: Optional[str] = None, driver_id: Optional[str] = None,
     vehicle_id: Optional[str] = None,
-    user=Depends(require_roles("admin", "manager")),
+    user=Depends(require_permission("identification.view", legacy_roles=("admin", "manager"))),
 ):
     return await ble_engine.list_sessions(
         get_db(), limit=limit, status=status, start=start, end=end,
@@ -192,7 +191,7 @@ async def ble_sessions(
 
 @router.put("/ble/sessions/{session_id}")
 async def ble_session_amend(session_id: str, patch: dict,
-                            user=Depends(require_roles("admin", "manager"))):
+                            user=Depends(require_permission("identification.edit", legacy_roles=("admin", "manager")))):
     try:
         return await ble_engine.amend_session(get_db(), session_id, patch, actor=user.get("email", "?"))
     except LookupError as e:
@@ -201,7 +200,7 @@ async def ble_session_amend(session_id: str, patch: dict,
 
 @router.delete("/ble/sessions/{session_id}")
 async def ble_session_delete(session_id: str,
-                             user=Depends(require_roles("admin"))):
+                             user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Hard-delete a session (admin only). Use when an obviously bogus or
     duplicate session must disappear from the historical view."""
     db = get_db()
@@ -229,7 +228,7 @@ def _is_test_identifier(canon: str) -> bool:
 
 @router.post("/ble/cleanup-test-data")
 async def ble_cleanup_test_data(payload: dict = None,
-                                user=Depends(require_roles("admin"))):
+                                user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Bulk-delete test tags + sessions generated by automated tests.
 
     Heuristic: any tag whose canonical identifier contains TEST / CONFLICTAG /
@@ -293,7 +292,7 @@ async def ble_cleanup_test_data(payload: dict = None,
 
 @router.post("/ble/sessions/clear-all")
 async def ble_sessions_clear_all(payload: dict = None,
-                                 user=Depends(require_roles("admin"))):
+                                 user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Hard-delete ALL BLE sessions for the tenant (admin only).
 
     Use to clean up demo / accumulated noise in the Identification table.
@@ -316,7 +315,7 @@ async def ble_sessions_clear_all(payload: dict = None,
 
 
 @router.post("/ble/sessions/seed-demo")
-async def ble_sessions_seed_demo(user=Depends(require_roles("admin"))):
+async def ble_sessions_seed_demo(user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Create 5 demo BLE sessions, each with a different driver + vehicle.
 
     Useful after a clear-all to repopulate the Identification table with
@@ -379,7 +378,7 @@ async def ble_sessions_seed_demo(user=Depends(require_roles("admin"))):
 
 @router.post("/ble/sessions/{session_id}/resolve")
 async def ble_session_resolve(session_id: str, payload: dict,
-                              user=Depends(require_roles("admin"))):
+                              user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Admin manually resolves a multi-driver BLE conflict.
 
     Body: `{winner_driver_id: <driver-id>, source?: 'page'|'header_inbox'}`.
@@ -402,7 +401,7 @@ async def ble_session_resolve(session_id: str, payload: dict,
 # ---------- Beacons chauffeurs (Navixy) ----------
 @router.post("/ble/beacons/poll-now")
 async def ble_beacons_poll_now(window_min: Optional[int] = None,
-                               user=Depends(require_roles("admin"))):
+                               user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Interroge immédiatement l'API Beacon Navixy pour le tenant courant.
     Sert de preuve terrain : tag chauffeur → traceur → Navixy → backend."""
     from app.db import get_raw_db
@@ -420,19 +419,19 @@ async def ble_beacons_poll_now(window_min: Optional[int] = None,
 # ---------- Dashboard & settings ----------
 @router.get("/ble/dashboard")
 async def ble_dashboard(start: Optional[str] = None, end: Optional[str] = None,
-                        user=Depends(require_roles("admin", "manager"))):
+                        user=Depends(require_permission("identification.view", legacy_roles=("admin", "manager")))):
     return await ble_engine.dashboard_kpis(get_db(), start=start, end=end)
 
 
 @router.get("/ble/settings")
-async def ble_settings_get(user=Depends(require_roles("admin", "manager"))):
+async def ble_settings_get(user=Depends(require_permission("identification.view", legacy_roles=("admin", "manager")))):
     return await ble_engine.get_ble_settings(get_db())
 
 
 # ---------- Debug ----------
 @router.post("/ble/debug/clear-detections")
 async def ble_debug_clear_detections(payload: dict = None,
-                                     user=Depends(require_roles("admin"))):
+                                     user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Delete raw BLE detections (admin only).
 
     Body:
@@ -484,7 +483,7 @@ async def ble_debug_clear_detections(payload: dict = None,
 
 @router.get("/ble/debug/recent-detections")
 async def ble_debug_recent(limit: int = 100,
-                           user=Depends(require_roles("admin"))):
+                           user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     """Recent raw BLE detections — for live debugging of beacon discovery."""
     db = get_db()
     rows = await db.ble_detections.find(
@@ -529,7 +528,7 @@ async def ble_debug_recent(limit: int = 100,
 
 
 @router.put("/ble/settings")
-async def ble_settings_put(payload: dict, user=Depends(require_roles("admin"))):
+async def ble_settings_put(payload: dict, user=Depends(require_permission("drivers.admin", legacy_roles=("admin",)))):
     db = get_db()
     allowed = {k for k in ble_engine.DEFAULT_SETTINGS}
     update = {k: payload[k] for k in payload if k in allowed}

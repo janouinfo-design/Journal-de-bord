@@ -76,12 +76,26 @@ def test_catalog_coherence():
 def test_parity_legacy_vs_templates(role):
     mismatches = []
     for entry in ac.REGISTRY:
+        if role in entry["parity_exempt"]:
+            continue
         legacy_ok = entry["legacy_roles"] is None or role in entry["legacy_roles"]
+        # lecture_seule : toute écriture est bloquée globalement en legacy (get_current_user)
+        if role == "lecture_seule" and all(p in ac.WRITE_PERMISSIONS for p in entry["perms"]):
+            legacy_ok = False
         eff = ac.effective_permissions({"role": role}, None)
         perm_ok = any(p in eff for p in entry["perms"])
         if legacy_ok != perm_ok:
             mismatches.append((entry["perms"], entry["legacy_roles"], legacy_ok, perm_ok))
     assert not mismatches, mismatches
+
+
+def test_parity_exemptions_are_documented():
+    """Seule exception assumée : lecture_seule sur la console chauffeur GET /driver/* (jamais utilisée par ce rôle)."""
+    exempt = [e for e in ac.REGISTRY if e["parity_exempt"]]
+    assert exempt, "aucune exemption déclarée"
+    assert all(e["parity_exempt"] == ("lecture_seule",) for e in exempt)
+    assert all(set(e["perms"]) == {"identification.self", "identification.view"} for e in exempt)
+    assert len(exempt) == 9
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +153,8 @@ def test_me_enriched_legacy_mode():
         body = r.json()
         assert body["user"]["role"] == role
         assert body["tenant"]["id"] == "default"
-        assert body["access_control_mode"] == "legacy"
+        # tenant default : legacy ou shadow (observation) — jamais enforce sans GO explicite
+        assert body["access_control_mode"] in ("legacy", "shadow")
         assert "fuel" in body["modules_enabled"] and "documents" not in body["modules_enabled"]
         assert sorted(ac.ROLE_TEMPLATES[role] & set(body["permissions_effective"])) == body["permissions_effective"] \
             or set(body["permissions_effective"]) <= ac.expand(set(ac.ROLE_TEMPLATES[role]))

@@ -16,8 +16,7 @@ from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError
 
 from app import energy_cache, energy_client
-from app.auth import require_roles
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db
 from app.navixy_sync import powertrain_from_fuel_type
 from app.routes._helpers import filter_trips_query, get_settings_doc
@@ -89,7 +88,7 @@ async def _resolve_energy_tenant(db) -> Optional[str]:
 
 
 @router.get("/status")
-async def energy_status(user=Depends(require_roles(*TRIP_ROLES))):
+async def energy_status(user=Depends(require_permission("energy.view", "energy.view_self", legacy_roles=TRIP_ROLES))):
     _tenant_or_400()
     status = await energy_client.get_status()
     et = await _resolve_energy_tenant(get_db())
@@ -102,7 +101,7 @@ class EnergyTenantMappingIn(BaseModel):
 
 
 @router.get("/tenant-mapping")
-async def get_energy_tenant_mapping(user=Depends(require_roles("admin", "manager"))):
+async def get_energy_tenant_mapping(user=Depends(require_permission("energy.edit", legacy_roles=("admin", "manager")))):
     _tenant_or_400()
     et = await _resolve_energy_tenant(get_db())
     return {"energy_tenant_id": et, "configured": et is not None, "fail_closed": True}
@@ -110,7 +109,7 @@ async def get_energy_tenant_mapping(user=Depends(require_roles("admin", "manager
 
 @router.put("/tenant-mapping")
 async def put_energy_tenant_mapping(payload: EnergyTenantMappingIn,
-                                    user=Depends(require_roles("admin"))):
+                                    user=Depends(require_permission("energy.admin", legacy_roles=("admin",)))):
     """Correspondance tenant Journal → tenant Energy. Admin uniquement, audité.
     null/vide = mapping supprimé → fail-closed (aucun appel Energy)."""
     tid = _tenant_or_400()
@@ -134,7 +133,7 @@ class TripEnergyIn(BaseModel):
 
 
 @router.post("/trips")
-async def trips_energy(payload: TripEnergyIn, user=Depends(require_roles(*TRIP_ROLES))):
+async def trips_energy(payload: TripEnergyIn, user=Depends(require_permission("energy.view", "energy.view_self", legacy_roles=TRIP_ROLES))):
     """Journal transmet vehicle_id + start_time + end_time au module Énergie
     et affiche sa réponse. RBAC : chauffeur = uniquement ses propres trajets."""
     ids = [i for i in payload.trip_ids if i][:MAX_BATCH]
@@ -186,7 +185,7 @@ async def trips_energy(payload: TripEnergyIn, user=Depends(require_roles(*TRIP_R
 
 
 @router.get("/overview")
-async def energy_overview(user=Depends(require_roles(*READ_ROLES))):
+async def energy_overview(user=Depends(require_permission("energy.view", legacy_roles=READ_ROLES))):
     """Vue d'ensemble énergie : consommations = module Énergie (ou UNAVAILABLE),
     flotte = comptages honnêtes Journal. Les approvisionnements (achats) restent
     servis par /livre/fuel/widget — concept distinct de la consommation réelle."""
@@ -228,7 +227,7 @@ async def reconciliation_preview(
     date_to: Optional[str] = None,
     vehicle_id: Optional[str] = None,
     refresh: bool = False,
-    user=Depends(require_roles("admin", "manager", "lecture_seule")),
+    user=Depends(require_permission("energy.view", legacy_roles=READ_ROLES)),
 ):
     """Rapprochement achats vs consommation — DIAGNOSTIC/PREVIEW, AUCUNE alerte.
     Achats = transactions cartes (commercial). Consommation = module Énergie
@@ -381,7 +380,7 @@ class ReconciliationSettingsIn(BaseModel):
 
 
 @router.get("/reconciliation/settings")
-async def get_reconciliation_settings(user=Depends(require_roles(*READ_ROLES))):
+async def get_reconciliation_settings(user=Depends(require_permission("energy.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     settings = await get_settings_doc(get_db())
     return {"threshold_percent": settings.get("reconciliation_threshold_percent"),
@@ -391,7 +390,7 @@ async def get_reconciliation_settings(user=Depends(require_roles(*READ_ROLES))):
 
 @router.put("/reconciliation/settings")
 async def put_reconciliation_settings(payload: ReconciliationSettingsIn,
-                                      user=Depends(require_roles("admin", "manager"))):
+                                      user=Depends(require_permission("energy.edit", legacy_roles=("admin", "manager")))):
     """RBAC aligné sur PUT /livre/settings existant (admin + manager).
     Le seuil sert uniquement au calcul du statut — AUCUNE alerte émise."""
     tid = _tenant_or_400()
@@ -447,14 +446,14 @@ def _alerts_config_payload(settings: dict) -> dict:
 
 
 @router.get("/reconciliation/alerts/config")
-async def get_reconciliation_alerts_config(user=Depends(require_roles(*READ_ROLES))):
+async def get_reconciliation_alerts_config(user=Depends(require_permission("energy.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     return _alerts_config_payload(await get_settings_doc(get_db()))
 
 
 @router.put("/reconciliation/alerts/config")
 async def put_reconciliation_alerts_config(payload: ReconciliationAlertsIn,
-                                           user=Depends(require_roles("admin", "manager"))):
+                                           user=Depends(require_permission("energy.edit", legacy_roles=("admin", "manager")))):
     """real_energy_validated n'est JAMAIS accepté en écriture ici (ni ailleurs).
     enabled=true → 409 tant que la campagne REAL ENERGY n'est pas validée."""
     tid = _tenant_or_400()
@@ -521,7 +520,7 @@ async def generate_alert_candidates(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     vehicle_id: Optional[str] = None,
-    user=Depends(require_roles("admin", "manager")),
+    user=Depends(require_permission("energy.edit", legacy_roles=("admin", "manager"))),
 ):
     """Génère les candidats d'alerte en base (dédupliqués véhicule+période).
     PRÉPARATION uniquement : rien n'est transmis à notifications_service/SMTP."""
@@ -554,7 +553,7 @@ async def generate_alert_candidates(
 
 
 @router.get("/reconciliation/alerts/candidates")
-async def list_alert_candidates(user=Depends(require_roles(*READ_ROLES))):
+async def list_alert_candidates(user=Depends(require_permission("energy.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     items = await db.reconciliation_alert_candidates.find(
@@ -591,7 +590,7 @@ async def export_reconciliation(
     measurement: Optional[str] = None,
     reliability: Optional[str] = None,
     status: Optional[str] = None,
-    user=Depends(require_roles("admin", "manager", "lecture_seule")),
+    user=Depends(require_permission("energy.export", legacy_roles=READ_ROLES)),
 ):
     tid = _tenant_or_400()
     db = get_db()
@@ -647,7 +646,7 @@ async def export_reconciliation_pdf(
     measurement: Optional[str] = None,
     reliability: Optional[str] = None,
     status: Optional[str] = None,
-    user=Depends(require_roles("admin", "manager", "lecture_seule")),
+    user=Depends(require_permission("energy.export", legacy_roles=READ_ROLES)),
 ):
     """Export PDF — EXACTEMENT la même source et les mêmes 7 filtres que l'écran
     et l'Excel. null → « — » (jamais 0), L et kWh séparés, paginé, audité."""

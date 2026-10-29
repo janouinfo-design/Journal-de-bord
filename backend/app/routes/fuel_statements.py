@@ -14,8 +14,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.audit import log_audit
-from app.auth import require_roles
-from app.access_control import require_module
+from app.access_control import require_module, require_permission
 from app.db import get_db
 from app.fuel_statements import (
     build_lines, closed_overlap, compute_totals, get_lines, late_transactions,
@@ -66,7 +65,7 @@ def _resolve_period(payload: StatementCreateIn) -> tuple[str, str]:
 
 
 @router.post("")
-async def create_statement(payload: StatementCreateIn, user=Depends(require_roles("admin"))):
+async def create_statement(payload: StatementCreateIn, user=Depends(require_permission("fuel.statements", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     if payload.type not in ("regular", "corrective"):
@@ -98,7 +97,7 @@ async def create_statement(payload: StatementCreateIn, user=Depends(require_role
 
 
 @router.get("")
-async def list_statements(user=Depends(require_roles(*READ_ROLES))):
+async def list_statements(user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     rows = await db.fuel_statements.find({}, {"_id": 0, "tenant_id": 0}) \
@@ -113,7 +112,7 @@ async def list_statements(user=Depends(require_roles(*READ_ROLES))):
 
 
 @router.get("/{statement_id}")
-async def get_statement(statement_id: str, user=Depends(require_roles(*READ_ROLES))):
+async def get_statement(statement_id: str, user=Depends(require_permission("fuel.view", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     stmt = await db.fuel_statements.find_one({"id": statement_id}, {"_id": 0, "tenant_id": 0})
@@ -134,7 +133,7 @@ async def _load_editable(db, statement_id: str) -> dict:
 
 
 @router.post("/{statement_id}/refresh")
-async def refresh(statement_id: str, user=Depends(require_roles("admin"))):
+async def refresh(statement_id: str, user=Depends(require_permission("fuel.statements", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     stmt = await _load_editable(db, statement_id)
@@ -145,7 +144,7 @@ async def refresh(statement_id: str, user=Depends(require_roles("admin"))):
 
 
 @router.post("/{statement_id}/check")
-async def check(statement_id: str, user=Depends(require_roles("admin"))):
+async def check(statement_id: str, user=Depends(require_permission("fuel.statements", legacy_roles=("admin",)))):
     """Contrôle : régénère puis passe en « Validé » (0 bloquant) ou « À contrôler »."""
     _tenant_or_400()
     db = get_db()
@@ -169,7 +168,7 @@ class CloseIn(BaseModel):
 
 
 @router.post("/{statement_id}/close")
-async def close_statement(statement_id: str, payload: CloseIn, user=Depends(require_roles("admin"))):
+async def close_statement(statement_id: str, payload: CloseIn, user=Depends(require_permission("fuel.statements", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     stmt = await _load_editable(db, statement_id)
@@ -227,7 +226,7 @@ class ReopenIn(BaseModel):
 
 
 @router.post("/{statement_id}/reopen")
-async def reopen_statement(statement_id: str, payload: ReopenIn, user=Depends(require_roles("admin"))):
+async def reopen_statement(statement_id: str, payload: ReopenIn, user=Depends(require_permission("fuel.statements", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     if not payload.reason.strip():
@@ -269,7 +268,7 @@ async def reopen_statement(statement_id: str, payload: ReopenIn, user=Depends(re
 
 
 @router.delete("/{statement_id}")
-async def delete_statement(statement_id: str, user=Depends(require_roles("admin"))):
+async def delete_statement(statement_id: str, user=Depends(require_permission("fuel.statements", legacy_roles=("admin",)))):
     _tenant_or_400()
     db = get_db()
     stmt = await db.fuel_statements.find_one({"id": statement_id}, {"_id": 0})
@@ -286,7 +285,7 @@ async def delete_statement(statement_id: str, user=Depends(require_roles("admin"
 
 @router.get("/{statement_id}/export")
 async def export_statement(statement_id: str, fmt: str = "pdf",
-                           user=Depends(require_roles(*READ_ROLES))):
+                           user=Depends(require_permission("fuel.export", legacy_roles=READ_ROLES))):
     _tenant_or_400()
     db = get_db()
     if fmt == "xlsx":

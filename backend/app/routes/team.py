@@ -15,14 +15,16 @@ from pydantic import BaseModel, EmailStr
 
 from app.audit import log_audit
 from app.auth import hash_password, IMP_ACCESS_TTL_MIN
-from app.access_control import require_permission
+from app.access_control import (require_permission, TENANT_ROLES, SENSITIVE_PERMISSIONS,
+                                ROLE_TEMPLATES, expand, effective_permissions, validate_override,
+                                permissions_catalog)
 from app.db import get_db, get_raw_db
 from app.emailer import is_smtp_configured, send_invitation_email
 from app.tenant_context import get_effective_tenant_id
 
 router = APIRouter(prefix="/team", tags=["team"])
 
-TEAM_ROLES = ("admin", "manager", "driver", "lecture_seule")
+TEAM_ROLES = TENANT_ROLES
 
 
 def _tenant_or_400() -> str:
@@ -93,6 +95,7 @@ async def team_update_user(user_id: str, payload: TeamUserUpdate,
     if not target:
         raise HTTPException(404, "Utilisateur introuvable")
     updates: dict = {}
+    unset: dict = {}
     if payload.name is not None:
         updates["name"] = payload.name
     if payload.role is not None:
@@ -101,6 +104,9 @@ async def team_update_user(user_id: str, payload: TeamUserUpdate,
         if target["id"] == current["id"] and payload.role != "admin":
             raise HTTPException(400, "Vous ne pouvez pas rétrograder votre propre compte")
         updates["role"] = payload.role
+        # Les surcharges sont relatives au rôle : un changement de rôle repart du modèle.
+        if payload.role != target.get("role") and target.get("permissions_override"):
+            unset["permissions_override"] = ""
     if payload.password:
         updates["password_hash"] = hash_password(payload.password)
     if payload.active is not None:
@@ -109,10 +115,14 @@ async def team_update_user(user_id: str, payload: TeamUserUpdate,
         updates["active"] = payload.active
     if not updates:
         raise HTTPException(400, "Aucun champ à mettre à jour")
-    await raw.users.update_one({"id": user_id, "tenant_id": tid}, {"$set": updates})
+    op: dict = {"$set": updates}
+    if unset:
+        op["$unset"] = unset
+    await raw.users.update_one({"id": user_id, "tenant_id": tid}, op)
     await log_audit("user.update", current,
                     {"email": target["email"],
-                     "fields": [k.replace("password_hash", "password") for k in updates]})
+                     "fields": [k.replace("password_hash", "password") for k in updates]
+                     + (["permissions_override_reset"] if unset else [])})
     fresh = await raw.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     return fresh
 
@@ -130,6 +140,85 @@ async def team_delete_user(user_id: str, current=Depends(require_permission("use
     await get_db().drivers.update_many({"user_id": user_id}, {"$unset": {"user_id": ""}})
     await log_audit("user.delete", current, {"email": target["email"]})
     return {"deleted": True, "id": user_id}
+
+
+# ====================== PERMISSIONS PAR UTILISATEUR (Lot 3) ======================
+class PermissionsOverrideIn(BaseModel):
+    grant: list[str] = []
+    revoke: list[str] = []
+    reason: Optional[str] = None
+
+
+def _permissions_view(target: dict, tenant_doc: dict | None) -> dict:
+    ov = target.get("permissions_override") or {}
+    template = sorted(expand(set(ROLE_TEMPLATES.get(target.get("role"), ROLE_TEMPLATES["lecture_seule"]))))
+    return {
+        "user_id": target["id"], "email": target["email"], "role": target.get("role"),
+        "template": template,
+        "override": {"grant": sorted(ov.get("grant") or []), "revoke": sorted(ov.get("revoke") or [])},
+        "effective": sorted(effective_permissions(target, tenant_doc)),
+    }
+
+
+@router.get("/permissions/catalog")
+async def team_permissions_catalog(request: Request,
+                                   current=Depends(require_permission("users.view", legacy_roles=("admin",)))):
+    _tenant_or_400()
+    return permissions_catalog(getattr(request.state, "tenant_doc", None))
+
+
+@router.get("/users/{user_id}/permissions")
+async def team_get_user_permissions(user_id: str, request: Request,
+                                    current=Depends(require_permission("users.view", legacy_roles=("admin",)))):
+    tid = _tenant_or_400()
+    target = await get_raw_db().users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0, "password_hash": 0})
+    if not target:
+        raise HTTPException(404, "Utilisateur introuvable")
+    return _permissions_view(target, getattr(request.state, "tenant_doc", None))
+
+
+@router.put("/users/{user_id}/permissions")
+async def team_set_user_permissions(user_id: str, payload: PermissionsOverrideIn, request: Request,
+                                    current=Depends(require_permission("users.permissions", legacy_roles=("admin",)))):
+    """Surcharge individuelle (grant / revoke) — le rôle reste le modèle. Audit before/after."""
+    tid = _tenant_or_400()
+    raw = get_raw_db()
+    target = await raw.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0, "password_hash": 0})
+    if not target:
+        raise HTTPException(404, "Utilisateur introuvable")
+    if target["id"] == current["id"]:
+        raise HTTPException(400, "Vous ne pouvez pas modifier vos propres permissions")
+    if target.get("role") == "superadmin":
+        raise HTTPException(400, "Compte plateforme non modifiable ici")
+    tenant_doc = getattr(request.state, "tenant_doc", None)
+    grant = sorted(set(payload.grant))
+    revoke = sorted(set(payload.revoke) - set(grant))
+    try:
+        validate_override(target.get("role"), grant, revoke, tenant_doc)
+    except ValueError as e:
+        msgs = {"unknown_permission": "Permission inconnue.",
+                "module_disabled": "Module non activé pour ce client.",
+                "sensitive_not_allowed_for_role": "Permission sensible non attribuable à ce rôle.",
+                "write_not_allowed_for_read_only": "Aucune écriture possible pour un compte Lecture seule."}
+        raise HTTPException(400, {"code": str(e), "msg": msgs.get(str(e), "Surcharge invalide.")})
+    before = _permissions_view(target, tenant_doc)
+    if grant or revoke:
+        await raw.users.update_one({"id": user_id, "tenant_id": tid},
+                                   {"$set": {"permissions_override": {"grant": grant, "revoke": revoke}}})
+    else:
+        await raw.users.update_one({"id": user_id, "tenant_id": tid}, {"$unset": {"permissions_override": ""}})
+    fresh = await raw.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0, "password_hash": 0})
+    after = _permissions_view(fresh, tenant_doc)
+    sensitive_granted = sorted(set(grant) & SENSITIVE_PERMISSIONS - set(before["template"]))
+    await log_audit("user.permissions_update", current,
+                    {"email": target["email"], "role": target.get("role"),
+                     "before": before["override"], "after": after["override"],
+                     "granted": sorted(set(after["effective"]) - set(before["effective"])),
+                     "revoked": sorted(set(before["effective"]) - set(after["effective"])),
+                     "sensitive_granted": sensitive_granted,
+                     "gps_access_granted": "positions.view" in sensitive_granted,
+                     "reason": payload.reason})
+    return after
 
 
 class ImpersonateIn(BaseModel):

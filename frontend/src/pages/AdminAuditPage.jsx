@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { ScrollText, RefreshCw } from "lucide-react";
+import { ScrollText, RefreshCw, EyeOff } from "lucide-react";
+
+const SHADOW_ACTION = "access.shadow_deny";
 
 function detailsToText(row) {
   const d = row.details && Object.keys(row.details).length ? row.details : null;
+  if (d && row.action === SHADOW_ACTION) return `${d.kind} « ${d.key} » manquant · ${d.method} ${d.path}`;
   if (d) return JSON.stringify(d);
   const extra = Object.entries(row)
     .filter(([k]) => !["id", "action", "at", "ts", "tenant_id", "user_id",
@@ -60,6 +63,12 @@ export default function AdminAuditPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button data-testid="audit-shadow-filter" variant={action === SHADOW_ACTION ? "default" : "outline"} size="sm"
+                  className={action === SHADOW_ACTION ? "bg-amber-500 hover:bg-amber-600 text-white" : "text-amber-700 border-amber-300"}
+                  onClick={() => setAction(action === SHADOW_ACTION ? "" : SHADOW_ACTION)}
+                  title="Refus qui auraient eu lieu en mode Appliqué (tenants en mode Observation)">
+            <EyeOff className="w-3.5 h-3.5 mr-1.5" /> Refus observés
+          </Button>
           <Select value={tenant} onValueChange={setTenant}>
             <SelectTrigger data-testid="audit-tenant-filter" className="w-[190px]"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -74,6 +83,14 @@ export default function AdminAuditPage() {
           </Button>
         </div>
       </div>
+
+      {action === SHADOW_ACTION && (
+        <div data-testid="audit-shadow-banner" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <strong>{rows.length} refus observé{rows.length > 1 ? "s" : ""}</strong> — chaque ligne indique le type
+          (<code>module</code> ou <code>permission</code>), la clé manquante et la route appelée. Aucun de ces appels n'a été
+          bloqué : le mode Observation journalise sans refuser. Un refus est journalisé une fois par utilisateur, clé et jour.
+        </div>
+      )}
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">

@@ -43,8 +43,6 @@ import DriversOverviewPage from "@/pages/drivers/DriversOverviewPage";
 import EcoDrivingPage from "@/pages/drivers/EcoDrivingPage";
 import { Toaster } from "@/components/ui/sonner";
 
-const AML = ["admin", "manager", "lecture_seule"];
-
 function FuelIndexRedirect() {
   const { user } = useAuth();
   return <Navigate to={user?.role === "driver"
@@ -68,9 +66,8 @@ function LegacyFuelRedirect() {
 }
 
 function AdministrationIndex() {
-  const { user } = useAuth();
-  const isAdmin = ["admin", "superadmin"].includes(user?.role);
-  return <Navigate to={isAdmin
+  const { can } = useAuth();
+  return <Navigate to={can("users.view")
     ? "/livre/administration/utilisateurs" : "/livre/conducteurs/chauffeurs"} replace />;
 }
 
@@ -103,29 +100,32 @@ function App() {
 
             {/* Domaine Conducteurs */}
             <Route path="conducteurs" element={
-              <ProtectedRoute roles={["admin", "manager"]}>
+              <ProtectedRoute module="drivers" perms={["drivers.view"]}>
                 <DriversLayout />
               </ProtectedRoute>
             }>
               <Route index element={<Navigate to="/livre/conducteurs/vue-densemble" replace />} />
               <Route path="vue-densemble" element={<DriversOverviewPage />} />
               <Route path="chauffeurs" element={<TeamDriversPage />} />
-              <Route path="identification" element={<IdentificationPage />} />
-              <Route path="sessions" element={<IdentificationPage view="sessions" />} />
+              <Route path="identification" element={
+                <ProtectedRoute perms={["identification.view"]}><IdentificationPage /></ProtectedRoute>} />
+              <Route path="sessions" element={
+                <ProtectedRoute perms={["identification.view"]}><IdentificationPage view="sessions" /></ProtectedRoute>} />
               <Route path="eco-conduite" element={<EcoDrivingPage />} />
             </Route>
 
             <Route path="amendes" element={
-              <ProtectedRoute roles={AML}>
+              <ProtectedRoute module="fines" perms={["fines.view"]}>
                 <FinesPage />
               </ProtectedRoute>
             } />
             <Route path="amendes/dashboard" element={
-              <ProtectedRoute roles={AML}>
+              <ProtectedRoute module="fines" perms={["fines.view"]}>
                 <FinesDashboardPage />
               </ProtectedRoute>
             } />
-            <Route path="mes-amendes" element={<DriverFinesPage />} />
+            <Route path="mes-amendes" element={
+              <ProtectedRoute module="fines" perms={["fines.view_self", "fines.view"]}><DriverFinesPage /></ProtectedRoute>} />
 
             {/* Legacy : le module Carburant vit sous Énergie & carburant > Approvisionnements */}
             <Route path="carburant/*" element={<LegacyFuelRedirect />} />
@@ -134,59 +134,59 @@ function App() {
             <Route path="energie" element={<EnergyLayout />}>
               <Route index element={<EnergyIndexRedirect />} />
               <Route path="apercu" element={
-                <ProtectedRoute roles={AML}><EnergyOverviewPage /></ProtectedRoute>} />
+                <ProtectedRoute module="energy" perms={["energy.view"]}><EnergyOverviewPage /></ProtectedRoute>} />
               <Route path="consommations" element={
-                <ProtectedRoute roles={AML}><EnergyConsumptionPage /></ProtectedRoute>} />
+                <ProtectedRoute module="energy" perms={["energy.view"]}><EnergyConsumptionPage /></ProtectedRoute>} />
               <Route path="rapprochement" element={
-                <ProtectedRoute roles={AML}><EnergyReconciliationPage /></ProtectedRoute>} />
+                <ProtectedRoute module="energy" perms={["energy.view"]}><EnergyReconciliationPage /></ProtectedRoute>} />
               <Route path="anomalies" element={
-                <ProtectedRoute roles={AML}><FuelAnomaliesPage /></ProtectedRoute>} />
+                <ProtectedRoute module="fuel" perms={["fuel.view"]}><FuelAnomaliesPage /></ProtectedRoute>} />
               <Route path="approvisionnements" element={<FuelLayout />}>
                 <Route index element={<FuelIndexRedirect />} />
                 <Route path="apercu" element={
-                  <ProtectedRoute roles={AML}><FuelOverviewPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.view"]}><FuelOverviewPage /></ProtectedRoute>} />
                 <Route path="transactions" element={
-                  <ProtectedRoute roles={AML}><FuelTransactionsPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.view"]}><FuelTransactionsPage /></ProtectedRoute>} />
                 <Route path="cartes" element={
-                  <ProtectedRoute roles={AML}><FuelCardsPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel_cards" perms={["fuel_cards.view"]}><FuelCardsPage /></ProtectedRoute>} />
                 <Route path="rapprochements" element={
-                  <ProtectedRoute roles={["admin", "manager"]}><FuelMatchingPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.reconcile"]}><FuelMatchingPage /></ProtectedRoute>} />
                 <Route path="decomptes" element={
-                  <ProtectedRoute roles={AML}><FuelStatementsPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.view"]}><FuelStatementsPage /></ProtectedRoute>} />
                 <Route path="decomptes/:id" element={
-                  <ProtectedRoute roles={AML}><FuelStatementDetailPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.view"]}><FuelStatementDetailPage /></ProtectedRoute>} />
                 <Route path="importations" element={
-                  <ProtectedRoute roles={["admin"]}><FuelImportsPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.import"]}><FuelImportsPage /></ProtectedRoute>} />
                 <Route path="parametres" element={
-                  <ProtectedRoute roles={["admin"]}><FuelSettingsPage /></ProtectedRoute>} />
+                  <ProtectedRoute module="fuel" perms={["fuel.admin"]}><FuelSettingsPage /></ProtectedRoute>} />
                 <Route path="mes-transactions" element={
-                  <ProtectedRoute roles={["driver", "admin", "manager"]}><FuelMyTransactionsPage /></ProtectedRoute>} />
+                  <ProtectedRoute roles={["driver", "admin", "manager"]} module="fuel"><FuelMyTransactionsPage /></ProtectedRoute>} />
               </Route>
             </Route>
 
             <Route path="administration" element={
-              <ProtectedRoute roles={["admin", "manager"]}>
+              <ProtectedRoute perms={["users.view", "users.impersonate", "vehicles.admin"]}>
                 <AdministrationLayout />
               </ProtectedRoute>
             }>
               <Route index element={<AdministrationIndex />} />
               <Route path="utilisateurs" element={
-                <ProtectedRoute roles={["admin"]}><TeamUsersPage /></ProtectedRoute>} />
+                <ProtectedRoute perms={["users.view"]}><TeamUsersPage /></ProtectedRoute>} />
               {/* Legacy : la liste des chauffeurs vit dans le domaine Conducteurs */}
               <Route path="chauffeurs" element={<Navigate to="/livre/conducteurs/chauffeurs" replace />} />
               <Route path="kilometrage" element={
-                <ProtectedRoute roles={["admin"]}><VehicleOdometerPage /></ProtectedRoute>} />
+                <ProtectedRoute perms={["vehicles.admin"]}><VehicleOdometerPage /></ProtectedRoute>} />
               <Route path="apercus" element={
-                <ProtectedRoute roles={["admin"]}><TeamImpersonationPage /></ProtectedRoute>} />
+                <ProtectedRoute perms={["users.impersonate"]}><TeamImpersonationPage /></ProtectedRoute>} />
             </Route>
             <Route path="settings" element={
-              <ProtectedRoute roles={["admin", "manager"]}>
+              <ProtectedRoute perms={["settings.view"]}>
                 <SettingsPage />
               </ProtectedRoute>
             } />
           </Route>
           <Route path="/driver" element={
-            <ProtectedRoute roles={["admin", "manager", "driver"]}>
+            <ProtectedRoute roles={["admin", "manager", "driver"]} module="drivers">
               <DriverConsolePage />
             </ProtectedRoute>
           } />
