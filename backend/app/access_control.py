@@ -379,6 +379,12 @@ def require_permission(*perms: str, legacy_roles: tuple | None = None, module: s
             raise ValueError(f"permission inconnue: {p}")
     if module and module not in MODULES:
         raise ValueError(f"module inconnu: {module}")
+    if module is None:
+        # Source unique : si toutes les permissions relèvent du même module, le refus « module coupé »
+        # prime sur « permission manquante » (message lisible et audit `kind=module` corrects).
+        mods = {PERMISSIONS[p]["module"] for p in perms}
+        if len(mods) == 1 and None not in mods:
+            module = mods.pop()
     REGISTRY.append({"perms": perms, "legacy_roles": legacy_roles, "module": module,
                      "parity_exempt": tuple(parity_exempt)})
 

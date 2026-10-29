@@ -1,0 +1,35 @@
+{
+  "summary": "Lots 5-6 tested (Phase 4C). Backend: new file tests/test_lot56_qa_agent.py has 6 tests. 5 pass and 1 fails. Every check passes except one: step (f) of the enforce scenario. The tests check /auth/me for the driver, that the 9 driver-app endpoints are not blocked in shadow mode on tenant default, steps (a) to (g) of the enforce scenario on a throwaway tenant qa-lot5-<hex> (deleted afterwards and checked: 0 tenants, 0 users, 0 audit rows left), enforce-readiness 200/404/403, and that tenant default is unchanged. Step (f) fails: GET /api/livre/trips with module journal OFF returns 403 permission_denied (permission journal.view) instead of module_disabled (module journal). Frontend: the Super Admin enforce-confirm dialog works for Client Test B. It shows the loading text, then 5 readiness rows with icons, and the confirm button is disabled until the check result loads, then enabled. I clicked Annuler, never Confirmer. Afterwards the API shows Client Test B still legacy (access_control_mode null) and default still shadow with 10 modules. Driver web login works and /driver (Console PWA) loads with no API errors, but login lands on /livre/dashboard, not /driver. Admin sees the Énergie & carburant and Amendes tabs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/livre/trips (and other journal-scoped routes)", "issue": "In enforce mode with module journal OFF, the API returns 403 {code:'permission_denied', permission:'journal.view'} instead of {code:'module_disabled', module:'journal'}. The request is still blocked, but the Expo app shows the wrong readable message, and in shadow mode the audit records a 'permission' refusal instead of a 'module' refusal. RCA: require_permission('journal.view','journal.view_self') is declared without module='journal'. effective_permissions() then drops the journal.* permissions because the module is off, so the permission branch runs. The same omission exists at misc.py L133, L184 (/drivers), L190 (/vehicles), L251 (/geofences), L257 (/groups), L266 (/companies), L287 (/trips), L351 (/trips/{id}/track, positions.view) and dashboard.py L30. Fix: add module='journal' to these calls, or have require_permission derive the module automatically when all listed permissions belong to the same module."},
+      {"endpoint": "GET /api/livre/driver/km-summary?period=week", "issue": "Returns 422 because only today|month are accepted. The Expo app (logitrak-driver-app/src/api/ble.ts) only sends today|month, so this is not a bug in the app. It was an assumption in the review request. today and month both return 200."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Driver web login", "issue": "chauffeur@logitrak.ch lands on /livre/dashboard (driver dashboard with a 'Console PWA' tab), not /driver as the review request expected. LoginPage.jsx L37 always navigates to /livre/dashboard. /driver works when reached through the tab. On the driver dashboard, FuelWidget (/livre/fuel/widget) and FinesWidget (/livre/fines/stats/summary) call manager endpoints and get 403 (console noise, the widgets are hidden). Already the case before these lots.", "affected_selectors": ["auth-submit-btn"]}
+    ],
+    "design_issues": [
+      {"screen": "enforce-confirm-dialog", "issues": ["ready=true is allowed even though the 'observation' check is warn ('jamais passé en mode Observation') for Client Test B. Enforce can be confirmed without any shadow period. This is a product decision; consider making missing observation a fail or adding an extra confirmation."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_lot56_qa_agent.py", "/app/test_reports/pytest/pytest_lot56.xml"],
+  "action_items": [
+    "Add module='journal' to the require_permission calls of the journal-scoped routes (misc.py L133/184/190/251/257/266/287/351, dashboard.py L30), or derive the module automatically, so that enforce with journal OFF returns module_disabled.",
+    "Optional: redirect driver web login to /driver if that is the expected UX (LoginPage.jsx L37).",
+    "Optional: hide FuelWidget/FinesWidget for the driver role on the dashboard, or stop calling those endpoints for drivers, to remove the 403 console errors."
+  ],
+  "critical_code_review_comments": [
+    "require_permission: when a module is not declared and the tenant module is OFF, the result is permission_denied instead of module_disabled (see above). A single source of truth (the module derived from PERMISSIONS[p]['module']) would prevent this.",
+    "enforce_readiness: a never-observed tenant still gets ready=true (observation is only a warn)."
+  ],
+  "updated_files": ["/app/backend/tests/test_lot56_qa_agent.py"],
+  "success_rate": {"backend": "95% (all checks pass except step f; 5/6 pytest tests pass)", "frontend": "100% for the requested flows (one redirect behaviour differs from what the request expected)"},
+  "seed_data_creation": "Throwaway tenant qa-lot5-<hex> plus one driver user created by the pytest fixture and deleted afterwards (checked: none left). Tenant default and Client Test B were not modified.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_lot56_qa_agent.py -v. Expect test_enforce_scenario to fail at the deferred step (f) assertion until module='journal' is added to GET /trips. Super Admin UI test: log in by injecting cookies from an API login (avoid typing the password). The modules button for Client Test B is tenant-modules-btn-0ce32dd4-4aee-4046-96fa-b5533dbee8db. NEVER confirm enforce."
+}
