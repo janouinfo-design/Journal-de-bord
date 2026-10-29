@@ -101,7 +101,9 @@ def test_tenants_list_fields(qa):
     by = {t["id"]: t for t in rows}
     d = by["default"]
     assert d["access_control_mode_effective"] == "shadow"
-    assert d["modules_enabled"] is None
+    # default : modules configurés explicitement = 10 modules legacy, aucun réservé
+    assert len(d["modules_effective"]) == 10 and {"fuel", "fuel_cards", "fines"} <= set(d["modules_effective"])
+    assert not {"documents", "ev_charging"} & set(d["modules_effective"])
     q = by[qa["id"]]
     assert q["modules_enabled"] is None and q["access_control_mode"] is None
     assert len(q["modules_effective"]) == 10
@@ -303,5 +305,6 @@ def test_enforce_matrix(mongo, qa):
 def test_zz_default_untouched(mongo):
     t = mongo.tenants.find_one({"id": "default"})
     assert t.get("access_control_mode") == "shadow"
-    assert t.get("modules_enabled") is None
+    from app.access_control import MODULES, enabled_modules
+    assert enabled_modules(t) == [c for c, m in MODULES.items() if m["legacy_default"]], enabled_modules(t)
     assert t.get("status", "active") == "active"

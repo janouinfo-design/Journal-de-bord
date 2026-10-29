@@ -96,6 +96,7 @@ function DriverScreenBle() {
 
   // Phase 2 — Mode Privé/Professionnel (masquage GPS device + km privés). Backend autoritaire.
   const privateMode = usePrivateMode();
+  const privateModeModule = useAuthStore((s) => s.hasModule('private_mode'));
 
   // Rafraîchit automatiquement quand une session BLE apparaît/évolue côté serveur.
   useRealtime((event) => {
@@ -368,8 +369,9 @@ function DriverScreenBle() {
           />
         </View>
 
-        {/* Phase 2 — Confidentialité : mode Privé (masque la position) / Professionnel */}
-        {privateMode.status.allowed ? (
+        {/* Phase 2 — Confidentialité : mode Privé (masque la position) / Professionnel.
+            Lot 5 : masqué si le module private_mode est coupé pour le client. */}
+        {!privateModeModule ? null : privateMode.status.allowed ? (
           <View style={styles.privacyCard} testID="private-mode-section">
             <Text style={styles.privacyTitle}>Confidentialité</Text>
             <Text style={styles.privacyState} testID="private-mode-state">

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Trip, TripsResponse, getTrips, classifyTrip } from '@/api/trips';
 import { logger } from '@/utils/logger';
+import { describeApiError, isAccessDenied } from '@/utils/apiError';
 
 type TripsState = {
   trips: Trip[];
@@ -29,9 +30,7 @@ export const useTripsStore = create<TripsState>((set, get) => ({
       const res: TripsResponse = await getTrips({ limit: 200 });
       set({ trips: res.trips, settingsMode: res.settings_mode, loading: false });
     } catch (e: any) {
-      const msg =
-        e?.response?.data?.detail ||
-        'Impossible de charger vos trajets. Vérifiez votre connexion.';
+      const msg = describeApiError(e, 'Impossible de charger vos trajets. Vérifiez votre connexion.');
       logger.warn('trips', 'load failed', e);
       set({ loading: false, error: msg });
     }
@@ -69,12 +68,13 @@ export const useTripsStore = create<TripsState>((set, get) => ({
     } catch (e: any) {
       set({ classifyingId: null });
       const status = e?.response?.status;
-      const msg =
-        status === 403
+      const msg = isAccessDenied(e)
+        ? describeApiError(e, 'Action non autorisée.')
+        : status === 403
           ? "Vous ne pouvez classer que vos propres trajets."
           : status === 404
           ? 'Trajet introuvable.'
-          : e?.response?.data?.detail || 'La classification a échoué. Réessayez.';
+          : describeApiError(e, 'La classification a échoué. Réessayez.');
       logger.warn('trips', 'classify failed', e);
       return { ok: false, message: msg };
     }

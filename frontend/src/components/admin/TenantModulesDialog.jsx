@@ -14,7 +14,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Boxes, ShieldCheck, Lock } from "lucide-react";
+import { Boxes, ShieldCheck, Lock, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
 
 const CATEGORY = {
   core: { label: "Cœur", hint: "Socle du Journal de bord." },
@@ -50,6 +50,7 @@ export default function TenantModulesDialog({ tenant, catalog, onClose, onSaved 
   const [mode, setMode] = useState(tenant.access_control_mode_effective || "legacy");
   const [saving, setSaving] = useState(false);
   const [confirmEnforce, setConfirmEnforce] = useState(false);
+  const [readiness, setReadiness] = useState(null);
 
   const byCat = useMemo(() => modules.reduce((acc, m) => { (acc[m.category] ||= []).push(m); return acc; }, {}), [modules]);
   const labelOf = (code) => modules.find((m) => m.code === code)?.label || code;
@@ -76,10 +77,21 @@ export default function TenantModulesDialog({ tenant, catalog, onClose, onSaved 
     }
   }
 
-  function onSaveClick() {
-    if (modeChanged && mode === "enforce") setConfirmEnforce(true);
-    else save();
+  async function onSaveClick() {
+    if (modeChanged && mode === "enforce") {
+      setReadiness(null);
+      setConfirmEnforce(true);
+      try {
+        const { data } = await api.get(`/admin/tenants/${tenant.id}/enforce-readiness`);
+        setReadiness(data);
+      } catch (e) {
+        setReadiness({ error: formatApiErrorDetail(e.response?.data?.detail) });
+      }
+    } else save();
   }
+
+  const STATUS_ICON = { ok: CheckCircle2, warn: AlertTriangle, fail: XCircle };
+  const STATUS_CLS = { ok: "text-emerald-600", warn: "text-amber-600", fail: "text-red-600" };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -164,17 +176,48 @@ export default function TenantModulesDialog({ tenant, catalog, onClose, onSaved 
       </DialogContent>
 
       <AlertDialog open={confirmEnforce} onOpenChange={setConfirmEnforce}>
-        <AlertDialogContent data-testid="enforce-confirm-dialog">
+        <AlertDialogContent data-testid="enforce-confirm-dialog" className="max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>Passer « {tenant.name} » en mode Appliqué ?</AlertDialogTitle>
             <AlertDialogDescription>
               Les contrôles deviennent bloquants pour tous les utilisateurs de ce client : modules coupés et permissions
-              manquantes renverront une erreur 403. Vérifiez d'abord les refus observés en mode Observation.
+              manquantes renverront une erreur 403.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div data-testid="enforce-readiness" className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-sm space-y-1.5 min-h-[180px]">
+            {!readiness ? <p className="text-xs text-slate-500">Vérification des garde-fous…</p>
+              : readiness.error ? <p className="text-xs text-red-600">{readiness.error}</p>
+              : (
+                <>
+                  {readiness.checks.map((c) => {
+                    const Icon = STATUS_ICON[c.status];
+                    return (
+                      <div key={c.id} data-testid={`readiness-${c.id}`} className="flex items-start gap-2">
+                        <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${STATUS_CLS[c.status]}`} />
+                        <div className="min-w-0">
+                          <p className="text-slate-800 leading-tight">{c.label}</p>
+                          <p className="text-[11px] text-slate-500">{c.detail}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {readiness.observation.by_key.length > 0 && (
+                    <ul className="mt-1 pl-6 text-[11px] text-amber-700 list-disc space-y-0.5">
+                      {readiness.observation.by_key.slice(0, 6).map((d) => (
+                        <li key={`${d.kind}-${d.key}`}>{d.kind} <code>{d.key}</code> × {d.count} ({d.users} utilisateur{d.users > 1 ? "s" : ""}{d.roles.length ? ` · ${d.roles.join(", ")}` : ""})</li>
+                      ))}
+                    </ul>
+                  )}
+                  {!readiness.ready && (
+                    <p data-testid="readiness-blocked" className="text-xs font-semibold text-red-600">Passage bloqué : corrigez les points en échec.</p>
+                  )}
+                </>
+              )}
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Annuler</AlertDialogCancel>
-            <AlertDialogAction data-testid="enforce-confirm-btn" onClick={() => { setConfirmEnforce(false); save(); }}>
+            <AlertDialogAction data-testid="enforce-confirm-btn" disabled={!readiness || readiness.error || !readiness.ready}
+                               onClick={() => { setConfirmEnforce(false); save(); }}>
               Confirmer le mode Appliqué
             </AlertDialogAction>
           </AlertDialogFooter>

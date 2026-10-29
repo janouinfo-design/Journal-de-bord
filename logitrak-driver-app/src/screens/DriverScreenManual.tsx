@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import { usePrivateMode } from '@/hooks/usePrivateMode';
 import { useKmSummary } from '@/hooks/useKmSummary';
+import { useAuthStore } from '@/store/authStore';
 import SosButton from '@/components/SosButton';
 import {
   claimVehicle, getMyVehicle, getDriverVehicles, DriverVehicleAccess, SessionVehicle,
@@ -33,6 +34,7 @@ export default function DriverScreenManual() {
   const openPickerRef = useRef<() => void>();
 
   const privateMode = usePrivateMode();
+  const privateModeModule = useAuthStore((s) => s.hasModule('private_mode'));
   const km = useKmSummary(vehicle?.id, 'today');
 
   const loadVehicle = useCallback(async () => {
@@ -154,7 +156,9 @@ export default function DriverScreenManual() {
           </TouchableOpacity>
         </View>
 
-        {/* --- PRO / PRIVÉ --- */}
+        {/* --- PRO / PRIVÉ --- (Lot 5 : masqué si le module private_mode est coupé pour le client) */}
+        {privateModeModule ? (
+          <>
         <Text style={styles.sectionLabel}>Mode</Text>
         <View style={styles.modesRow}>
           <ModeCard
@@ -194,6 +198,8 @@ export default function DriverScreenManual() {
 
         {privateMode.error ? (
           <Text style={styles.errorText} testID="manual-mode-error">{privateMode.error}</Text>
+        ) : null}
+          </>
         ) : null}
 
         {/* --- Km Pro / Km Privé (aujourd'hui) --- */}

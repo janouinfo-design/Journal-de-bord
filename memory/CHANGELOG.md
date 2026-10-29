@@ -1,5 +1,34 @@
 # CHANGELOG — Livre de bord LOGITRAK
 
+## 29/10/2026 — NETTOYAGE PREVIEW · LOT 5 APP CHAUFFEUR · LOT 6 PRÉPARATION ENFORCE
+
+### Nettoyage base preview (`scripts/cleanup_preview_test_data.py`, dry-run → `--apply`)
+- Supprimé : 89 tenants `TEST Suspend*` / `TEST_Tenant*` (+ 46 users `test_susp_*@x.ch`, 356 entrées audit), 36 users `ivan.<hex>@example.com`,
+  150 chauffeurs de test (`Ivan Petrov*` ×84, `TEST_INV_*` ×92… — 0 trajet / affectation / amende / transaction liés, vérifié avant suppression),
+  95 invitations `test.inv.*@client.ch` / `pending.*@client.ch`.
+- Reste : tenants Logitrak + Client Test B ; 9 utilisateurs (comptes partagés, superadmin, logitrak@, admin-b@, paul.test, invite.test) ; 14 chauffeurs ; 1 invitation.
+- Dette : `test_impersonation`, `test_administration`, `test_phase3_admin_driver` recréent ces artefacts à chaque run (pas de cleanup de fixture) — relancer le script après une régression complète.
+
+### Lot 5 — app chauffeur Expo consciente des modules / permissions (`logitrak-driver-app/`)
+- `api/client.ts` : `fetchMe(): MePayload` (payload `/auth/me` complet) ; intercepteur : 401 `account_disabled` ⇒ tokens purgés, pas de refresh.
+- `store/authStore.ts` : `access {modules, permissions, mode}` (`normalizeAccess`), `can(...perms)`, `hasModule(code)`, `refreshAccess()` ; login = `/auth/login` puis `/auth/me` (accès vide si l'enrichi échoue — compat ancien backend) ; messages via `describeApiError`.
+- `navigation/tabsPolicy.ts` (pur, testé) : Conduite ⇐ `drivers` + `identification.self|edit` ; Trajets ⇐ `journal` + `journal.view_self|view` ; Profil / Réglages toujours. `RootNavigator` rend les onglets selon `visibleTabs(access, role)`.
+- Écrans : cartes Mode Privé masquées si module `private_mode` coupé (`DriverScreen`, `DriverScreenManual`) ; section Classification masquée sans `trips.classify_self|classify` (`TripDetailScreen`) ; tracé : message « non autorisé » distinct de « masqué (personnel) ».
+- `utils/apiError.ts` : `ACCESS_MESSAGES` (module_disabled, permission_denied, account_disabled, tenant_suspended, tenant_missing, invalid_tenant), `describeApiError`, `isAccessDenied`, `errorCode` ; utilisés par `tripsStore` (chargement + classification), `usePrivateMode.reasonToMessage` (+ `api/privateMode` lit `detail.code`), `authStore`.
+- Qualité : `tsc --noEmit` 0 erreur · eslint 0 erreur · jest 13 suites / **83 tests PASS** (`accessPolicy.test.ts` nouveau, `authStore.test.ts` étendu : modules/permissions, compat accès vide, compte désactivé). Aucun build EAS / store.
+
+### Lot 6 — préparation du passage enforce (garde-fous)
+- `access_control.enforce_readiness(tenant, users, denies, shadow_since, now)` (pur) → `checks` [tenant_active fail/ok · observation ≥ 7 j warn · shadow_denies 30 j warn (groupés kind/key, users, rôles) · roles_known fail/ok · overrides_valid warn], `ready` = aucun fail, `invalid_overrides`, `users.by_role`.
+- `GET /api/admin/tenants/{id}/enforce-readiness` (superadmin ; `shadow_since` = dernier audit `tenant.update` → shadow si le mode effectif est shadow).
+- `TenantModulesDialog` : la confirmation « Confirmer le mode Appliqué » charge le bilan, l'affiche (icônes ok / warn / fail, liste des refus observés) et **désactive la confirmation si un contrôle échoue**. Zone à hauteur minimale fixe.
+- `access.shadow_deny` : `details.role` ajouté (lecture par rôle dans le bilan).
+- `scripts/enforce_preflight.py [--tenant id]` (lecture seule, code retour 1 si blocage) : users entreprise sans tenant_id, rôles inconnus, tenants non actifs, bilan par client. Exécution preview : PRÉ-VOL OK — Logitrak READY (warn : 0 j d'observation, 2 refus `identification.self` = exemption lecture_seule), Client Test B READY (jamais en observation).
+- Tests `tests/test_enforce_readiness.py` 4/4 (pur ×3 + endpoint 200 / 404 / 403).
+- Dev : `craco.config.js` `devServer.client.overlay.runtimeErrors` filtre « ResizeObserver loop » (avertissement bénin remonté par l'overlay CRA lors de l'ouverture de l'AlertDialog sur le Dialog).
+
+### Régression
+- REGRESSION2_PLACEHOLDER
+
 ## 29/10/2026 — PHASE 4C · LOTS 2 & 3 : MODULES PAR CLIENT (SUPER ADMIN) & PERMISSIONS PAR UTILISATEUR
 
 ### Lot 2 — Super Admin « Modules & licences »

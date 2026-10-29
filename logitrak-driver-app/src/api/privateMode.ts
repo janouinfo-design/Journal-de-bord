@@ -57,7 +57,8 @@ export async function setPrivateMode(mode: 'PRIVATE' | 'BUSINESS'): Promise<Priv
         ok: false,
         allowed: status !== 400 && status !== 422,
         state: 'UNKNOWN',
-        reason: typeof detail === 'string' ? detail : null,
+        // detail string (gate legacy) ou {code,...} (module coupé / permission manquante, Lot 1+)
+        reason: typeof detail === 'string' ? detail : detail?.code ?? null,
         http_status: status,
       };
     }

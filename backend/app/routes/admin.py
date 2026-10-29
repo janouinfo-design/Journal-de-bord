@@ -4,7 +4,7 @@ Réservée au rôle `superadmin`. Utilise la base NON scopée (get_raw_db) car e
 opère volontairement à travers tous les tenants.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,9 +13,9 @@ from pydantic import BaseModel, EmailStr
 from app.audit import log_audit
 from app.auth import get_current_user, hash_password
 from app.access_control import (MODES, TENANT_ROLES, enabled_modules, resolve_mode,
-                                normalize_modules, modules_catalog)
+                                normalize_modules, modules_catalog, enforce_readiness)
 from app.db import get_raw_db
-from app.tenancy import fetch_navixy_identity, BUSINESS_COLLECTIONS
+from app.tenancy import fetch_navixy_identity
 from app.tenant_context import refresh_tenant_cache
 
 router = APIRouter(prefix="/admin", tags=["superadmin"])
@@ -70,6 +70,26 @@ class TenantModulesIn(BaseModel):
 @router.get("/modules/catalog")
 async def modules_catalog_endpoint(current=Depends(require_superadmin)):
     return {"modules": modules_catalog(), "modes": list(MODES)}
+
+
+@router.get("/tenants/{tenant_id}/enforce-readiness")
+async def tenant_enforce_readiness(tenant_id: str, current=Depends(require_superadmin)):
+    """Garde-fous avant le mode Appliqué : observation, refus observés, rôles, surcharges."""
+    db = get_raw_db()
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(404, "Client introuvable")
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=30)).isoformat()
+    users = await db.users.find({"tenant_id": tenant_id},
+                                {"_id": 0, "email": 1, "role": 1, "active": 1, "permissions_override": 1}).to_list(5000)
+    denies = await db.audit_log.find({"tenant_id": tenant_id, "action": "access.shadow_deny", "at": {"$gte": since}},
+                                     {"_id": 0, "details": 1, "user_email": 1, "at": 1}).to_list(20000)
+    last_shadow = await db.audit_log.find_one(
+        {"tenant_id": tenant_id, "action": "tenant.update", "details.after.access_control_mode": "shadow"},
+        {"_id": 0, "at": 1}, sort=[("at", -1)])
+    shadow_since = last_shadow["at"] if last_shadow and resolve_mode(tenant) == "shadow" else None
+    return enforce_readiness(tenant, users, denies, shadow_since, now)
 
 
 @router.put("/tenants/{tenant_id}/modules")

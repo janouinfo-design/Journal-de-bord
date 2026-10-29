@@ -85,6 +85,12 @@ apiClient.interceptors.response.use(
   (resp) => resp,
   async (error: AxiosError) => {
     const original = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    const detail = (error.response?.data as { detail?: { code?: string } } | undefined)?.detail;
+    if (error.response?.status === 401 && detail && typeof detail === 'object' && detail.code === 'account_disabled') {
+      // Compte désactivé par l'entreprise : aucun refresh possible, session purgée.
+      await setTokens(null, null);
+      return Promise.reject(error);
+    }
     if (
       error.response?.status === 401 &&
       original &&
@@ -108,6 +114,15 @@ export type LoginResponse = {
   user: { id: string; email: string; role: string; name?: string; full_name?: string };
 };
 
+// Réponse enrichie de /api/auth/me (Lot 1) : modules du client + permissions effectives.
+export type MePayload = {
+  user: { id: string; email: string; role: string; name?: string; full_name?: string };
+  tenant?: { id: string; name: string; status: string } | null;
+  access_control_mode?: string;
+  modules_enabled?: string[];
+  permissions_effective?: string[];
+};
+
 export async function login(email: string, password: string): Promise<LoginResponse> {
   const { data } = await apiClient.post<LoginResponse>('/api/auth/login', { email, password });
   await setTokens(data.access_token, data.refresh_token ?? null);
@@ -123,10 +138,10 @@ export async function logout() {
   await setTokens(null, null);
 }
 
-// /api/auth/me renvoie {user{...}} — on dé-emballe pour renvoyer l'objet user.
-export async function fetchMe() {
-  const { data } = await apiClient.get('/api/auth/me');
-  return data?.user ?? data;
+// /api/auth/me renvoie {user, tenant, access_control_mode, modules_enabled, permissions_effective}.
+export async function fetchMe(): Promise<MePayload> {
+  const { data } = await apiClient.get<MePayload>('/api/auth/me');
+  return data?.user ? data : ({ user: data } as unknown as MePayload);
 }
 
 // Changement de mot de passe (utilisé par le flux must_change_password et le profil).

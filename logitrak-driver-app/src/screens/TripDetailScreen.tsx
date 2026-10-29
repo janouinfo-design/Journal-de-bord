@@ -12,6 +12,8 @@ import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { colors, spacing, radius, font } from '@/theme/colors';
 import { useTripsStore } from '@/store/tripsStore';
 import { getTrack, TrackResponse, Trip } from '@/api/trips';
+import { useAuthStore } from '@/store/authStore';
+import { describeApiError, isAccessDenied } from '@/utils/apiError';
 import { showConfirm } from '@/utils/alert';
 import {
   formatDate,
@@ -29,6 +31,7 @@ export function TripDetailScreen() {
   const nav = useNavigation();
   const { tripId } = route.params;
   const { trips, classify, classifyingId } = useTripsStore();
+  const canClassify = useAuthStore((s) => s.can('trips.classify_self', 'trips.classify'));
   const trip: Trip | undefined = trips.find((t) => t.id === tripId);
 
   const [track, setTrack] = useState<TrackResponse | null>(null);
@@ -47,7 +50,9 @@ export function TripDetailScreen() {
         if (!cancelled) {
           const status = e?.response?.status;
           setTrackError(
-            status === 403
+            isAccessDenied(e)
+              ? describeApiError(e, 'Tracé non autorisé.')
+              : status === 403
               ? 'Tracé masqué (trajet personnel).'
               : "Tracé indisponible pour ce trajet.",
           );
@@ -144,7 +149,8 @@ export function TripDetailScreen() {
           )}
         </Section>
 
-        {/* Reclassification */}
+        {/* Reclassification — Lot 5 : masquée sans la permission trips.classify_self */}
+        {canClassify ? (
         <Section title="Classification">
           <View style={styles.classifyRow}>
             <TouchableOpacity
@@ -171,6 +177,7 @@ export function TripDetailScreen() {
             </TouchableOpacity>
           </View>
         </Section>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );

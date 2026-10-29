@@ -5,6 +5,7 @@ import {
   setPrivateMode,
   PrivateModeStatus,
 } from '@/api/privateMode';
+import { ACCESS_MESSAGES } from '@/utils/apiError';
 
 /**
  * Phase 2 — Machine à états Privé/Professionnel côté app (backend = source de vérité).
@@ -144,6 +145,11 @@ export function reasonToMessage(reason?: string | null, httpStatus?: number | nu
       return 'Un changement de mode est déjà en cours…';
     case 'no_active_vehicle':
       return 'Aucun véhicule actif.';
+    // Lot 1+ : module coupé pour le client / permission manquante (mode Appliqué).
+    case 'module_disabled':
+      return ACCESS_MESSAGES.module_disabled;
+    case 'permission_denied':
+      return ACCESS_MESSAGES.permission_denied;
   }
   // 2) Sinon, message selon le code HTTP.
   switch (httpStatus) {

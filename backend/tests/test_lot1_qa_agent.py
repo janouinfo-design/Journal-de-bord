@@ -397,7 +397,11 @@ def test_suspended_tenant(mongo, qa_tenant):
 def test_zz_default_tenant_untouched(mongo):
     t = mongo.tenants.find_one({"id": "default"}, {"_id": 0})
     assert t["status"] == "active"
-    # Lot 2 : default en observation (shadow) sur décision utilisateur ; jamais enforce, aucun module initialisé
-    assert "modules_enabled" not in t and t.get("access_control_mode") in (None, "legacy", "shadow")
+    # Lot 2 : default en observation (shadow) sur décision utilisateur ; jamais enforce.
+    # Modules configurés explicitement = les 10 modules legacy (aucun réservé), jamais amputés par un test.
+    from app.access_control import MODULES, enabled_modules
+    legacy = [c for c, m in MODULES.items() if m["legacy_default"]]
+    assert enabled_modules(t) == legacy, enabled_modules(t)
+    assert t.get("access_control_mode") in (None, "legacy", "shadow")
     for c in (ADMIN, MANAGER, DRIVER, READER, SUPER, ADMIN_B):
         _login(c, cache=False)

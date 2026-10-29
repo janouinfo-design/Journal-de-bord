@@ -275,7 +275,70 @@ async def _shadow_deny(user: dict, kind: str, key: str, request: Request):
     _SHADOW_SEEN.add(sig)
     from app.audit import log_audit
     await log_audit("access.shadow_deny", user,
-                    {"kind": kind, "key": key, "method": request.method, "path": request.url.path})
+                    {"kind": kind, "key": key, "method": request.method, "path": request.url.path,
+                     "role": user.get("role")})
+
+
+def enforce_readiness(tenant: dict, users: list[dict], denies: list[dict], shadow_since: str | None,
+                      now: datetime) -> dict:
+    """Bilan de préparation au mode enforce (pur, testable). Aucun `fail` ⇒ ready."""
+    checks: list[dict] = []
+
+    def add(cid, status, label, detail=None):
+        checks.append({"id": cid, "status": status, "label": label, "detail": detail})
+
+    add("tenant_active", "ok" if tenant.get("status") == "active" else "fail",
+        "Client actif", f"statut : {tenant.get('status')}")
+    days = None
+    if shadow_since:
+        days = (now - datetime.fromisoformat(shadow_since)).days
+    if days is None:
+        add("observation", "warn", "Période d'observation", "jamais passé en mode Observation")
+    else:
+        add("observation", "ok" if days >= 7 else "warn", "Période d'observation",
+            f"{days} jour(s) en Observation (recommandé ≥ 7)")
+    by_key: dict[tuple, dict] = {}
+    for d in denies:
+        det = d.get("details") or {}
+        k = (det.get("kind"), det.get("key"))
+        row = by_key.setdefault(k, {"kind": k[0], "key": k[1], "count": 0, "users": set(), "roles": set()})
+        row["count"] += 1
+        row["users"].add(d.get("user_email"))
+        if det.get("role"):
+            row["roles"].add(det["role"])
+    denies_out = sorted(({**r, "users": len(r["users"]), "roles": sorted(r["roles"])} for r in by_key.values()),
+                        key=lambda r: -r["count"])
+    add("shadow_denies", "ok" if not denies else "warn", "Refus observés (30 j)",
+        f"{len(denies)} refus → deviendraient des 403" if denies else "aucun refus observé")
+    unknown = [u["email"] for u in users if u.get("role") not in TENANT_ROLES]
+    add("roles_known", "ok" if not unknown else "fail", "Rôles reconnus",
+        f"{len(unknown)} utilisateur(s) avec un rôle inconnu" if unknown else "tous les rôles sont connus")
+    enabled = set(enabled_modules(tenant))
+    invalid = []
+    for u in users:
+        ov = u.get("permissions_override") or {}
+        for kind in ("grant", "revoke"):
+            for p in ov.get(kind) or []:
+                spec = PERMISSIONS.get(p)
+                if not spec:
+                    invalid.append({"email": u["email"], kind: p, "reason": "unknown_permission"})
+                elif spec["module"] and spec["module"] not in enabled:
+                    invalid.append({"email": u["email"], kind: p, "reason": "module_disabled"})
+    add("overrides_valid", "ok" if not invalid else "warn", "Surcharges cohérentes",
+        f"{len(invalid)} surcharge(s) à nettoyer" if invalid else "aucune surcharge invalide")
+    inactive = sum(1 for u in users if u.get("active") is False)
+    by_role: dict[str, int] = {}
+    for u in users:
+        by_role[u.get("role") or "?"] = by_role.get(u.get("role") or "?", 0) + 1
+    return {
+        "tenant_id": tenant["id"], "mode_effective": resolve_mode(tenant), "modules_effective": sorted(enabled),
+        "observation": {"since": shadow_since, "days": days, "shadow_denies": len(denies), "by_key": denies_out},
+        "users": {"total": len(users), "inactive": inactive, "by_role": by_role, "unknown_role": unknown,
+                  "with_override": sum(1 for u in users if u.get("permissions_override"))},
+        "invalid_overrides": invalid,
+        "checks": checks,
+        "ready": all(c["status"] != "fail" for c in checks),
+    }
 
 
 # ---------------------------------------------------------------------------

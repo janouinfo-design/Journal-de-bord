@@ -1,7 +1,9 @@
 import { create } from 'zustand';
-import { fetchMe, login as apiLogin, logout as apiLogout, getAccessToken } from '@/api/client';
+import { fetchMe, login as apiLogin, logout as apiLogout, getAccessToken, MePayload } from '@/api/client';
 import { getMyProfile } from '@/api/ble';
 import { logger } from '@/utils/logger';
+import { describeApiError, errorCode } from '@/utils/apiError';
+import { Access, EMPTY_ACCESS, can as canPolicy, hasModule as hasModulePolicy } from '@/navigation/tabsPolicy';
 
 export type AuthUser = {
   id: string;
@@ -12,14 +14,18 @@ export type AuthUser = {
 
 type AuthState = {
   user: AuthUser | null;
+  access: Access; // modules du client + permissions effectives (/auth/me, recalculées à chaque appel)
   loading: boolean;
   error: string | null;
   mustChangePassword: boolean;
   signIn: (email: string, password: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   bootstrap: () => Promise<void>;
+  refreshAccess: () => Promise<void>;
   refreshMustChangePassword: () => Promise<void>;
   clearMustChangePassword: () => void;
+  can: (...perms: string[]) => boolean;
+  hasModule: (code?: string) => boolean;
 };
 
 // Normalise l'utilisateur serveur : le backend renvoie `name`, l'app utilise `full_name`.
@@ -33,8 +39,20 @@ function normalizeUser(raw: any): AuthUser | null {
   };
 }
 
+export function normalizeAccess(me: Partial<MePayload> | null | undefined): Access {
+  // `loaded` seulement si le backend enrichi a répondu ; sinon l'UI ne masque rien (le serveur tranche).
+  const loaded = Array.isArray(me?.modules_enabled) && Array.isArray(me?.permissions_effective);
+  return {
+    modules: me?.modules_enabled ?? [],
+    permissions: me?.permissions_effective ?? [],
+    mode: me?.access_control_mode ?? 'legacy',
+    loaded,
+  };
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
+  access: EMPTY_ACCESS,
   loading: true,
   error: null,
   mustChangePassword: false,
@@ -43,16 +61,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const token = await getAccessToken();
       if (!token) {
-        set({ user: null, loading: false });
+        set({ user: null, access: EMPTY_ACCESS, loading: false });
         return;
       }
       const me = await fetchMe();
-      set({ user: normalizeUser(me), loading: false });
+      set({ user: normalizeUser(me.user), access: normalizeAccess(me), loading: false });
       // Vérifie must_change_password via le profil chauffeur.
       await get().refreshMustChangePassword();
     } catch (e) {
       logger.warn('auth', 'bootstrap failed; clearing session', e);
-      set({ user: null, loading: false });
+      set({
+        user: null,
+        access: EMPTY_ACCESS,
+        loading: false,
+        error: errorCode(e) === 'account_disabled' ? describeApiError(e, '') : null,
+      });
     }
   },
 
@@ -60,15 +83,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const data = await apiLogin(email, password);
-      set({ user: normalizeUser(data.user), loading: false });
+      let access = EMPTY_ACCESS;
+      try {
+        access = normalizeAccess(await fetchMe());
+      } catch (e) {
+        logger.warn('auth', 'fetchMe after login failed; access left empty', e);
+      }
+      set({ user: normalizeUser(data.user), access, loading: false });
       await get().refreshMustChangePassword();
       return true;
     } catch (e: unknown) {
-      const msg =
-        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        'Identifiants incorrects ou accès temporairement bloqué';
+      const msg = describeApiError(e, 'Identifiants incorrects ou accès temporairement bloqué');
       set({ loading: false, error: msg });
       return false;
+    }
+  },
+
+  // Recharge modules / permissions (retour au premier plan, après un refus 403…).
+  refreshAccess: async () => {
+    try {
+      const me = await fetchMe();
+      set({ user: normalizeUser(me.user), access: normalizeAccess(me) });
+    } catch (e) {
+      if (errorCode(e) === 'account_disabled') {
+        set({ user: null, access: EMPTY_ACCESS, error: describeApiError(e, '') });
+        return;
+      }
+      logger.warn('auth', 'refreshAccess failed', e);
     }
   },
 
@@ -86,6 +127,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signOut: async () => {
     await apiLogout();
-    set({ user: null, mustChangePassword: false });
+    set({ user: null, access: EMPTY_ACCESS, mustChangePassword: false });
   },
+
+  can: (...perms: string[]) => canPolicy(get().access, get().user?.role, ...perms),
+  hasModule: (code?: string) => hasModulePolicy(get().access, code),
 }));

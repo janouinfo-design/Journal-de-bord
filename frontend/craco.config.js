@@ -76,6 +76,17 @@ webpackConfig.devServer = (devServerConfig) => {
     "Content-Security-Policy": iframeCsp,
   };
 
+  // Overlay dev : ignorer l'avertissement navigateur bénin « ResizeObserver loop … »
+  // (Radix Dialog + contenu asynchrone), sans effet en production.
+  const prevOverlay = devServerConfig.client?.overlay;
+  devServerConfig.client = {
+    ...(devServerConfig.client || {}),
+    overlay: {
+      ...(typeof prevOverlay === "object" ? prevOverlay : {}),
+      runtimeErrors: (error) => !/ResizeObserver loop/.test(error?.message || ""),
+    },
+  };
+
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
     const originalSetupMiddlewares = devServerConfig.setupMiddlewares;

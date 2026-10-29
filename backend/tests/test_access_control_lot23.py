@@ -258,3 +258,33 @@ def test_enforce_on_migrated_routers(mongo, tenant):
     assert r.status_code == 403 and _code(r) == "module_disabled" and r.json()["detail"]["module"] == "fuel_cards"
     assert requests.get(f"{BASE}/livre/fuel/transactions", headers=_h(_login(u["admin"]["creds"])), timeout=15).status_code == 200
     mongo.tenants.update_one({"id": tid}, {"$set": {"access_control_mode": "legacy"}})
+
+
+
+def test_enforce_driver_private_mode_module(mongo, tenant):
+    """Lot 5 : `/driver/private-mode` dépend du module `private_mode` (comme les réglages web),
+    pas seulement de `drivers` — l'app chauffeur masque la carte, le backend tranche en enforce."""
+    tid = tenant["id"]
+    drv = _h(_login(tenant["users"]["driver"]["creds"]))
+    sa = _h(_login(SUPER))
+    mongo.tenants.update_one({"id": tid}, {"$set": {"access_control_mode": "enforce"}})
+    try:
+        requests.put(f"{BASE}/admin/tenants/{tid}/modules", headers=sa,
+                     json={"modules_enabled": {"private_mode": False}}, timeout=15)
+        for method in ("get", "post"):
+            r = requests.request(method, f"{BASE}/livre/driver/private-mode", headers=drv,
+                                 json={"mode": "PRIVATE"} if method == "post" else None, timeout=15)
+            assert r.status_code == 403 and _code(r) == "module_disabled", (method, r.text)
+            assert r.json()["detail"]["module"] == "private_mode" and r.json()["detail"].get("msg")
+        requests.put(f"{BASE}/admin/tenants/{tid}/modules", headers=sa,
+                     json={"modules_enabled": {"private_mode": True}}, timeout=15)
+        r = requests.get(f"{BASE}/livre/driver/private-mode", headers=drv, timeout=15)
+        assert r.status_code != 403, r.text  # chauffeur non lié ⇒ erreur métier (jamais un refus d'accès)
+        # module `drivers` ON mais permission retirée ⇒ permission_denied lisible
+        mongo.users.update_one({"id": tenant["users"]["driver"]["id"]},
+                               {"$set": {"permissions_override": {"grant": [], "revoke": ["identification.self"]}}})
+        r = requests.get(f"{BASE}/livre/driver/private-mode", headers=drv, timeout=15)
+        assert r.status_code == 403 and _code(r) == "permission_denied", r.text
+    finally:
+        mongo.users.update_one({"id": tenant["users"]["driver"]["id"]}, {"$unset": {"permissions_override": ""}})
+        mongo.tenants.update_one({"id": tid}, {"$set": {"access_control_mode": "legacy"}, "$unset": {"modules_enabled": ""}})

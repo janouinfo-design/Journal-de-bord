@@ -155,7 +155,7 @@ async def driver_stop(user=Depends(require_permission("identification.self", "id
 
 # ---------- Phase 2 — Bascule Privé / Professionnel (backend autoritaire) ----------
 @router.get("/driver/private-mode")
-async def driver_private_mode_get(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, parity_exempt=("lecture_seule",)))):
+async def driver_private_mode_get(user=Depends(require_permission("identification.self", "identification.view", legacy_roles=None, module="private_mode", parity_exempt=("lecture_seule",)))):
     """État courant Privé/Professionnel du véhicule de la session du chauffeur.
     Retour : {state, allowed, reason, vehicle_id, tracker_id, last_transition_at, capability}.
     Aucune position exposée. Backend autoritaire (gate centrale fail-closed)."""
@@ -239,7 +239,7 @@ class PrivateModeIn(BaseModel):
 
 
 @router.post("/driver/private-mode")
-async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None))):
+async def driver_private_mode_set(payload: PrivateModeIn, user=Depends(require_permission("identification.self", "identification.edit", legacy_roles=None, module="private_mode"))):
     """Intention métier de bascule : {"mode": "PRIVATE"|"BUSINESS"}.
     Le backend résout véhicule/tracker/capability, applique la commande (GATED) et confirme.
     Aucun tracker_id/raw command/tenant libre accepté depuis le frontend."""

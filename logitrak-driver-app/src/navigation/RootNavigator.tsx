@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
-import { Text, View, ActivityIndicator } from 'react-native';
+import { Text, View, ActivityIndicator, AppState, AppStateStatus } from 'react-native';
 import { LoginScreen } from '@/screens/LoginScreen';
 import { DriverScreen } from '@/screens/DriverScreen';
 import { TripsScreen } from '@/screens/TripsScreen';
@@ -13,6 +13,7 @@ import { TripDetailScreen } from '@/screens/TripDetailScreen';
 import { ChangePasswordScreen } from '@/screens/ChangePasswordScreen';
 import { VehiclePickerScreen } from '@/screens/VehiclePickerScreen';
 import { useAuthStore } from '@/store/authStore';
+import { visibleTabs } from '@/navigation/tabsPolicy';
 import { colors } from '@/theme/colors';
 import type { Vehicle } from '@/api/ble';
 
@@ -40,6 +41,17 @@ function TabIcon({ symbol, color }: { symbol: string; color: string }) {
 }
 
 function MainTabs() {
+  const { access, user, refreshAccess } = useAuthStore();
+  // Lot 5 : onglets masqués si le module est coupé pour le client ou la permission retirée.
+  const tabs = visibleTabs(access, user?.role);
+  // Recharge modules / permissions au retour au premier plan (et si l'accès n'a pas pu être chargé).
+  useEffect(() => {
+    if (!access.loaded) refreshAccess();
+    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') refreshAccess();
+    });
+    return () => sub.remove();
+  }, [access.loaded, refreshAccess]);
   return (
     <Tab.Navigator
       screenOptions={{
@@ -51,22 +63,26 @@ function MainTabs() {
         tabBarInactiveTintColor: colors.textMuted,
       }}
     >
-      <Tab.Screen
-        name="Conduite"
-        component={DriverScreen}
-        options={{
-          title: 'Conduite',
-          tabBarIcon: ({ color }) => <TabIcon symbol="🚚" color={color} />,
-        }}
-      />
-      <Tab.Screen
-        name="Trajets"
-        component={TripsScreen}
-        options={{
-          title: 'Mes trajets',
-          tabBarIcon: ({ color }) => <TabIcon symbol="🗺️" color={color} />,
-        }}
-      />
+      {tabs.includes('Conduite') && (
+        <Tab.Screen
+          name="Conduite"
+          component={DriverScreen}
+          options={{
+            title: 'Conduite',
+            tabBarIcon: ({ color }) => <TabIcon symbol="🚚" color={color} />,
+          }}
+        />
+      )}
+      {tabs.includes('Trajets') && (
+        <Tab.Screen
+          name="Trajets"
+          component={TripsScreen}
+          options={{
+            title: 'Mes trajets',
+            tabBarIcon: ({ color }) => <TabIcon symbol="🗺️" color={color} />,
+          }}
+        />
+      )}
       <Tab.Screen
         name="Profil"
         component={ProfileScreen}
