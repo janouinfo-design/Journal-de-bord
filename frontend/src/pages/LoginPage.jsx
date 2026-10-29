@@ -16,6 +16,8 @@ const DEMO = [
   { id: TEST_IDS.auth.demoAdmin, label: "Admin", email: "admin@logitrak.ch", password: "admin123", desc: "Accès complet" },
   { id: TEST_IDS.auth.demoManager, label: "Gestionnaire", email: "manager@logitrak.ch", password: "manager123", desc: "Selon politique" },
   { id: TEST_IDS.auth.demoDriver, label: "Chauffeur", email: "chauffeur@logitrak.ch", password: "chauffeur123", desc: "Ses trajets" },
+  // Mot de passe volontairement absent : secret réel (backend/.env), jamais embarqué dans le bundle.
+  { id: TEST_IDS.auth.demoSuperadmin, label: "Super Admin", email: "superadmin@logitrak.ch", password: "", desc: "Plateforme Logitrak" },
 ];
 
 // Vignettes de démo affichées uniquement si le build le demande (préversion/test).
@@ -45,6 +47,7 @@ export default function LoginPage() {
   function pickDemo(d) {
     setEmail(d.email);
     setPwd(d.password);
+    if (!d.password) setTimeout(() => document.getElementById("pwd")?.focus(), 0);
   }
 
   return (

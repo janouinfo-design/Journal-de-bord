@@ -1,5 +1,8 @@
 # CHANGELOG — Livre de bord LOGITRAK
 
+## 29/10/2026 — Login : vignette « Super Admin » dans les comptes de démo
+- `frontend/src/pages/LoginPage.jsx` + `constants/testIds.js` : 4e vignette « Super Admin — Plateforme Logitrak » (`auth-demo-superadmin`), visible uniquement avec `REACT_APP_SHOW_DEMO_ACCOUNTS=true` (preview). Pré-remplit l'email `superadmin@logitrak.ch` et focalise le champ mot de passe ; le mot de passe (secret réel, `backend/.env`) n'est **pas** embarqué dans le bundle.
+
 ## 28/10/2026 — PHASE 4C · LOT 1 : FONDATIONS BACKEND MODULES / PERMISSIONS — LOT 1 : PASS
 
 ### Périmètre réalisé (backend uniquement, mode `legacy` actif)

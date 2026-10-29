@@ -8,6 +8,7 @@ export const TEST_IDS = {
     demoAdmin: "auth-demo-admin",
     demoManager: "auth-demo-manager",
     demoDriver: "auth-demo-driver",
+    demoSuperadmin: "auth-demo-superadmin",
   },
   layout: {
     sidebarPrimary: "sidebar-primary",
