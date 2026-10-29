@@ -137,6 +137,9 @@ export default function TenantModulesDialog({ tenant, catalog, onClose, onSaved 
                         {blockedBy.length > 0 && (
                           <p className="text-[11px] text-amber-600">Forcé OFF : {blockedBy.map(labelOf).join(", ")} désactivé</p>
                         )}
+                        {blockedBy.length === 0 && !flags[m.code] && m.depends_on.length > 0 && initialFlags[m.code] && (
+                          <p className="text-[11px] text-slate-400">Réactivez-le explicitement si souhaité.</p>
+                        )}
                       </div>
                       <Switch data-testid={`module-switch-${m.code}`} checked={!!flags[m.code]}
                               disabled={blockedBy.length > 0}

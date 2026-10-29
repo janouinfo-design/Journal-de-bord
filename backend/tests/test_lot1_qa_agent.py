@@ -194,11 +194,18 @@ def test_superadmin_header():
 
 
 # ---------------- Office role not creatable + disabled account via API ----------------
-def test_office_role_refused():
+def test_office_role_creatable_since_lot3(mongo):
+    """Lot 1 refusait `office` ; depuis le Lot 3 le rôle est créable (modèle sans positions.view)."""
+    email = f"lot1-office-{uuid.uuid4().hex[:6]}@example.com"
     r = requests.post(f"{BASE}/livre/team/users", headers=_h(_login(ADMIN)),
-                      json={"email": f"lot1-office-{uuid.uuid4().hex[:6]}@example.com", "password": "Xx123456!",
-                            "name": "QA office", "role": "office"}, timeout=T)
-    assert r.status_code == 400 and "Rôle invalide" in str(_detail(r)), r.text
+                      json={"email": email, "password": "Xx123456!", "name": "QA office", "role": "office"}, timeout=T)
+    try:
+        assert r.status_code == 200, r.text
+        me = requests.post(f"{BASE}/auth/login", json={"email": email, "password": "Xx123456!"}, timeout=T).json()
+        perms = requests.get(f"{BASE}/auth/me", headers=_h(me["access_token"]), timeout=T).json()["permissions_effective"]
+        assert "fuel.edit" in perms and "positions.view" not in perms
+    finally:
+        mongo.users.delete_many({"email": {"$regex": "^lot1-office-"}})
 
 
 def test_disabled_account_flow(mongo):
@@ -390,6 +397,7 @@ def test_suspended_tenant(mongo, qa_tenant):
 def test_zz_default_tenant_untouched(mongo):
     t = mongo.tenants.find_one({"id": "default"}, {"_id": 0})
     assert t["status"] == "active"
-    assert "modules_enabled" not in t and "access_control_mode" not in t
+    # Lot 2 : default en observation (shadow) sur décision utilisateur ; jamais enforce, aucun module initialisé
+    assert "modules_enabled" not in t and t.get("access_control_mode") in (None, "legacy", "shadow")
     for c in (ADMIN, MANAGER, DRIVER, READER, SUPER, ADMIN_B):
         _login(c, cache=False)

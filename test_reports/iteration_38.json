@@ -1,0 +1,38 @@
+{
+  "summary": "Phase 4C LOT 2 + LOT 3 QA. Backend: new suite tests/test_lot23_qa_agent.py, 12/12 pass. It covers the modules catalog, tenant fields, the modules PUT (dependency cascade, unknown_module, audit, /auth/me), the PATCH mode bogus/enforce + audit, creating an office user, the permissions catalog (53 perms, roles, blocked roles), all 4 override validation codes, editing your own permissions -> 400, a valid grant/revoke + GPS audit, reset on empty body and reset on role change, the legacy parity matrix on tenant default (14 endpoints x roles, no 5xx), the enforce matrix on a throwaway tenant (office/manager override/driver/superadmin module_disabled), and the shadow audit. Frontend: all LOT 2/LOT 3 flows pass (login tiles, nav and sub-tabs for 4 roles, redirect, Modules dialog incl. cascade, persistence, enforce confirm, restore, audit shadow filter, Team screen incl. office creation, permissions dialog, GPS warning, toast, 'Personnalisées +1 / −0', reset, chauffeur sensitive disabled, Désactiver/Réactiver/Supprimer). One minor race-condition bug found on the audit page.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/livre/fines (lecture_seule)", "issue": "Returns 403 with detail 'Compte en lecture seule — action non autorisée' (read-only middleware, pre-existing), not 'Accès refusé'. This is fine; noted for future parity assertions."},
+      {"endpoint": "shadow on default", "issue": "1 access.shadow_deny entry: lecture_seule GET /api/livre/driver/vehicles is missing 'identification.self'. Legacy allows the call (then 400 'non lié à un chauffeur'). The call would become 403 in enforce. It is harmless, but it shows the template differs from legacy on that route."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminAuditPage 'Refus observés' filter", "issue": "Race condition: the load() responses are not guarded against stale results. If the user clicks audit-shadow-filter while the first unfiltered load (limit 300) is still running, the slower unfiltered response arrives last and overwrites the rows. The banner then shows '300 refus observés' with auth.login rows, even though only 1 shadow_deny exists in the DB. Reproduced on the first run; it works when clicked after the page has settled. Typing in audit-action-filter fires one request per keystroke and has the same race. Fix: keep a request id / AbortController in load() and ignore stale responses.", "selector": "[data-testid=audit-shadow-filter], [data-testid=audit-shadow-banner]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "TenantModulesDialog", "issues": ["Turning fuel back ON does not turn fuel_cards back ON (it stays OFF but becomes enabled). This is acceptable but could surprise the user; a hint would help."]},
+      {"screen": "Data hygiene", "issues": ["Preview DB holds 87 'TEST*' tenants and many 'ivan.*@example.com' users in tenant default, left by earlier agents. This clutters the Clients and Team tables (not created in this run)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_lot23_qa_agent.py", "/app/test_reports/pytest/lot23_qa.xml"],
+  "action_items": [
+    "AdminAuditPage.load(): ignore stale responses (request counter or AbortController) so the shadow filter and banner count cannot be overwritten by an earlier unfiltered request; consider debouncing the action text input",
+    "Optional: decide whether lecture_seule should get 'identification.self' or whether /driver/vehicles is OK to deny in enforce (the only shadow deny observed on default)",
+    "Optional: purge leftover TEST_* tenants / ivan.* users from preview DB"
+  ],
+  "critical_code_review_comments": [
+    "access_control.validate_override checks the sensitive rule before the read-only write rule. Granting a sensitive write perm to lecture_seule returns sensitive_not_allowed_for_role. Both are refusals, so this is fine.",
+    "team.py PUT permissions: revoke = set(revoke) - set(grant). Grant takes precedence silently; worth documenting in the UI.",
+    "effective_permissions for superadmin is also filtered by module, which correctly gives no bypass (verified: superadmin with X-Tenant-Id and fines OFF gets 403 module_disabled)."
+  ],
+  "updated_files": ["/app/backend/tests/test_lot23_qa_agent.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "~97% (all flows pass; 1 race bug on audit filter)"},
+  "seed_data_creation": "Throwaway tenant qa23-<rand> (5 users @qa23.example.com) created and removed by the pytest fixture; UI tenant qa23-ui and UI user lot3-qa-3480@example.com created and removed, along with their audit docs. Verified 0 leftovers. Tenant default is still mode=shadow, modules_enabled=None, active.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest tests/test_lot23_qa_agent.py (about 20s, self-cleaning). Not verified in UI: the 'retirée' and 'implicite' origin badges (only 'rôle', 'non' and 'accordée' were seen). The audit-page race is only visible if you click the shadow filter within about 1s of the page loading.",
+  "rca of the issue": "AdminAuditPage: useEffect(load,[load]) re-runs on every action change without cancelling earlier requests. setRows(data) from an older request can land after a newer one. To reproduce: open /admin/audit and click 'Refus observés' straight away. Fix: a ref counter, e.g. const reqId=++ref.current; ... if(reqId!==ref.current) return;"
+}

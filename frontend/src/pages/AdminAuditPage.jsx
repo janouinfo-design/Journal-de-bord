@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, formatApiErrorDetail, fmtDateTime } from "@/lib/api";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -27,21 +27,24 @@ export default function AdminAuditPage() {
   const [tenant, setTenant] = useState("all");
   const [action, setAction] = useState("");
   const [loading, setLoading] = useState(true);
+  const reqId = useRef(0);
 
   const tenantName = (tid) => tenants.find((t) => t.id === tid)?.name || tid || "—";
 
   const load = useCallback(async () => {
+    const id = ++reqId.current;
     setLoading(true);
     try {
       const params = { limit: 300 };
       if (tenant !== "all") params.tenant_id = tenant;
       if (action.trim()) params.action = action.trim();
       const { data } = await api.get("/admin/audit", { params });
+      if (id !== reqId.current) return; // réponse obsolète (filtre modifié entre-temps)
       setRows(data);
     } catch (e) {
-      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+      if (id === reqId.current) toast.error(formatApiErrorDetail(e.response?.data?.detail));
     } finally {
-      setLoading(false);
+      if (id === reqId.current) setLoading(false);
     }
   }, [tenant, action]);
 

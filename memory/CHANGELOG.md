@@ -1,5 +1,41 @@
 # CHANGELOG — Livre de bord LOGITRAK
 
+## 29/10/2026 — PHASE 4C · LOTS 2 & 3 : MODULES PAR CLIENT (SUPER ADMIN) & PERMISSIONS PAR UTILISATEUR
+
+### Lot 2 — Super Admin « Modules & licences »
+- Backend `routes/admin.py` : `GET /admin/modules/catalog` ; `PUT /admin/tenants/{id}/modules` (`normalize_modules` : dict complet, dépendance OFF ⇒ dépendant OFF, 400 `unknown_module`, audit `tenant.modules_update` before/after/enabled/disabled, `refresh_tenant_cache`) ; `PATCH /admin/tenants/{id}` + `access_control_mode` (400 si hors legacy|shadow|enforce, audit before/after) ; `_tenant_out` → `modules_enabled`, `modules_effective`, `access_control_mode`, `access_control_mode_effective` ; `TENANT_ROLES` importé d'`access_control` (office inclus).
+- Frontend : `AdminTenantsPage` colonne « Modules » (n modules + badge Legacy / Observation / Appliqué, bouton `tenant-modules-btn-<id>`), `components/admin/TenantModulesDialog.jsx` (groupes Cœur / Métier / Réservés, 17 `module-switch-<code>`, cascade de dépendances côté client identique au backend, hint « Forcé OFF », sélecteur `tenant-mode-select`, `AlertDialog` de confirmation pour enforce, compteur `x / 17`).
+- Décision d'interprétation (réponse double à la question 1) : les 17 modules sont affichés et commutables ; les 7 réservés portent le tag « réservé » et n'ont aucun effet tant que leur backend n'existe pas.
+
+### Lot 3 — Utilisateurs, rôle office, permissions individuelles
+- Backend `routes/team.py` : `TEAM_ROLES = TENANT_ROLES` (office créable) ; `GET /team/permissions/catalog` (users.view) ; `GET /team/users/{id}/permissions` ; `PUT /team/users/{id}/permissions` (users.permissions ; `validate_override` → 400 `unknown_permission` | `module_disabled` | `sensitive_not_allowed_for_role` | `write_not_allowed_for_read_only` ; auto-modification et compte superadmin refusés ; grant prioritaire sur revoke ; grant+revoke vides ⇒ `$unset` ; audit `user.permissions_update` {email, role, before, after, granted, revoked, sensitive_granted, gps_access_granted, reason}) ; changement de rôle ⇒ `permissions_override` réinitialisée (audit `permissions_override_reset`).
+- `access_control.py` : `require_permission(..., parity_exempt=())`, `normalize_modules`, `modules_catalog`, `permissions_catalog` (modules ordonnés), template `manager` sans `fuel.statements` (parité legacy : décomptes gérés par admin seul ; office le garde).
+- **Migration `require_roles` → `require_permission` (121 routes, table explicite)** : fuel 37 (`fuel.view` / `fuel_cards.view|edit` module fuel_cards / `fuel.edit` / `fuel.reconcile` / `fuel.import` / `fuel.admin` / `vehicles.admin` / `fuel.view|view_self` / `fuel.edit_self|edit|reconcile`), fines 16 (`fines.view|edit|export|admin`, `fines.view|view_self` pour mine/meta), energy 14 (`energy.view|view_self|edit|admin|export`), ble 21 (`identification.view|edit`, `drivers.admin`, `identification.self|edit` pour l'ingestion), identification 16 (`identification.self|view` en GET avec `parity_exempt=("lecture_seule",)`, `identification.self|edit` en écriture), fuel_statements 9 (`fuel.view`, `fuel.statements`, `fuel.export`), weekly/monthly 6 (`reports.admin`), odometer_calibration 2 (`vehicles.admin`, module journal). Registre : 186 entrées, 50/53 permissions liées (template-only : `fines.pay`, `journal.export`).
+- Test de parité T24 étendu : `lecture_seule` considéré refusé en legacy sur les endpoints dont toutes les permissions sont des écritures (blocage global existant) ; exemptions déclarées vérifiées par `test_parity_exemptions_are_documented` (exactement 9 GET `/driver/*`, rôle lecture_seule — console chauffeur jamais utilisée par ce rôle, unique refus observé en shadow sur Logitrak).
+- Frontend : `AuthContext` (`refreshMe`, `can(...perms)`, `hasModule(code)`, `tenant`, `modules`, `permissions`, `accessMode`) ; `ProtectedRoute` `roles | perms | module` ; `AppLayout` onglets filtrés module + permission (onglets « self » chauffeur gardent `roles`), `ConflictInbox` sous `can("trips.classify")` ; `App.js` routes migrées (AML supprimé) ; sous-onglets `DriversLayout` / `EnergyLayout` / `FuelLayout` / `AdministrationLayout` filtrés ; `lib/roles.js` (labels, options, hints, office) ; `TeamUsersPage` réécrit (rôle Office, colonnes Permissions + Statut, Désactiver / Réactiver principal, DELETE secondaire avec avertissement, actions conditionnées par `can`) ; `components/livre/UserPermissionsDialog.jsx` + `PermissionGroup.jsx` (réplique locale d'`expand`/`effective_permissions`, badges rôle / accordée / retirée / implicite / non, verrouillage sensible driver & lecture_seule, cascade view ⇒ edit/admin au décochage, avertissement GPS + motif, « Revenir au rôle »).
+- Labels office ajoutés : `AdminUsersPage` (+ option de rôle), `ImpersonationBanner`, `TeamImpersonationPage`, `AppLayout`.
+
+### Mode Observation (shadow) & Audit
+- Tenant `default` (Logitrak) : `access_control_mode=shadow` écrit via `PATCH /admin/tenants/default` (audit `tenant.update` before legacy → after shadow). Aucune initialisation de `modules_enabled`. Env serveur inchangé (`legacy`).
+- `AdminAuditPage` : bouton « Refus observés » (`audit-shadow-filter`), bannière `audit-shadow-banner`, détail lisible, **course de requêtes corrigée** (compteur de requête : réponses obsolètes ignorées — bug trouvé par l'agent de test).
+- Premier constat : 1 seul refus observé sur Logitrak — `lecture_seule` GET `/livre/driver/vehicles` (`identification.self`), c'est l'exemption déclarée ; aucun autre écart entre matrice legacy et templates.
+
+### Login
+- Vignette « Lecture seule » (`auth-demo-readonly`, lecture@logitrak.ch / lecture123).
+
+### Tests
+- `tests/test_access_control_lot23.py` 23/23 (catalogue, cascade + audit modules, mode, office, catalogue permissions, règles de surcharge + audit GPS, matrice legacy 17 routes × rôles sur tenant default, enforce sur tenant jetable). `tests/test_access_control_lot1.py` 19/19 (T24 sur 186 entrées). Tests `access_control_mode == "legacy"` sur default assouplis en `in ("legacy","shadow")`.
+- Agent de test `test_reports/iteration_38.json` : backend 12/12 (`tests/test_lot23_qa_agent.py`), frontend tous flux OK (4 rôles de navigation, dialogs, enforce confirm, Équipe, désactivation) ; 1 bug MEDIUM (course audit) corrigé.
+- Régression backend complète : voir « Résultat régression » ci-dessous.
+
+### Résultat régression
+- **Régression backend complète : 956 PASS / 2 FAIL / 4 SKIP / 4 warnings — 732 s (13:50:06 → 14:02:20 UTC).**
+  Les 2 échecs sont deux attentes de l'agent de test Lot 1 rendues caduques par les décisions des Lots 2/3 (pas des régressions) :
+  `test_lot1_qa_agent::test_office_role_refused` (office est désormais créable) et `test_zz_default_tenant_untouched`
+  (default porte `access_control_mode=shadow` sur demande). Tests mis à jour (`test_office_role_creatable_since_lot3`,
+  default autorisé en legacy|shadow, jamais enforce) → `test_lot1_qa_agent.py` 25 PASS / 1 skip. `test_energy_cache` E2E : PASS.
+  Baseline Lot 1 922/0/4 → 958 tests (+23 Lot 2/3, +12 QA Lot 2/3, +1 exemptions), 0 régression fonctionnelle.
+
 ## 29/10/2026 — Login : vignette « Super Admin » dans les comptes de démo
 - `frontend/src/pages/LoginPage.jsx` + `constants/testIds.js` : 4e vignette « Super Admin — Plateforme Logitrak » (`auth-demo-superadmin`), visible uniquement avec `REACT_APP_SHOW_DEMO_ACCOUNTS=true` (preview). Pré-remplit l'email `superadmin@logitrak.ch` et focalise le champ mot de passe ; le mot de passe (secret réel, `backend/.env`) n'est **pas** embarqué dans le bundle.
 
