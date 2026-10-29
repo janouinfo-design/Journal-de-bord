@@ -2,7 +2,7 @@
 office role, legacy parity on tenant default (shadow), enforce on a throwaway tenant, shadow audit."""
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pymongo
 import pytest
@@ -138,11 +138,20 @@ def test_patch_mode(mongo, qa):
     r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=_h(SUPER),
                        json={"access_control_mode": "bogus"}, timeout=T)
     assert r.status_code == 400, r.text
+    # garde-fou Lot 6 : enforce refusé (409) sans 7 jours d'Observation ; autorisé après observation
+    r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=_h(SUPER),
+                       json={"access_control_mode": "enforce"}, timeout=T)
+    assert r.status_code == 409 and _code(r) == "enforce_not_ready", r.text
+    r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=_h(SUPER),
+                       json={"access_control_mode": "shadow"}, timeout=T)
+    assert r.status_code == 200, r.text
+    mongo.audit_log.update_one({"tenant_id": tid, "action": "tenant.update", "details.after.access_control_mode": "shadow"},
+                               {"$set": {"at": (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()}})
     r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=_h(SUPER),
                        json={"access_control_mode": "enforce"}, timeout=T)
     assert r.status_code == 200 and r.json()["access_control_mode_effective"] == "enforce", r.text
     a = mongo.audit_log.find_one({"tenant_id": tid, "action": "tenant.update"}, sort=[("at", -1)])
-    assert a["details"]["before"]["access_control_mode"] == "legacy"
+    assert a["details"]["before"]["access_control_mode"] == "shadow"
     assert a["details"]["after"]["access_control_mode"] == "enforce"
     r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=_h(SUPER),
                        json={"access_control_mode": "legacy"}, timeout=T)

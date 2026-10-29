@@ -13,7 +13,7 @@ from pydantic import BaseModel, EmailStr
 from app.audit import log_audit
 from app.auth import get_current_user, hash_password
 from app.access_control import (MODES, TENANT_ROLES, enabled_modules, resolve_mode,
-                                normalize_modules, modules_catalog, enforce_readiness)
+                                normalize_modules, modules_catalog, enforce_readiness, deny_exclusion)
 from app.db import get_raw_db
 from app.tenancy import fetch_navixy_identity
 from app.tenant_context import refresh_tenant_cache
@@ -72,13 +72,9 @@ async def modules_catalog_endpoint(current=Depends(require_superadmin)):
     return {"modules": modules_catalog(), "modes": list(MODES)}
 
 
-@router.get("/tenants/{tenant_id}/enforce-readiness")
-async def tenant_enforce_readiness(tenant_id: str, current=Depends(require_superadmin)):
-    """Garde-fous avant le mode Appliqué : observation, refus observés, rôles, surcharges."""
-    db = get_raw_db()
-    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
-    if not tenant:
-        raise HTTPException(404, "Client introuvable")
+async def _readiness(db, tenant: dict) -> dict:
+    """Bilan garde-fous (source unique : endpoint + refus serveur du passage en enforce)."""
+    tenant_id = tenant["id"]
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
     users = await db.users.find({"tenant_id": tenant_id},
@@ -90,6 +86,16 @@ async def tenant_enforce_readiness(tenant_id: str, current=Depends(require_super
         {"_id": 0, "at": 1}, sort=[("at", -1)])
     shadow_since = last_shadow["at"] if last_shadow and resolve_mode(tenant) == "shadow" else None
     return enforce_readiness(tenant, users, denies, shadow_since, now)
+
+
+@router.get("/tenants/{tenant_id}/enforce-readiness")
+async def tenant_enforce_readiness(tenant_id: str, current=Depends(require_superadmin)):
+    """Garde-fous avant le mode Appliqué : observation ≥ N jours, refus observés, rôles, surcharges."""
+    db = get_raw_db()
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(404, "Client introuvable")
+    return await _readiness(db, tenant)
 
 
 @router.put("/tenants/{tenant_id}/modules")
@@ -188,6 +194,17 @@ async def update_tenant(tenant_id: str, payload: TenantUpdate, current=Depends(r
     if payload.access_control_mode is not None:
         if payload.access_control_mode not in MODES:
             raise HTTPException(400, "Mode invalide (legacy | shadow | enforce)")
+        if payload.access_control_mode == "enforce" and resolve_mode(tenant) != "enforce":
+            # Garde-fou serveur (Lot 6) : jamais d'enforce sans bilan vert (observation ≥ N jours, rôles, statut).
+            r = await _readiness(db, tenant)
+            if not r["ready"]:
+                await log_audit("tenant.enforce_refused", current,
+                                {"reasons": r["blocked_reasons"], "eligible_at": r["observation"]["eligible_at"]},
+                                tenant_id=tenant_id)
+                raise HTTPException(409, {"code": "enforce_not_ready",
+                                          "msg": "Passage en mode Appliqué refusé : " + " ; ".join(r["blocked_reasons"]),
+                                          "reasons": r["blocked_reasons"],
+                                          "eligible_at": r["observation"]["eligible_at"]})
         updates["access_control_mode"] = payload.access_control_mode
     if payload.navixy_api_url is not None:
         updates["navixy_api_url"] = payload.navixy_api_url.rstrip("/")
@@ -437,4 +454,13 @@ async def global_audit(tenant_id: Optional[str] = None, action: Optional[str] = 
     if action:
         q["action"] = {"$regex": action, "$options": "i"}
     rows = await db.audit_log.find(q, {"_id": 0}).sort("at", -1).to_list(min(limit, 1000))
+    # Refus observés : annotation de lecture (jamais d'écriture) si couverts par une fenêtre d'exclusion du client.
+    if any(r.get("action") == "access.shadow_deny" for r in rows):
+        excl = {t["id"]: t.get("observation_exclusions") or []
+                async for t in db.tenants.find({"observation_exclusions.0": {"$exists": True}},
+                                               {"_id": 0, "id": 1, "observation_exclusions": 1})}
+        for r in rows:
+            if r.get("action") == "access.shadow_deny":
+                ex = deny_exclusion(r, excl.get(r.get("tenant_id"), []))
+                r["excluded"] = {k: ex.get(k) for k in ("id", "reason", "from", "to")} if ex else None
     return rows

@@ -92,6 +92,7 @@ export default function TenantModulesDialog({ tenant, catalog, onClose, onSaved 
 
   const STATUS_ICON = { ok: CheckCircle2, warn: AlertTriangle, fail: XCircle };
   const STATUS_CLS = { ok: "text-emerald-600", warn: "text-amber-600", fail: "text-red-600" };
+  const fmtUtc = (iso) => (iso ? new Date(iso).toLocaleString("fr-CH", { dateStyle: "short", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "—");
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -208,8 +209,27 @@ export default function TenantModulesDialog({ tenant, catalog, onClose, onSaved 
                       ))}
                     </ul>
                   )}
+                  {readiness.observation.excluded > 0 && (
+                    <p data-testid="readiness-excluded" className="pl-6 text-[11px] text-slate-500"
+                       title={(readiness.observation.exclusions || []).map((x) => x.reason).join("\n")}>
+                      {readiness.observation.excluded} refus exclus du calcul — fenêtre de test identifiée
+                      {(readiness.observation.exclusions || []).map((x) => (
+                        <span key={x.id} className="block">
+                          {fmtUtc(x.from)} → {fmtUtc(x.to)} · modules {(x.modules || []).join(", ")} ({x.excluded_count})
+                        </span>
+                      ))}
+                    </p>
+                  )}
                   {!readiness.ready && (
-                    <p data-testid="readiness-blocked" className="text-xs font-semibold text-red-600">Passage bloqué : corrigez les points en échec.</p>
+                    <div data-testid="readiness-blocked" className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 space-y-0.5">
+                      <p className="font-semibold">Passage en mode Appliqué refusé par le serveur :</p>
+                      {(readiness.blocked_reasons || []).map((r) => <p key={r}>• {r}</p>)}
+                      {readiness.observation.eligible_at && (
+                        <p data-testid="readiness-eligible-at" className="font-semibold">
+                          Éligible à partir du {fmtUtc(readiness.observation.eligible_at)}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </>
               )}

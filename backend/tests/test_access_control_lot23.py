@@ -3,6 +3,7 @@ migration require_roles → require_permission des routeurs fuel / fines / energ
 Tenant jetable `ac23-*` créé / supprimé par le test ; tenant `default` jamais modifié."""
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
@@ -115,11 +116,18 @@ def test_tenant_mode_update_validation_and_audit(mongo, tenant):
     sa = _h(_login(SUPER))
     r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=sa, json={"access_control_mode": "bogus"}, timeout=15)
     assert r.status_code == 400
+    # garde-fou Lot 6 : enforce refusé sans N jours d'Observation (409, mode inchangé)
+    r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=sa, json={"access_control_mode": "enforce"}, timeout=15)
+    assert r.status_code == 409 and _code(r) == "enforce_not_ready", r.text
+    r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=sa, json={"access_control_mode": "shadow"}, timeout=15)
+    assert r.status_code == 200 and r.json()["access_control_mode_effective"] == "shadow"
+    mongo.audit_log.update_one({"tenant_id": tid, "action": "tenant.update", "details.after.access_control_mode": "shadow"},
+                               {"$set": {"at": (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()}})
     r = requests.patch(f"{BASE}/admin/tenants/{tid}", headers=sa, json={"access_control_mode": "enforce"}, timeout=15)
     assert r.status_code == 200 and r.json()["access_control_mode_effective"] == "enforce"
     row = mongo.audit_log.find_one({"tenant_id": tid, "action": "tenant.update",
                                     "details.fields": "access_control_mode"}, sort=[("at", -1)])
-    assert row["details"]["before"]["access_control_mode"] == "legacy"
+    assert row["details"]["before"]["access_control_mode"] == "shadow"
     assert row["details"]["after"]["access_control_mode"] == "enforce"
 
 

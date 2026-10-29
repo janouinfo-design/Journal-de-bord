@@ -87,13 +87,21 @@ export default function AdminAuditPage() {
         </div>
       </div>
 
-      {action === SHADOW_ACTION && (
-        <div data-testid="audit-shadow-banner" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <strong>{rows.length} refus observé{rows.length > 1 ? "s" : ""}</strong> — chaque ligne indique le type
-          (<code>module</code> ou <code>permission</code>), la clé manquante et la route appelée. Aucun de ces appels n'a été
-          bloqué : le mode Observation journalise sans refuser. Un refus est journalisé une fois par utilisateur, clé et jour.
-        </div>
-      )}
+      {action === SHADOW_ACTION && (() => {
+        const excluded = rows.filter((r) => r.excluded).length;
+        const valid = rows.length - excluded;
+        return (
+          <div data-testid="audit-shadow-banner" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <strong>{rows.length} refus observé{rows.length > 1 ? "s" : ""}</strong>
+            {excluded > 0 && (
+              <span data-testid="audit-shadow-split"> — <strong>{valid}</strong> à analyser · <strong>{excluded}</strong> exclu{excluded > 1 ? "s" : ""} du
+                calcul (fenêtre de test identifiée, événements conservés)</span>
+            )}
+            {" "}— chaque ligne indique le type (<code>module</code> ou <code>permission</code>), la clé manquante et la route appelée.
+            Aucun de ces appels n'a été bloqué : le mode Observation journalise sans refuser. Un refus est journalisé une fois par utilisateur, clé et jour.
+          </div>
+        );
+      })()}
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
@@ -132,6 +140,12 @@ export default function AdminAuditPage() {
                   </span>
                 </td>
                 <td className="px-4 py-2.5 text-xs text-slate-500 max-w-md truncate">
+                  {r.excluded && (
+                    <span data-testid={`audit-excluded-badge-${r.id}`} title={r.excluded.reason}
+                          className="inline-block mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-slate-200 text-slate-600 align-middle">
+                      exclu du calcul
+                    </span>
+                  )}
                   {detailsToText(r)}
                 </td>
               </tr>

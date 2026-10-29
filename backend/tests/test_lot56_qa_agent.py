@@ -183,13 +183,21 @@ def test_enforce_readiness_default():
     print("readiness:", {c["id"]: c["status"] for c in d["checks"]}, d["observation"]["shadow_denies"], d["ready"])
     assert d["tenant_id"] == "default" and d["mode_effective"] == "shadow"
     assert set(d["modules_effective"]) == LEGACY10
-    assert {"since", "days", "shadow_denies", "by_key"} <= set(d["observation"])
+    assert {"since", "days", "required_days", "eligible_at", "shadow_denies", "excluded", "exclusions", "by_key"} <= set(d["observation"])
     assert isinstance(d["observation"]["by_key"], list)
+    # fenêtre de test du 29/10 (fuel/fines/fuel_cards coupés par un test) exclue du calcul, événements conservés
+    assert d["observation"]["excluded"] >= 35 and d["observation"]["exclusions"][0]["modules"] == ["fines", "fuel", "fuel_cards"]
+    assert all(k["key"] not in ("fuel", "fines", "fuel_cards") and not k["key"].startswith(("fuel.", "fines."))
+               for k in d["observation"]["by_key"])
     assert {"total", "inactive", "by_role", "unknown_role", "with_override"} <= set(d["users"])
     ids = [c["id"] for c in d["checks"]]
     assert sorted(ids) == sorted(["tenant_active", "observation", "shadow_denies", "roles_known", "overrides_valid"])
     assert all(c["status"] in ("ok", "warn", "fail") for c in d["checks"])
-    assert d["ready"] is True
+    # garde-fou 7 jours : ready ⇔ aucun fail ; tant que l'observation est < 7 j, le passage reste refusé
+    assert d["ready"] == (not d["blocked_reasons"]) == all(c["status"] != "fail" for c in d["checks"])
+    assert d["observation"]["required_days"] == 7 and d["observation"]["eligible_at"]
+    if d["observation"]["days"] < 7:
+        assert d["ready"] is False and any("éligible le" in r for r in d["blocked_reasons"])
 
 
 def test_enforce_readiness_404_and_403():

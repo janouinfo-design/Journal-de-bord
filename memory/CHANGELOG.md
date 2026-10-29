@@ -1,6 +1,20 @@
 # CHANGELOG — Livre de bord LOGITRAK
 
-## 29/10/2026 — NETTOYAGE PREVIEW · LOT 5 APP CHAUFFEUR · LOT 6 PRÉPARATION ENFORCE
+## 29/10/2026 — GARDE-FOU 7 JOURS AVANT ENFORCE · EXCLUSION (LECTURE) DES REFUS SHADOW POLLUÉS
+
+### Fenêtre polluée identifiée et neutralisée sans toucher à l'audit
+- Fenêtre : `tenant.modules_update` **14:29:52 UTC** (fines/fuel/fuel_cards coupés par un test UI) → **14:55:47 UTC** (rétablis). 42 refus `access.shadow_deny` bruts sur Logitrak : **35 pollués** (module fines ×5, fuel ×5, fuel_cards ×3 ; permissions fines.* ×9, fuel.* ×13 — tous entre 14:30 et 14:37) et **7 légitimes** (`identification.self`, lecture@logitrak.ch, exemption documentée).
+- Méthode : `scripts/mark_polluted_shadow_window.py` (dry-run → `--apply`, idempotent) dérive la fenêtre des audits modules coupés→rétablis et l'enregistre dans `tenants.observation_exclusions[]` `{id, from, to, modules, reason, source, created_at}` + audit `tenant.observation_exclusion_add` (motif, 35 événements couverts). **Aucun événement supprimé ni modifié.**
+- Règle de lecture `access_control.deny_exclusion(deny, exclusions)` : refus exclu si `at ∈ [from, to]` et module du refus (clé module, ou module de la permission) ∈ `modules`. Utilisée par `enforce_readiness` (`observation.shadow_denies` = valides, `excluded`, `exclusions[]`), `scripts/enforce_preflight.py` (colonne `exclus=`) et `GET /admin/audit` (annotation `excluded` par ligne, page Audit : bannière « 42 refus — 7 à analyser · 35 exclus », badge « exclu du calcul »).
+
+### Garde-fou observation (configurable, côté serveur)
+- `OBSERVATION_MIN_DAYS` = env `ENFORCE_MIN_OBSERVATION_DAYS` (défaut 7). `enforce_readiness(..., min_days=None)` : observation `fail` si jamais en shadow ou `days < min_days` ; `observation.required_days`, `eligible_at` (= début shadow + N j), `blocked_reasons[]`.
+- `PATCH /admin/tenants/{id}` avec `access_control_mode=enforce` (depuis un autre mode) → `_readiness()` partagé ; si non prêt : **409 `{code: enforce_not_ready, msg, reasons, eligible_at}`**, mode inchangé, audit `tenant.enforce_refused`. Vérifié sur `default` : 409, reste shadow.
+- UI `TenantModulesDialog` : encart rouge « Passage en mode Appliqué refusé par le serveur » + raisons + « Éligible à partir du … », ligne « N refus exclus du calcul — fenêtre de test identifiée » avec bornes/modules ; bouton Confirmer désactivé. Vérifié par screenshot sur Client Test B (jamais observé) et Logitrak (0 j / 7, éligible 05/11/2026 13:39 UTC).
+- Tests : `tests/test_enforce_readiness.py` réécrit **9/9** (pur : clean, warnings non bloquants, garde-fou None/3 j/7 j/min_days configurable, exclusions = règle de lecture ; endpoint ; PATCH enforce 409 jamais observé + 409 à 2 j avec `eligible_at` + legacy libre ; PATCH autorisé après 8 j sur tenant jetable puis retour legacy immédiat, `count(enforce) == 0`). `tests/test_lot56_qa_agent.py::test_enforce_readiness_default` adapté (exclusions ≥ 35, ready ⇔ aucun fail, refusé tant que < 7 j).
+- **0 tenant réel passé en enforce** (seul un tenant jetable `ac6-*` l'est 1 requête dans le test, puis supprimé).
+- Régression : run 1 → 3 FAIL (2 tests Lot 2 qui passaient un tenant jetable en enforce sans observation — devenus caducs par le garde-fou, adaptés : 409 puis shadow antidaté 8 j puis 200 ; 1 timeout TCP réseau sur `test_07_driver_claim_app`, repassé seul) ; **run final 973 PASS / 0 FAIL / 4 SKIP / 4 warnings — 542 s**. Le flaky Energy cache (`test_vehicule_different_miss_e2e`, 968/1 du run précédent, 25/25 isolé) n'a pas été masqué ni supprimé ; il est passé ce run. Nettoyage preview rejoué (reste 2 tenants, 9 users, 14 chauffeurs, 1 invitation ; 0 tenant en enforce ; 44 refus shadow bruts conservés sur Logitrak dont 35 exclus).
+
 
 ### Nettoyage base preview (`scripts/cleanup_preview_test_data.py`, dry-run → `--apply`)
 - Supprimé : 89 tenants `TEST Suspend*` / `TEST_Tenant*` (+ 46 users `test_susp_*@x.ch`, 356 entrées audit), 36 users `ivan.<hex>@example.com`,

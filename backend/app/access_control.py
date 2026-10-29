@@ -6,7 +6,7 @@ ACCESS_CONTROL_MODE = legacy | shadow | enforce (env, surchargeable par tenant).
 """
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, Request
 
@@ -19,6 +19,8 @@ async def get_current_user(request: Request):
     return await _gcu(request)
 
 MODES = ("legacy", "shadow", "enforce")
+# Garde-fou Lot 6 : jours d'Observation (shadow) requis avant d'autoriser le mode Appliqué (enforce).
+OBSERVATION_MIN_DAYS = int(os.environ.get("ENFORCE_MIN_OBSERVATION_DAYS", "7"))
 DEFAULT_MODE = "legacy"
 
 # ---------------------------------------------------------------------------
@@ -280,8 +282,15 @@ async def _shadow_deny(user: dict, kind: str, key: str, request: Request):
 
 
 def enforce_readiness(tenant: dict, users: list[dict], denies: list[dict], shadow_since: str | None,
-                      now: datetime) -> dict:
-    """Bilan de préparation au mode enforce (pur, testable). Aucun `fail` ⇒ ready."""
+                      now: datetime, min_days: int | None = None) -> dict:
+    """Bilan de préparation au mode enforce (pur, testable). Aucun `fail` ⇒ ready.
+
+    Garde-fou observation : `min_days` jours en mode Observation sont requis (défaut
+    `ENFORCE_MIN_OBSERVATION_DAYS`, 7). Les refus couverts par une fenêtre `tenant.observation_exclusions`
+    sont comptés à part et exclus du bilan (événements d'audit bruts jamais modifiés).
+    """
+    min_days = OBSERVATION_MIN_DAYS if min_days is None else min_days
+    exclusions = tenant.get("observation_exclusions") or []
     checks: list[dict] = []
 
     def add(cid, status, label, detail=None):
@@ -290,15 +299,29 @@ def enforce_readiness(tenant: dict, users: list[dict], denies: list[dict], shado
     add("tenant_active", "ok" if tenant.get("status") == "active" else "fail",
         "Client actif", f"statut : {tenant.get('status')}")
     days = None
+    eligible_at = None
     if shadow_since:
-        days = (now - datetime.fromisoformat(shadow_since)).days
+        since_dt = datetime.fromisoformat(shadow_since)
+        days = (now - since_dt).days
+        eligible_at = (since_dt + timedelta(days=min_days)).isoformat()
     if days is None:
-        add("observation", "warn", "Période d'observation", "jamais passé en mode Observation")
+        add("observation", "fail", "Période d'observation",
+            f"jamais passé en mode Observation — activez d'abord l'Observation, puis {min_days} jour(s) d'attente")
+    elif days < min_days:
+        add("observation", "fail", "Période d'observation",
+            f"{days} jour(s) en Observation sur {min_days} requis — éligible le {_fmt_date(eligible_at)}")
     else:
-        add("observation", "ok" if days >= 7 else "warn", "Période d'observation",
-            f"{days} jour(s) en Observation (recommandé ≥ 7)")
-    by_key: dict[tuple, dict] = {}
+        add("observation", "ok", "Période d'observation", f"{days} jour(s) en Observation (minimum {min_days})")
+    valid: list[dict] = []
+    excluded_by: dict[str, int] = {}
     for d in denies:
+        ex = deny_exclusion(d, exclusions)
+        if ex:
+            excluded_by[ex["id"]] = excluded_by.get(ex["id"], 0) + 1
+        else:
+            valid.append(d)
+    by_key: dict[tuple, dict] = {}
+    for d in valid:
         det = d.get("details") or {}
         k = (det.get("kind"), det.get("key"))
         row = by_key.setdefault(k, {"kind": k[0], "key": k[1], "count": 0, "users": set(), "roles": set()})
@@ -308,8 +331,10 @@ def enforce_readiness(tenant: dict, users: list[dict], denies: list[dict], shado
             row["roles"].add(det["role"])
     denies_out = sorted(({**r, "users": len(r["users"]), "roles": sorted(r["roles"])} for r in by_key.values()),
                         key=lambda r: -r["count"])
-    add("shadow_denies", "ok" if not denies else "warn", "Refus observés (30 j)",
-        f"{len(denies)} refus → deviendraient des 403" if denies else "aucun refus observé")
+    n_excl = sum(excluded_by.values())
+    add("shadow_denies", "ok" if not valid else "warn", "Refus observés (30 j)",
+        (f"{len(valid)} refus → deviendraient des 403" if valid else "aucun refus observé")
+        + (f" · {n_excl} exclu(s) : fenêtre de test identifiée" if n_excl else ""))
     unknown = [u["email"] for u in users if u.get("role") not in TENANT_ROLES]
     add("roles_known", "ok" if not unknown else "fail", "Rôles reconnus",
         f"{len(unknown)} utilisateur(s) avec un rôle inconnu" if unknown else "tous les rôles sont connus")
@@ -330,15 +355,44 @@ def enforce_readiness(tenant: dict, users: list[dict], denies: list[dict], shado
     by_role: dict[str, int] = {}
     for u in users:
         by_role[u.get("role") or "?"] = by_role.get(u.get("role") or "?", 0) + 1
+    fails = [c for c in checks if c["status"] == "fail"]
     return {
         "tenant_id": tenant["id"], "mode_effective": resolve_mode(tenant), "modules_effective": sorted(enabled),
-        "observation": {"since": shadow_since, "days": days, "shadow_denies": len(denies), "by_key": denies_out},
+        "observation": {"since": shadow_since, "days": days, "required_days": min_days, "eligible_at": eligible_at,
+                        "shadow_denies": len(valid), "excluded": n_excl, "by_key": denies_out,
+                        "exclusions": [{k: ex.get(k) for k in ("id", "from", "to", "modules", "reason", "source")}
+                                       | {"excluded_count": excluded_by.get(ex.get("id"), 0)} for ex in exclusions]},
         "users": {"total": len(users), "inactive": inactive, "by_role": by_role, "unknown_role": unknown,
                   "with_override": sum(1 for u in users if u.get("permissions_override"))},
         "invalid_overrides": invalid,
         "checks": checks,
-        "ready": all(c["status"] != "fail" for c in checks),
+        "ready": not fails,
+        "blocked_reasons": [f"{c['label']} : {c['detail']}" for c in fails],
     }
+
+
+def _fmt_date(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    dt = datetime.fromisoformat(iso)
+    return dt.strftime("%d/%m/%Y %H:%M UTC")
+
+
+def deny_exclusion(deny: dict, exclusions: list[dict]) -> dict | None:
+    """Fenêtre d'exclusion couvrant ce refus (`at` dans [from, to] et module concerné), sinon None.
+    Les événements `access.shadow_deny` restent intacts en base : l'exclusion n'est qu'une règle de lecture."""
+    at = deny.get("at")
+    if not at or not exclusions:
+        return None
+    det = deny.get("details") or {}
+    kind, key = det.get("kind"), det.get("key")
+    mod = key if kind == "module" else (PERMISSIONS.get(key) or {}).get("module")
+    at_dt = datetime.fromisoformat(at)
+    for ex in exclusions:
+        if datetime.fromisoformat(ex["from"]) <= at_dt <= datetime.fromisoformat(ex["to"]) \
+                and (not ex.get("modules") or mod in ex["modules"]):
+            return ex
+    return None
 
 
 # ---------------------------------------------------------------------------

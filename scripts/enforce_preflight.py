@@ -38,14 +38,14 @@ def main(only_tenant: str | None) -> int:
     for t in db.tenants.find(q, {"_id": 0}):
         users = list(db.users.find({"tenant_id": t["id"]}, {"_id": 0, "email": 1, "role": 1, "active": 1, "permissions_override": 1}))
         denies = list(db.audit_log.find({"tenant_id": t["id"], "action": "access.shadow_deny", "at": {"$gte": since}},
-                                        {"_id": 0, "details": 1, "user_email": 1}))
+                                        {"_id": 0, "details": 1, "user_email": 1, "at": 1}))
         last_shadow = db.audit_log.find_one({"tenant_id": t["id"], "action": "tenant.update",
                                              "details.after.access_control_mode": "shadow"}, {"_id": 0, "at": 1}, sort=[("at", -1)])
         shadow_since = last_shadow["at"] if last_shadow and resolve_mode(t) == "shadow" else None
         r = enforce_readiness(t, users, denies, shadow_since, now)
         flag = "READY" if r["ready"] else "BLOCKED"
         print(f"  {t['id'][:12]:12s} {t.get('name', '')[:24]:24s} mode={r['mode_effective']:7s} users={r['users']['total']:3d} "
-              f"denies30j={r['observation']['shadow_denies']:3d} {flag}")
+              f"denies30j={r['observation']['shadow_denies']:3d} exclus={r['observation']['excluded']:3d} {flag}")
         for c in r["checks"]:
             if c["status"] != "ok":
                 print(f"      - {c['status'].upper():4s} {c['label']} — {c['detail']}")
