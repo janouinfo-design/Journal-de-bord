@@ -241,3 +241,91 @@ async def get_counter_value(tracker_id: int, counter_type: str = "odometer") -> 
             "type": counter_type,
         })
 
+# --------------------------------------------------------------------------- #
+# LOT P1 -- Navixy Raw IoT Data API (READ-ONLY, additive). /dwh/v1
+# Same credential (_hash) and host/region (_base_url) as the User API (/v2).
+# --------------------------------------------------------------------------- #
+def _raw_base_url() -> str:
+    """Raw IoT base URL (/dwh/v1) derived exclusively from the User API host/region."""
+    from urllib.parse import urlparse as _urlparse
+
+    parsed = _urlparse(_base_url())
+    return f"{parsed.scheme}://{parsed.netloc}/dwh/v1"
+
+
+async def get_raw_data_inputs(tracker_id: int) -> list:
+    """Return the list of available Raw IoT input names for a tracker (read-only)."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{_raw_base_url()}/tracker/raw_data/get_inputs",
+            json={"hash": _hash(), "tracker_id": int(tracker_id)},
+            timeout=30.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("success"):
+            raise NavixyError(
+                "Navixy raw_data/get_inputs: "
+                + str(data.get("status", {}).get("description", "error"))
+            )
+        return data.get("inputs") or []
+
+
+async def read_raw_hw_mileage(tracker_id: int, *, frm: str, to: str):
+    """Read inputs.hw_mileage over [frm, to] (Raw IoT CSV), streamed and memory-bounded.
+
+    Keeps only the CSV header and the last usable observation (never a full list).
+    Fail-closed header: both 'msg_time' and 'inputs.hw_mileage' columns are required.
+    A JSON payload (Navixy error) instead of CSV raises NavixyError.
+    Returns {"value", "time"} or None.
+    """
+    import csv as _csv
+
+    body = {
+        "hash": _hash(),
+        "tracker_id": int(tracker_id),
+        "from": frm,
+        "to": to,
+        "columns": ["inputs.hw_mileage"],
+    }
+    vcol = None
+    tcol = None
+    last = None
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            f"{_raw_base_url()}/tracker/raw_data/read",
+            json=body,
+            timeout=30.0,
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if line == "":
+                    continue
+                if vcol is None:
+                    if line.lstrip().startswith("{"):
+                        raise NavixyError(
+                            "Navixy raw_data/read returned JSON instead of CSV"
+                        )
+                    cols = next(_csv.reader([line]))
+                    if "inputs.hw_mileage" not in cols or "msg_time" not in cols:
+                        raise NavixyError(
+                            "Navixy raw_data/read: unexpected CSV header"
+                        )
+                    vcol = cols.index("inputs.hw_mileage")
+                    tcol = cols.index("msg_time")
+                    continue
+                fields = next(_csv.reader([line]))
+                if len(fields) <= vcol:
+                    continue
+                cell = (fields[vcol] or "").strip()
+                try:
+                    import math
+                    numeric = float(cell)
+                    if not math.isfinite(numeric) or numeric < 0:
+                        continue
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                tval = fields[tcol].strip() if len(fields) > tcol else ""
+                last = {"value": cell, "time": tval}
+    return last

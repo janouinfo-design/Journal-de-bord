@@ -102,6 +102,7 @@ SCALE_VERIFIED = "VERIFIED"
 # ---------------------------------------------------------------------------
 CONFIRM_STRATEGY_FROZEN_POSITION = "FROZEN_POSITION"
 CONFIRM_STRATEGY_LAST_KNOWN_POSITION = "LAST_KNOWN_POSITION"
+CONFIRM_STRATEGY_AVL_INPUT = "AVL_INPUT"
 
 
 @dataclass
@@ -342,6 +343,7 @@ class VehicleOdometerCapability:
     # Stratégie de confirmation télémétrique du Mode Privé (par tracker field-validated).
     # None = pas de confirmation télémétrique dédiée (fallback profil modèle, ex FMC003).
     private_confirmation_strategy: Optional[str] = None   # CONFIRM_STRATEGY_*
+    private_confirmation_avl_id: Optional[int] = None     # ex. 391 pour FMC003 Private mode
     # rétro-compat : ancien champ 'source_type'/'unit'/'last_value'/'last_timestamp'
     source_type: str = "UNKNOWN"
     unit: Optional[str] = None
@@ -381,6 +383,93 @@ def _logical_private_mode_model(device_model: Optional[str]) -> Optional[str]:
 def model_private_mode_supported(device_model: Optional[str]) -> bool:
     """Familles produit supportées. Ce booléen seul n'est PAS une autorisation."""
     return _logical_private_mode_model(device_model) in GENERALIZED_PRIVATE_MODE_MODELS
+
+
+# ---------------------------------------------------------------------------
+# P3E-7 : CERTIFICATION DE COMMANDE PAR MODÈLE (CAPACITÉ D'ACTION).
+#
+# Distinct de la validation terrain `field_validated` (preuve TÉLÉMÉTRIQUE du
+# TRACEUR). Ici on certifie que le MODÈLE sait recevoir `privatemode ON/OFF`
+# via Navixy raw command — fait global au modèle, jamais par tracker.
+#
+# NE conditionne QUE la capacité d'ACTION (boutons Privé/Pro). Les confirmations
+# télémétriques / km privés / masquage restent gated par field_validated /
+# profile_ready (voir vehicle_private_mode_allowed / vehicle_private_profile_ready
+# / _model_supports_telemetry_confirm). Ne PAS mélanger les deux notions.
+# ---------------------------------------------------------------------------
+COMMAND_TRANSPORT_NAVIXY_RAW = "NAVIXY_RAW_COMMAND"
+PRIVATE_COMMAND_ON = "privatemode ON"
+BUSINESS_COMMAND_OFF = "privatemode OFF"
+
+# Modèles certifiés pour la commande Privé/Pro (preuve observée en console Navixy).
+MODEL_COMMAND_SUPPORT: dict[str, dict] = {
+    "FMC003": {
+        "private_mode_command_supported": True,
+        "private_command": PRIVATE_COMMAND_ON,
+        "business_command": BUSINESS_COMMAND_OFF,
+        "command_transport": COMMAND_TRANSPORT_NAVIXY_RAW,
+    },
+    "FMC130": {
+        "private_mode_command_supported": True,
+        "private_command": PRIVATE_COMMAND_ON,
+        "business_command": BUSINESS_COMMAND_OFF,
+        "command_transport": COMMAND_TRANSPORT_NAVIXY_RAW,
+    },
+}
+
+
+def model_command_supported(device_model: Optional[str]) -> bool:
+    """TRUE si le MODÈLE est certifié pour recevoir `privatemode ON/OFF`.
+
+    Capacité d'ACTION par MODÈLE (jamais par tracker). N'exige NI field_validated
+    NI profile_ready. Fail-closed : modèle inconnu/non certifié -> False."""
+    model = _logical_private_mode_model(device_model)
+    cfg = MODEL_COMMAND_SUPPORT.get(model or "")
+    return bool(cfg and cfg.get("private_mode_command_supported") is True)
+
+
+def model_command_profile(device_model: Optional[str]) -> Optional[dict]:
+    """Profil de commande certifié du modèle (ou None). Lecture seule, documentaire."""
+    model = _logical_private_mode_model(device_model)
+    cfg = MODEL_COMMAND_SUPPORT.get(model or "")
+    return dict(cfg) if cfg else None
+
+
+
+def _native_hw_mileage_source_ready(model, vc):
+    """Chemin FMC003 Navixy natif, sans AVL16 fictif."""
+    import math
+
+    if vc is None or _logical_private_mode_model(model) != "FMC003":
+        return False
+
+    try:
+        if not (
+            _logical_private_mode_model(vc.device_model) == "FMC003"
+            and vc.private_distance_source in (None, "NAVIXY_HW_MILEAGE")
+            and vc.raw_avl_id is None
+            and vc.navixy_input == "hw_mileage"
+            and vc.navixy_sensor_id is None
+            and vc.scale_status == SCALE_VERIFIED
+            and vc.raw_unit == "km"
+            and vc.normalized_unit == "km"
+        ):
+            return False
+
+        if isinstance(vc.multiplier, bool) or isinstance(vc.divider, bool):
+            return False
+
+        m = float(vc.multiplier)
+        d = float(vc.divider)
+
+        return (
+            math.isfinite(m)
+            and math.isfinite(d)
+            and m == 1.0
+            and d == 1.0
+        )
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
 
 
 def vehicle_private_profile_ready(
@@ -423,13 +512,24 @@ def vehicle_private_profile_ready(
         except (TypeError, ValueError):
             return False
 
-    if vc.private_distance_source != SOURCE_TELTONIKA_TOTAL_ODOMETER:
-        return False
-    if vc.raw_avl_id != AVL_TOTAL_ODOMETER:
-        return False
-    if vc.navixy_input != "avl_io_16":
-        return False
-    if vc.navixy_sensor_id is None:
+    if not _native_hw_mileage_source_ready(model, vc):
+        if vc.private_distance_source != SOURCE_TELTONIKA_TOTAL_ODOMETER:
+            return False
+        if vc.raw_avl_id != AVL_TOTAL_ODOMETER:
+            return False
+    # Sources explicitement qualifiees par tracker.
+    # FMC130 et FMC003 historique : capteur Navixy inchange.
+    # FMC003 Raw IoT : hw_mileage uniquement, sans capteur fictif.
+    sensor_path = (
+        vc.navixy_input == "avl_io_16"
+        and vc.navixy_sensor_id is not None
+    )
+    raw_path = (
+        model == "FMC003"
+        and vc.navixy_input == "hw_mileage"
+        and vc.navixy_sensor_id is None
+    )
+    if not (sensor_path or raw_path):
         return False
     if vc.scale_status != SCALE_VERIFIED:
         return False
@@ -460,10 +560,12 @@ def vehicle_private_profile_ready(
 
     if model == "FMC003":
         # Compat historique : le D3 FMC003 antérieur utilisait None
-        # avec fallback FROZEN_POSITION. Tout nouveau profile_ready doit
-        # toutefois porter explicitement FROZEN_POSITION.
-        if vc.field_validated and strategy is None:
+        # avec fallback FROZEN_POSITION. Les nouveaux profils peuvent
+        # porter explicitement AVL_INPUT/391 sans modifier les anciens.
+        if vc.field_validated and strategy is None and sensor_path:
             return True
+        if strategy == CONFIRM_STRATEGY_AVL_INPUT:
+            return getattr(vc, "private_confirmation_avl_id", None) == 391
         return strategy == CONFIRM_STRATEGY_FROZEN_POSITION
 
     return False
@@ -482,10 +584,21 @@ def vehicle_private_mode_allowed(model: Optional[str],
         return False
     if not _model_supports_avl16_strategy(model):
         return False
-    if vc.private_distance_source != SOURCE_TELTONIKA_TOTAL_ODOMETER:
-        return False
-    if vc.raw_avl_id != AVL_TOTAL_ODOMETER:
-        return False
+    if not _native_hw_mileage_source_ready(model, vc):
+        if vc.private_distance_source != SOURCE_TELTONIKA_TOTAL_ODOMETER:
+            return False
+        if vc.raw_avl_id != AVL_TOTAL_ODOMETER:
+            return False
+    # Nouveau profil FMC003 natif : strategie explicite obligatoire.
+    # Les profils historiques FMC003/FMC130 restent inchanges.
+    if _native_hw_mileage_source_ready(model, vc):
+        strategy = vc.private_confirmation_strategy
+        if strategy == CONFIRM_STRATEGY_AVL_INPUT:
+            if getattr(vc, "private_confirmation_avl_id", None) != 391:
+                return False
+        elif strategy != CONFIRM_STRATEGY_FROZEN_POSITION:
+            return False
+
     return bool(vc.runtime_verified and vc.cumulative_verified
                 and vc.private_increment_verified and vc.field_validated)
 

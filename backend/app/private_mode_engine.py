@@ -27,6 +27,7 @@ from app.odometer_capability import (
     vehicle_private_mode_allowed, get_pilot_capability,
     SOURCE_TELTONIKA_TOTAL_ODOMETER, AVL_TOTAL_ODOMETER, SCALE_VERIFIED,
     CONFIRM_STRATEGY_FROZEN_POSITION, CONFIRM_STRATEGY_LAST_KNOWN_POSITION,
+    CONFIRM_STRATEGY_AVL_INPUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -157,14 +158,17 @@ def _parse_navixy_time(ts, timezone_name: Optional[str]):
 # Résolution de capability PAR TRACKER — persistable en Mongo, fallback constante pilote.
 # ---------------------------------------------------------------------------
 async def resolve_vehicle_capability(db, tracker_id: Optional[int],
-                                     device_model: Optional[str]) -> Optional[VehicleOdometerCapability]:
+                                     device_model: Optional[str], *,
+                                     tenant_id: Optional[str] = None) -> Optional[VehicleOdometerCapability]:
     """Capacité odomètre privé d'un tracker. Source de vérité = Mongo
     `vehicle_private_capabilities` ; fallback = registre pilote (constante, traçabilité/tests).
     Retour None si aucune capability connue."""
     if tracker_id is None:
         return None
-    doc = await db.vehicle_private_capabilities.find_one(
-        {"tracker_id": int(tracker_id)}, {"_id": 0})
+    query = {"tracker_id": int(tracker_id)}
+    if tenant_id:
+        query["tenant_id"] = tenant_id
+    doc = await db.vehicle_private_capabilities.find_one(query, {"_id": 0})
     if doc:
         # Reconstruit un VehicleOdometerCapability depuis le doc Mongo (champs connus).
         allowed_fields = VehicleOdometerCapability.__dataclass_fields__.keys()
@@ -184,15 +188,18 @@ async def resolve_vehicle_capability(db, tracker_id: Optional[int],
     return get_pilot_capability(tracker_id)
 
 
-async def upsert_vehicle_capability(db, vc: VehicleOdometerCapability) -> None:
+async def upsert_vehicle_capability(db, vc: VehicleOdometerCapability, *,
+                                    tenant_id: Optional[str] = None) -> None:
     """Persiste/actualise la capability d'un tracker (non destructif : upsert par tracker_id)."""
     if vc.tracker_id is None:
         raise ValueError("tracker_id requis")
     d = vc.to_dict()
-    d["tenant_id"] = _TENANT
+    tid = tenant_id or _TENANT
+    d["tenant_id"] = tid
     d["updated_at"] = _now()
     await db.vehicle_private_capabilities.update_one(
-        {"tracker_id": int(vc.tracker_id)}, {"$set": d}, upsert=True)
+        {"tenant_id": tid, "tracker_id": int(vc.tracker_id)},
+        {"$set": d}, upsert=True)
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +281,8 @@ def _model_supports_telemetry_confirm(capability) -> bool:
 
     if model == "FMC003":
         # Compat historique D3 : stratégie None => FROZEN_POSITION.
+        if strategy == CONFIRM_STRATEGY_AVL_INPUT:
+            return getattr(capability, "private_confirmation_avl_id", None) == 391
         return strategy in (None, CONFIRM_STRATEGY_FROZEN_POSITION)
 
     if model == "FMC130":
@@ -741,6 +750,838 @@ async def _device_response_confirm(tenant_id: str, tracker_id: int, requested_st
     return None, SRC_UNCONFIRMED
 
 
+def _fmc003_mask_from_raw_csv(lines, sent_iso, *, now=None):
+    """Fail-closed proof of CURRENT FMC003 masking after this ON command.
+
+    msg_time defines event order. server_time is required to validate ingestion
+    timing, including delayed/out-of-order packets. A delayed historical 0,0
+    is never mistaken for fresh evidence. Coordinates are not persisted/logged.
+    """
+    import csv
+    import math
+    from datetime import datetime, timezone, timedelta
+
+    def timestamp(value):
+        try:
+            d = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+            if d.tzinfo is None:
+                return None
+            return d.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    sent = timestamp(sent_iso)
+    now = timestamp(now or datetime.now(timezone.utc))
+    if sent is None or now is None or sent > now + timedelta(seconds=2):
+        return False
+    try:
+        reader = csv.reader(lines)
+        header = next(reader, None)
+        if not header:
+            return False
+        header = [h.strip().lstrip('\ufeff') for h in header]
+        required = ('msg_time', 'server_time', 'lat', 'lng', 'flags.location_valid')
+        if any(header.count(h) != 1 for h in required):
+            return False
+        ix = {h: header.index(h) for h in required}
+        newest = None
+        masked_at_newest = False
+        saw_newest = False
+        for row in reader:
+            if len(row) <= max(ix.values()):
+                return False
+            msg = timestamp(row[ix['msg_time']])
+            received = timestamp(row[ix['server_time']])
+            if msg is None or received is None:
+                return False
+            if (msg > now + timedelta(seconds=2)
+                    or received > now + timedelta(seconds=2)
+                    or received < msg - timedelta(seconds=2)):
+                return False
+            if msg <= sent:
+                continue
+            # A historical packet arriving now does not prove current privacy.
+            # Keep processing historical rows to reject malformed/contradictory data.
+            if msg < now - timedelta(seconds=120):
+                continue
+            try:
+                lat = float(row[ix['lat']])
+                lng = float(row[ix['lng']])
+                valid = row[ix['flags.location_valid']].strip()
+                masked = (math.isfinite(lat) and math.isfinite(lng)
+                          and lat == 0.0 and lng == 0.0 and valid == '0')
+            except (ValueError, TypeError, OverflowError):
+                masked = False
+            if newest is None or msg > newest:
+                newest = msg
+                masked_at_newest = masked
+                saw_newest = True
+            elif msg == newest:
+                masked_at_newest = masked_at_newest and masked
+        return bool(saw_newest and masked_at_newest)
+    except (csv.Error, StopIteration, TypeError):
+        return False
+
+
+async def _fmc003_raw_mask_confirmed(tenant_id, tracker_id, command_sent_at_iso):
+    """RAW IoT /dwh/v1, uniquement pour un tracker du tenant demandé.
+
+    Aucun secret ni coordonnée renvoyé/loggé ; toute erreur => non confirmé.
+    Une réponse ON et une preuve brute masquée sont requises par l'appelant.
+    """
+    import os
+    import httpx
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import urlparse
+    from app.integrations import get_integration_credential
+
+    try:
+        sent = datetime.fromisoformat(str(command_sent_at_iso).replace("Z", "+00:00"))
+        if sent.tzinfo is None:
+            return False
+        sent = sent.astimezone(timezone.utc)
+        now = datetime.now(timezone.utc)
+        if sent > now + timedelta(seconds=2):
+            return False
+        cred = get_integration_credential(tenant_id, "NAVIXY")
+        if not cred or not cred.get("credential"):
+            return False
+        api_base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+                    or "https://api.navixy.com/v2").rstrip("/")
+        parsed = urlparse(api_base)
+        if parsed.scheme != "https" or not parsed.netloc:
+            return False
+        raw_base = f"{parsed.scheme}://{parsed.netloc}/dwh/v1"
+        start = max(sent, now - timedelta(minutes=90))
+        if start > now:
+            return False
+        iso = lambda ts: ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
+                "from": iso(start), "to": iso(now),
+                "columns": ["server_time", "lat", "lng", "flags.location_valid"]}
+        raw_lines = []
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST", f"{raw_base}/tracker/raw_data/read",
+                json=body, timeout=25.0,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    if len(line) > 4096 or len(raw_lines) >= 1500:
+                        return False
+                    if not raw_lines and line.lstrip().startswith("{"):
+                        return False
+                    raw_lines.append(line)
+        return _fmc003_mask_from_raw_csv(raw_lines, command_sent_at_iso, now=now)
+    except Exception:
+        # Confidentialité fail-closed, ne pas exposer les valeurs de la réponse.
+        return False
+
+
+
+def _avl_input_from_raw_csv(lines, sent_iso, *, avl_id: int, requested_state: str,
+                            window_to_iso=None, now=None, first_match=False) -> dict:
+    """Parse READ-ONLY DWH CSV for one explicit AVL input.
+
+    NULL/blank/\\N are absence, never BUSINESS. Event ordering uses msg_time.
+    server_time is only an ingestion/sanity guard. Unexpected values fail closed.
+    """
+    import csv
+    from datetime import datetime, timezone, timedelta
+
+    def ts(value):
+        try:
+            d = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                return None
+            return d.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    sent = ts(sent_iso)
+    end = ts(window_to_iso) if window_to_iso else ts(now or datetime.now(timezone.utc))
+    current = ts(now or datetime.now(timezone.utc))
+    if sent is None or end is None or current is None or end < sent:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None, "reason": "INVALID_WINDOW"}
+
+    # DWH msg_time is second-resolution while command timestamps can contain microseconds.
+    sent_floor = sent.replace(microsecond=0)
+    col = f"inputs.avl_io_{int(avl_id)}"
+    expected = 1 if requested_state == PRIVATE else 0 if requested_state == BUSINESS else None
+    if expected is None:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None, "reason": "INVALID_TARGET"}
+
+    try:
+        reader = csv.reader(lines)
+        header = next(reader, None)
+        if not header:
+            raise ValueError("missing_header")
+        header = [h.strip().lstrip("\ufeff") for h in header]
+        required = ("msg_time", "server_time", col)
+        if any(header.count(h) != 1 for h in required):
+            raise ValueError("missing_or_duplicate_column")
+        ix = {h: header.index(h) for h in required}
+        observations = []
+        for row in reader:
+            if len(row) <= max(ix.values()):
+                raise ValueError("short_row")
+            msg = ts(row[ix["msg_time"]])
+            received = ts(row[ix["server_time"]])
+            if msg is None or received is None:
+                raise ValueError("bad_timestamp")
+            if msg > current + timedelta(seconds=2) or received > current + timedelta(seconds=2):
+                raise ValueError("future_timestamp")
+            if received < msg - timedelta(seconds=2):
+                raise ValueError("server_before_message")
+            if msg < sent_floor or msg > end + timedelta(seconds=2):
+                continue
+            raw = str(row[ix[col]]).strip()
+            if raw in ("", r"\N", "NULL", "null", "None", "none"):
+                continue
+            if raw not in ("0", "1"):
+                return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                        "observed_at": msg.isoformat(), "value": raw,
+                        "reason": "UNEXPECTED_AVL_VALUE"}
+            observations.append((msg, int(raw)))
+
+        if not observations:
+            return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                    "observed_at": None, "value": None, "reason": "AVL_INPUT_ABSENT"}
+
+        if first_match:
+            matches = [(t, v) for (t, v) in observations if v == expected]
+            if not matches:
+                last_t, last_v = max(observations, key=lambda x: x[0])
+                actual = PRIVATE if last_v == 1 else BUSINESS
+                return {"ok": False, "state": actual, "source": SRC_UNCONFIRMED,
+                        "observed_at": last_t.isoformat(), "value": last_v,
+                        "reason": "TARGET_NOT_OBSERVED"}
+            chosen_t, chosen_v = min(matches, key=lambda x: x[0])
+        else:
+            newest_t = max(t for (t, _) in observations)
+            newest_values = {v for (t, v) in observations if t == newest_t}
+            if len(newest_values) != 1:
+                return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                        "observed_at": newest_t.isoformat(), "value": None,
+                        "reason": "CONFLICTING_LATEST_VALUES"}
+            chosen_t = newest_t
+            chosen_v = newest_values.pop()
+
+        actual = PRIVATE if chosen_v == 1 else BUSINESS
+        return {"ok": actual == requested_state, "state": actual,
+                "source": f"AVL_INPUT_{int(avl_id)}",
+                "observed_at": chosen_t.isoformat(), "value": chosen_v,
+                "reason": "AVL_INPUT_CONFIRMED" if actual == requested_state
+                          else "LATEST_STATE_MISMATCH"}
+    except Exception:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None, "reason": "AVL_INPUT_PARSE_ERROR"}
+
+
+
+def _raw_business_resume_from_csv(lines, sent_iso, *, window_to_iso=None,
+                                  now=None, first_match=False,
+                                  require_masked_before=False):
+    """Parse Navixy RAW CSV and prove BUSINESS by a real valid position after OFF."""
+    import csv
+    import math
+    from datetime import datetime, timezone
+
+    def _ts(value):
+        if value is None:
+            return None
+        try:
+            d = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                return None
+            return d.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    sent = _ts(sent_iso)
+    if sent is None:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None,
+                "reason": "RAW_RESUME_BAD_SENT_TIME"}
+
+    end = _ts(window_to_iso) if window_to_iso else (now or datetime.now(timezone.utc))
+    if end is None or end < sent:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None,
+                "reason": "RAW_RESUME_BAD_WINDOW"}
+
+    try:
+        reader = csv.DictReader(lines)
+        fields = set(reader.fieldnames or [])
+        required = {"msg_time", "lat", "lng", "flags.location_valid"}
+        if not required.issubset(fields):
+            return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                    "observed_at": None, "value": None,
+                    "reason": "RAW_RESUME_BAD_HEADER"}
+
+        saw_masked = False
+        proofs = []
+
+        for row in reader:
+            msg = _ts(row.get("msg_time"))
+            if msg is None or msg <= sent or msg > end:
+                continue
+
+            server = _ts(row.get("server_time")) if "server_time" in fields else None
+            if server is not None and server < msg:
+                continue
+
+            try:
+                lat = float(row.get("lat"))
+                lng = float(row.get("lng"))
+                valid = str(row.get("flags.location_valid") or "").strip()
+            except Exception:
+                continue
+
+            if not (math.isfinite(lat) and math.isfinite(lng)):
+                continue
+
+            masked = (lat == 0.0 and lng == 0.0 and valid == "0")
+            real_valid = (valid == "1" and not (lat == 0.0 and lng == 0.0))
+
+            if masked:
+                saw_masked = True
+                continue
+
+            if real_valid and (saw_masked or not require_masked_before):
+                proofs.append(msg)
+                if first_match:
+                    break
+
+        if not proofs:
+            reason = ("RAW_RESUME_MASK_NOT_SEEN"
+                      if require_masked_before and not saw_masked
+                      else "RAW_RESUME_NOT_OBSERVED")
+            return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                    "observed_at": None, "value": None, "reason": reason}
+
+        observed = min(proofs) if first_match else max(proofs)
+        return {"ok": True, "state": BUSINESS, "source": SRC_TELEMETRY,
+                "observed_at": observed.isoformat(), "value": "RAW_LOCATION_VALID",
+                "reason": "RAW_LOCATION_RESUME"}
+    except Exception:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None,
+                "reason": "RAW_RESUME_PARSE_ERROR"}
+
+
+def _raw_private_mask_from_csv(
+    raw_lines,
+    command_sent_at_iso,
+    *,
+    window_to_iso=None,
+    now=None,
+    first_match=False,
+):
+    """Preuve FMC003 PRIVATE par trame RAW masquée postérieure au ON.
+
+    Exige :
+      - msg_time strictement postérieur à command_sent_at_iso ;
+      - lat=0 et lng=0 ;
+      - flags.location_valid=0 ;
+      - échantillon dans la fenêtre demandée.
+
+    Absence / erreur / ambiguïté => fail closed.
+    """
+    import csv
+    import math
+    from datetime import datetime, timezone
+
+    def parse_dt(value):
+        if value is None:
+            return None
+
+        s = str(value).strip()
+
+        if not s:
+            return None
+
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+
+        if (
+            len(s) >= 5
+            and s[-5] in "+-"
+            and s[-3] != ":"
+        ):
+            s = s[:-2] + ":" + s[-2:]
+
+        try:
+            dt = datetime.fromisoformat(s)
+        except Exception:
+            return None
+
+        if dt.tzinfo is None:
+            return None
+
+        return dt.astimezone(timezone.utc)
+
+    sent = parse_dt(command_sent_at_iso)
+
+    if sent is None:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_COMMAND_TIME_INVALID",
+        }
+
+    end = (
+        parse_dt(window_to_iso)
+        if window_to_iso is not None
+        else (now or datetime.now(timezone.utc))
+    )
+
+    if end is None:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_WINDOW_INVALID",
+        }
+
+    if end.tzinfo is None:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_WINDOW_INVALID",
+        }
+
+    end = end.astimezone(timezone.utc)
+
+    if end <= sent:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_WINDOW_INVALID",
+        }
+
+    matches = []
+
+    try:
+        reader = csv.DictReader(raw_lines or [])
+
+        for row in reader:
+            msg = parse_dt(
+                row.get("msg_time")
+                or row.get("server_time")
+            )
+
+            if msg is None:
+                continue
+
+            if not (sent < msg <= end):
+                continue
+
+            try:
+                lat = float(row.get("lat"))
+                lng = float(row.get("lng"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+            if not (
+                math.isfinite(lat)
+                and math.isfinite(lng)
+            ):
+                continue
+
+            valid = str(
+                row.get("flags.location_valid") or ""
+            ).strip()
+
+            masked = (
+                lat == 0.0
+                and lng == 0.0
+                and valid == "0"
+            )
+
+            if not masked:
+                continue
+
+            item = {
+                "ok": True,
+                "reason": "RAW_LOCATION_MASKED",
+                "source": "TELEMETRY_CONFIRMED",
+                "time": msg.isoformat(),
+                "value": "RAW_LOCATION_MASKED",
+            }
+
+            if first_match:
+                return item
+
+            matches.append((msg, item))
+
+    except Exception:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_PARSE_ERROR",
+        }
+
+    if not matches:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_NOT_FOUND",
+        }
+
+    matches.sort(key=lambda x: x[0])
+
+    return matches[-1][1]
+
+
+async def raw_private_mask_confirm(
+    tenant_id,
+    tracker_id,
+    command_sent_at_iso,
+    *,
+    window_to_iso=None,
+    first_match=False,
+    fetch_raw_lines=None,
+):
+    """Lecture seule DWH : confirme le masquage RAW après PRIVATE ON."""
+
+    import os
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import urlparse
+
+    def parse_dt(value):
+        if value is None:
+            return None
+
+        s = str(value).strip()
+
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+
+        if (
+            len(s) >= 5
+            and s[-5] in "+-"
+            and s[-3] != ":"
+        ):
+            s = s[:-2] + ":" + s[-2:]
+
+        try:
+            dt = datetime.fromisoformat(s)
+        except Exception:
+            return None
+
+        if dt.tzinfo is None:
+            return None
+
+        return dt.astimezone(timezone.utc)
+
+    sent = parse_dt(command_sent_at_iso)
+
+    if sent is None:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_COMMAND_TIME_INVALID",
+        }
+
+    end = (
+        parse_dt(window_to_iso)
+        if window_to_iso
+        else datetime.now(timezone.utc)
+    )
+
+    if end is None or end <= sent:
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_WINDOW_INVALID",
+        }
+
+    if end - sent > timedelta(hours=6):
+        return {
+            "ok": False,
+            "reason": "RAW_MASK_WINDOW_TOO_LARGE",
+        }
+
+    columns = [
+        "server_time",
+        "lat",
+        "lng",
+        "flags.location_valid",
+    ]
+
+    if fetch_raw_lines is not None:
+        raw_lines = await fetch_raw_lines(
+            tenant_id=tenant_id,
+            tracker_id=int(tracker_id),
+            from_iso=sent.isoformat(),
+            to_iso=end.isoformat(),
+            columns=columns,
+        )
+
+    else:
+        import httpx
+
+        from app.integrations import (
+            get_integration_credential,
+        )
+
+        cred = get_integration_credential(
+            tenant_id,
+            "NAVIXY",
+        )
+
+        if not cred or not cred.get("credential"):
+            return {
+                "ok": False,
+                "reason": "RAW_MASK_CREDENTIAL_MISSING",
+            }
+
+        api_base = (
+            cred.get("api_url")
+            or os.environ.get("NAVIXY_API_URL")
+            or "https://api.navixy.com/v2"
+        ).rstrip("/")
+
+        parsed = urlparse(api_base)
+
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+        ):
+            return {
+                "ok": False,
+                "reason": "RAW_MASK_API_URL_INVALID",
+            }
+
+        raw_base = (
+            f"{parsed.scheme}://{parsed.netloc}/dwh/v1"
+        )
+
+        iso = lambda dt: dt.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+        body = {
+            "hash": cred["credential"],
+            "tracker_id": int(tracker_id),
+            "from": iso(sent),
+            "to": iso(end),
+            "columns": columns,
+        }
+
+        raw_lines = []
+
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    raw_base + "/tracker/raw_data/read",
+                    json=body,
+                    timeout=25.0,
+                ) as response:
+
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+
+                        if not line:
+                            continue
+
+                        if (
+                            len(line) > 4096
+                            or len(raw_lines) >= 1500
+                        ):
+                            return {
+                                "ok": False,
+                                "reason": "RAW_MASK_RESPONSE_TOO_LARGE",
+                            }
+
+                        if (
+                            not raw_lines
+                            and line.lstrip().startswith("{")
+                        ):
+                            return {
+                                "ok": False,
+                                "reason": "RAW_MASK_INVALID_RESPONSE",
+                            }
+
+                        raw_lines.append(line)
+
+        except Exception:
+            return {
+                "ok": False,
+                "reason": "RAW_MASK_READ_ERROR",
+            }
+
+    return _raw_private_mask_from_csv(
+        raw_lines,
+        sent.isoformat(),
+        window_to_iso=end.isoformat(),
+        now=end,
+        first_match=first_match,
+    )
+
+
+async def raw_business_resume_confirm(tenant_id: str, tracker_id: int,
+                                      command_sent_at_iso: str, *,
+                                      window_to_iso=None, first_match=False,
+                                      require_masked_before=False,
+                                      fetch_raw_lines=None) -> dict:
+    """READ-ONLY BUSINESS confirmation using Navixy DWH RAW position resume."""
+    import inspect
+    import os
+    import httpx
+    from datetime import datetime, timezone, timedelta
+    from urllib.parse import urlparse
+    from app.integrations import get_integration_credential
+
+    try:
+        sent = datetime.fromisoformat(str(command_sent_at_iso).replace("Z", "+00:00"))
+        if sent.tzinfo is None:
+            raise ValueError("naive_sent")
+        sent = sent.astimezone(timezone.utc)
+
+        if window_to_iso:
+            end = datetime.fromisoformat(str(window_to_iso).replace("Z", "+00:00"))
+            if end.tzinfo is None:
+                raise ValueError("naive_end")
+            end = end.astimezone(timezone.utc)
+        else:
+            end = datetime.now(timezone.utc)
+        if end < sent:
+            raise ValueError("invalid_window")
+
+        if fetch_raw_lines is not None:
+            result = fetch_raw_lines(
+                tenant_id=tenant_id, tracker_id=int(tracker_id),
+                window_from=sent, window_to=end)
+            raw_lines = await result if inspect.isawaitable(result) else result
+        else:
+            cred = get_integration_credential(tenant_id, "NAVIXY")
+            if not cred or not cred.get("credential"):
+                raise ValueError("missing_credential")
+            api_base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+                        or "https://api.navixy.com/v2").rstrip("/")
+            parsed = urlparse(api_base)
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise ValueError("invalid_api_url")
+            raw_base = f"{parsed.scheme}://{parsed.netloc}/dwh/v1"
+            start = sent if window_to_iso else max(sent, end - timedelta(minutes=90))
+            iso = lambda value: value.strftime("%Y-%m-%dT%H:%M:%SZ")
+            body = {
+                "hash": cred["credential"],
+                "tracker_id": int(tracker_id),
+                "from": iso(start),
+                "to": iso(end),
+                "columns": ["server_time", "lat", "lng", "flags.location_valid"],
+            }
+            raw_lines = []
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST", f"{raw_base}/tracker/raw_data/read",
+                    json=body, timeout=25.0,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if len(line) > 4096 or len(raw_lines) >= 2000:
+                            raise ValueError("raw_limit")
+                        if not raw_lines and line.lstrip().startswith("{"):
+                            raise ValueError("unexpected_json")
+                        raw_lines.append(line)
+
+        return _raw_business_resume_from_csv(
+            raw_lines, sent.isoformat(),
+            window_to_iso=end.isoformat(),
+            now=datetime.now(timezone.utc),
+            first_match=first_match,
+            require_masked_before=require_masked_before)
+    except Exception:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None,
+                "reason": "RAW_RESUME_READ_ERROR"}
+
+
+
+async def avl_input_confirm(tenant_id: str, tracker_id: int, requested_state: str,
+                            command_sent_at_iso: str, avl_id: int = 391, *,
+                            window_to_iso=None, first_match=False,
+                            fetch_raw_lines=None) -> dict:
+    """READ-ONLY FMC003 asymmetric confirmation."""
+    if requested_state == BUSINESS:
+        return await raw_business_resume_confirm(
+            tenant_id, int(tracker_id), command_sent_at_iso,
+            window_to_iso=window_to_iso,
+            first_match=first_match,
+            require_masked_before=False,
+            fetch_raw_lines=fetch_raw_lines)
+
+    import inspect
+    import os
+    import httpx
+    from datetime import datetime, timezone, timedelta
+    from urllib.parse import urlparse
+    from app.integrations import get_integration_credential
+
+    try:
+        sent = datetime.fromisoformat(str(command_sent_at_iso).replace("Z", "+00:00"))
+        if sent.tzinfo is None:
+            raise ValueError("naive_sent")
+        sent = sent.astimezone(timezone.utc)
+
+        if window_to_iso:
+            end = datetime.fromisoformat(str(window_to_iso).replace("Z", "+00:00"))
+            if end.tzinfo is None:
+                raise ValueError("naive_end")
+            end = end.astimezone(timezone.utc)
+        else:
+            end = datetime.now(timezone.utc)
+        if end < sent:
+            raise ValueError("invalid_window")
+
+        if fetch_raw_lines is not None:
+            result = fetch_raw_lines(
+                tenant_id=tenant_id, tracker_id=int(tracker_id),
+                window_from=sent, window_to=end, avl_id=int(avl_id))
+            raw_lines = await result if inspect.isawaitable(result) else result
+        else:
+            cred = get_integration_credential(tenant_id, "NAVIXY")
+            if not cred or not cred.get("credential"):
+                raise ValueError("missing_credential")
+            api_base = (cred.get("api_url") or os.environ.get("NAVIXY_API_URL")
+                        or "https://api.navixy.com/v2").rstrip("/")
+            parsed = urlparse(api_base)
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise ValueError("invalid_api_url")
+            raw_base = f"{parsed.scheme}://{parsed.netloc}/dwh/v1"
+            start = sent if window_to_iso else max(sent, end - timedelta(minutes=90))
+            iso = lambda value: value.strftime("%Y-%m-%dT%H:%M:%SZ")
+            body = {"hash": cred["credential"], "tracker_id": int(tracker_id),
+                    "from": iso(start), "to": iso(end),
+                    "columns": ["server_time", f"inputs.avl_io_{int(avl_id)}"]}
+            raw_lines = []
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST", f"{raw_base}/tracker/raw_data/read",
+                    json=body, timeout=25.0,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if len(line) > 4096 or len(raw_lines) >= 2000:
+                            raise ValueError("raw_limit")
+                        if not raw_lines and line.lstrip().startswith("{"):
+                            raise ValueError("unexpected_json")
+                        raw_lines.append(line)
+
+        return _avl_input_from_raw_csv(
+            raw_lines, sent.isoformat(), avl_id=int(avl_id),
+            requested_state=requested_state, window_to_iso=end.isoformat(),
+            now=datetime.now(timezone.utc), first_match=first_match)
+    except Exception:
+        return {"ok": False, "state": None, "source": SRC_UNCONFIRMED,
+                "observed_at": None, "value": None, "reason": "AVL_INPUT_READ_ERROR"}
+
+
+
 async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: str,
                             command_sent_at_iso: Optional[str], capability,
                             *, state_doc: Optional[dict] = None,
@@ -759,6 +1600,34 @@ async def telemetry_confirm(tenant_id: str, tracker_id: int, requested_state: st
     Retour (confirmed_state|None, source)."""
     if not _model_supports_telemetry_confirm(capability):
         return None, SRC_UNCONFIRMED
+
+    # P3E-8 : explicit AVL_INPUT path runs before historical FMC003 ACK+raw-mask.
+    _strategy = _confirm_strategy(capability)
+    if _strategy == CONFIRM_STRATEGY_AVL_INPUT:
+        _avl_id = getattr(capability, "private_confirmation_avl_id", None)
+        if _avl_id != 391 or not command_sent_at_iso:
+            return None, SRC_UNCONFIRMED
+        _obs = await avl_input_confirm(
+            tenant_id, int(tracker_id), requested_state,
+            command_sent_at_iso, int(_avl_id))
+        if _obs.get("ok") and _obs.get("state") == requested_state:
+            return requested_state, SRC_TELEMETRY
+        return None, SRC_UNCONFIRMED
+
+    # P3E-2 V2 : FMC003 UNIQUEMENT, ON ACK + masquage Raw IoT frais post-commande.
+    # Pas de confirmation sur ACK seul, 0,0 ancien, silence GPS, ni delai fixe.
+    if requested_state == PRIVATE and str(getattr(capability, "device_model", "") or "").upper() == "FMC003":
+        if not command_sent_at_iso:
+            return None, SRC_UNCONFIRMED
+        dev_state, _dev_source = await _device_response_confirm(
+            tenant_id, int(tracker_id), requested_state, command_sent_at_iso,
+            fetch_command_responses=fetch_command_responses)
+        if dev_state != PRIVATE:
+            return None, SRC_UNCONFIRMED
+        if not await _fmc003_raw_mask_confirmed(
+                tenant_id, int(tracker_id), command_sent_at_iso):
+            return None, SRC_UNCONFIRMED
+        return PRIVATE, SRC_TELEMETRY
 
     # ----- Niveau 0 : RÉPONSE DEVICE (preuve autoritative, prioritaire) -----
     dev_state, dev_src = await _device_response_confirm(
@@ -948,6 +1817,34 @@ async def _read_odometer_snapshot(db, tenant_id, vehicle_id, tracker_id,
 # ---------------------------------------------------------------------------
 # Cœur : demande de bascule de mode (backend autoritaire, gate, idempotence).
 # ---------------------------------------------------------------------------
+
+async def _p3e3_read_raw003_snapshot(db, tenant_id, vehicle_id):
+    """Return (km, status, observed_at) only on an explicitly calibrated fresh raw sample."""
+    import math
+    from datetime import datetime, timezone
+    from app.odometer_calibration import read_live_avl16_km
+    try:
+        reading = await read_live_avl16_km(db, tenant_id=tenant_id, vehicle_id=vehicle_id)
+        if not isinstance(reading, dict) or reading.get("reason") is not None:
+            return None, ODO_SNAPSHOT_UNAVAILABLE, None
+        value = reading.get("value_km")
+        stamp = reading.get("timestamp")
+        if value is None or not stamp or not reading.get("recent"):
+            return None, ODO_SNAPSHOT_UNAVAILABLE, None
+        value = float(value)
+        if not math.isfinite(value) or value < 0:
+            return None, ODO_SNAPSHOT_INVALID, None
+        sample = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if sample.tzinfo is None:
+            return None, ODO_SNAPSHOT_UNAVAILABLE, None
+        sample = sample.astimezone(timezone.utc)
+        age = (datetime.now(timezone.utc) - sample).total_seconds()
+        if not 0 <= age <= 120:
+            return None, ODO_SNAPSHOT_UNAVAILABLE, None
+        return value, ODO_SNAPSHOT_OK, sample.isoformat()
+    except Exception:
+        return None, ODO_SNAPSHOT_UNAVAILABLE, None
+
 async def request_mode(
     db, driver_id: str, target_mode: str, actor: str,
     *,
@@ -989,12 +1886,19 @@ async def request_mode(
 
     # --- GATE CENTRALE d'autorisation (fail-closed, une seule source de vérité) ---
     from app.tenant_context import get_tenant_doc
-    vc = await resolve_vehicle_capability(db, tracker_id, model)
+    vc = await resolve_vehicle_capability(
+        db, tracker_id, model, tenant_id=tid)
     decision = await gate.can_use_private_mode(
         db, tenant_id=tid, tenant_doc=get_tenant_doc(tid),
         vehicle_doc=vehicle, capability=vc, driver_id=driver_id,
     )
     allowed = decision["allowed"]
+    _p3e3_raw003 = (
+        model == "FMC003"
+        and getattr(vc, "navixy_input", None) == "hw_mileage"
+        and read_odo_km is _default_read_odo_km
+        and not simulate_confirm_enabled()
+    )
     if not allowed:
         reason = decision["reason"]
         await _audit(db, {"driver_id": driver_id, "vehicle_id": vehicle_id,
@@ -1083,8 +1987,13 @@ async def request_mode(
         base["private_lkp_probe_last_gps_at"] = None
         base["private_lkp_probe_start_odometer_km"] = None
         base["private_lkp_probe_count"] = 0
-        odo_start, snap_status = await _read_odometer_snapshot(
-            db, tid, vehicle_id, tracker_id, read_odo_km)
+        _p3e3_start_sample_at = None
+        if _p3e3_raw003:
+            odo_start, snap_status, _p3e3_start_sample_at = await _p3e3_read_raw003_snapshot(
+                db, tid, vehicle_id)
+        else:
+            odo_start, snap_status = await _read_odometer_snapshot(
+                db, tid, vehicle_id, tracker_id, read_odo_km)
         base["private_start_time"] = _now()
         base["private_start_odometer_km"] = odo_start        # null reste null (jamais 0)
         base["odometer_snapshot_status"] = snap_status       # OK|UNAVAILABLE|INVALID
@@ -1102,7 +2011,14 @@ async def request_mode(
     await _save_mode_state(db, {**cur, **base, "state": requested_state})
 
     # --- Envoi commande device (GATED) ---
+    # Read FMC003 end-counter BEFORE sending OFF. A post-OFF reading can include
+    # professional kilometres and must never be used as the private end boundary.
+    _p3e3_off_km, _p3e3_off_status, _p3e3_off_sample = None, ODO_SNAPSHOT_UNAVAILABLE, None
+    if _p3e3_raw003 and target_mode == BUSINESS:
+        _p3e3_off_km, _p3e3_off_status, _p3e3_off_sample = await _p3e3_read_raw003_snapshot(
+            db, tid, vehicle_id)
     cmd = _CMD[target_mode]
+    _p3e3_command_at = _now()
     cmd_res = await send_command(int(tracker_id), cmd)
 
     # --- Session kilométrique PRIVÉE (AVL16) — Q4b : START à la commande ACCEPTÉE/ENVOYÉE ---
@@ -1117,20 +2033,31 @@ async def request_mode(
             await _pm.open_session(
                 db, tenant_id=tid, driver_id=driver_id, vehicle_id=vehicle_id,
                 tracker_id=tracker_id, odo_start=base.get("private_start_odometer_km"),
-                start_source=("AVL16" if base.get("odometer_snapshot_status") == "OK" else "UNAVAILABLE"),
-                start_sample_at=base.get("private_start_time"), command_sent_at=_now())
+                start_source=("RAW_HW_MILEAGE" if _p3e3_raw003 else
+                              ("AVL16" if base.get("odometer_snapshot_status") == "OK" else "UNAVAILABLE")),
+                start_sample_at=(_p3e3_start_sample_at if _p3e3_raw003 else base.get("private_start_time")),
+                command_sent_at=_p3e3_command_at)
         elif _cmd_effective and target_mode == BUSINESS:
-            odo_cand, cand_status = await _read_odometer_snapshot(
-                db, tid, vehicle_id, tracker_id, read_odo_km)
+            if _p3e3_raw003:
+                odo_cand, cand_status = _p3e3_off_km, _p3e3_off_status
+                _p3e3_end_sample_at = _p3e3_off_sample
+            else:
+                odo_cand, cand_status = await _read_odometer_snapshot(
+                    db, tid, vehicle_id, tracker_id, read_odo_km)
+                _p3e3_end_sample_at = _now()
             await _pm.capture_end_candidate(
                 db, tenant_id=tid, vehicle_id=vehicle_id, tracker_id=tracker_id,
-                odo_end_candidate=odo_cand, end_candidate_sample_at=_now(),
-                business_command_sent_at=_now())
+                odo_end_candidate=odo_cand, end_candidate_sample_at=_p3e3_end_sample_at,
+                business_command_sent_at=_p3e3_command_at)
     except Exception:  # jamais bloquer la bascule pour un souci d'historique km
         logger.warning("private_mileage: hook envoi ignoré (non bloquant)", exc_info=False)
 
     # --- Confirmation IMMÉDIATE (jamais optimiste) ---
     confirmed_state, confirm_source = await confirm(int(tracker_id), target_mode)
+    # P3E-2 V2 : confirmation immediate impossible pour FMC003 PRIVATE.
+    # Le resolvant async attend les deux preuves ON ACK + RAW mask.
+    if model == "FMC003" and target_mode == PRIVATE:
+        confirmed_state, confirm_source = None, SRC_UNCONFIRMED
 
     if confirmed_state != target_mode:
         # Pas de confirmation immédiate. On distingue :
@@ -1177,8 +2104,11 @@ async def request_mode(
 
     # --- Snapshot odomètre à la SORTIE (retour Business) + distance privée ---
     if target_mode == BUSINESS and cur_state in (PRIVATE, PRIVATE_REQUESTED):
-        odo_end, _ = await _read_odometer_snapshot(
-            db, tid, vehicle_id, tracker_id, read_odo_km)
+        if _p3e3_raw003:
+            odo_end = None  # session's pre-OFF candidate is the only allowed boundary
+        else:
+            odo_end, _ = await _read_odometer_snapshot(
+                db, tid, vehicle_id, tracker_id, read_odo_km)
         odo_start = cur.get("private_start_odometer_km")
         new_doc["private_end_time"] = _now()
         new_doc["private_end_odometer_km"] = odo_end
@@ -1285,16 +2215,29 @@ async def resolve_pending_confirmation(db, vehicle_id: str, tenant_id: Optional[
         return st
 
     if _awaiting_late_private:
-        # PR26 : après TIMEOUT PRIVATE, preuve autorisée = réponse device textuelle
-        # explicite uniquement. On contourne volontairement telemetry_confirm() afin
-        # qu'aucune preuve GPS/AVL16 ne puisse promouvoir tardivement PRIVATE.
-        confirmed, source = await _device_response_confirm(
-            tid, int(tracker_id), PRIVATE, st.get("command_sent_at"),
-            fetch_command_responses=fetch_command_responses)
+        # P3E-2 V2.3: FMC003 tardif exige les MEMES deux preuves qu'en PENDING.
+        # PR26 historique (ACK seul) reste inchangé pour les autres modèles.
+        _late_vehicle = await db.vehicles.find_one(
+            {"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
+        _late_model = resolve_model(_late_vehicle.get("model"))
+        if _late_model == "FMC130":
+            # Chemin existant FMC130 préservé (pas de changement de politique).
+            confirmed, source = await _device_response_confirm(
+                tid, int(tracker_id), PRIVATE, st.get("command_sent_at"),
+                fetch_command_responses=fetch_command_responses)
+        else:
+            # FMC003 ET modèles inconnus : jamais d'ACK seul vers PRIVATE.
+            _late_capability = await resolve_vehicle_capability(
+                db, tracker_id, _late_model, tenant_id=tid)
+            confirmed, source = await telemetry_confirm(
+                tid, int(tracker_id), PRIVATE, st.get("command_sent_at"),
+                _late_capability, state_doc=st,
+                fetch_command_responses=fetch_command_responses)
     else:
         # capability (gate télémétrie : profil field_validated uniquement)
         vehicle = await db.vehicles.find_one({"id": vehicle_id, "tenant_id": tid}, {"_id": 0}) or {}
-        vc = await resolve_vehicle_capability(db, tracker_id, resolve_model(vehicle.get("model")))
+        vc = await resolve_vehicle_capability(
+            db, tracker_id, resolve_model(vehicle.get("model")), tenant_id=tid)
 
         # Lecteur odomètre EFFECTIF pour la confirmation LAST_KNOWN_POSITION :
         #  - test/injection : le read_odo_km fourni est utilisé tel quel ;

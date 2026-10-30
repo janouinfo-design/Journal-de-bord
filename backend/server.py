@@ -61,6 +61,26 @@ async def on_startup():
     await db.trips.create_index([("classification", 1), ("start_time", -1)])
     await db.trips.create_index("driver_id")
     await db.trips.create_index("vehicle_id")
+
+    # Indexes métier pour historique mobile / Journal de bord à grande échelle.
+    await db.trips.create_index(
+        [("tenant_id", 1), ("vehicle_id", 1), ("start_time", -1)]
+    )
+    await db.trips.create_index(
+        [("tenant_id", 1), ("classification", 1), ("start_time", -1)]
+    )
+    await db.trips.create_index(
+        [("tenant_id", 1), ("driver_id", 1), ("start_time", -1)],
+        name="trips_by_tenant_driver_time",
+    )
+    await db.trips.create_index(
+        [("tenant_id", 1), ("id", 1)],
+        name="trips_by_tenant_id",
+    )
+    await db.trip_tracks.create_index(
+        [("tenant_id", 1), ("trip_id", 1)],
+        name="trip_tracks_by_tenant_trip",
+    )
     await db.trips.create_index(
         [
             ("tenant_id", 1),
@@ -89,6 +109,12 @@ async def on_startup():
     from app.notifications_service import ensure_notification_indexes
     await ensure_notification_indexes(get_raw_db())
     raw = get_raw_db()
+
+    # Driver Identity V2 — relation User <-> Driver par IDs stables.
+    # Données migrées/auditées avant activation de ces contraintes.
+    from app.driver_identity import ensure_identity_indexes
+    await ensure_identity_indexes(raw)
+
     await raw.login_attempts.create_index("identifier", unique=True)
     await raw.driver_sessions.create_index(
         [("tenant_id", 1), ("vehicle_id", 1)], unique=True,
@@ -98,6 +124,31 @@ async def on_startup():
     # Affectations conducteur <-> véhicule (Lot 1) : index uniques partiels tenant-scopés.
     from app.vehicle_assignment import ensure_indexes as _va_ensure_indexes
     await _va_ensure_indexes(raw)
+    # Indexes resolver affectations multi-chauffeurs.
+    await raw.vehicle_assignment_events.create_index(
+        [
+            ("tenant_id", 1),
+            ("result", 1),
+            ("driver_id", 1),
+            ("at", 1),
+        ]
+    )
+    await raw.vehicle_assignment_events.create_index(
+        [
+            ("tenant_id", 1),
+            ("result", 1),
+            ("from_vehicle_id", 1),
+            ("at", 1),
+        ]
+    )
+    await raw.vehicle_assignment_events.create_index(
+        [
+            ("tenant_id", 1),
+            ("result", 1),
+            ("to_vehicle_id", 1),
+            ("at", 1),
+        ]
+    )
     await raw.ble_detections.create_index([("tenant_id", 1), ("driver_id", 1), ("ts", -1)])
     await raw.drivers.create_index([("tenant_id", 1), ("ble_id_norm", 1)])
     await raw.reconciliation_alert_candidates.create_index(
@@ -115,7 +166,23 @@ async def on_startup():
         logger.warning("private_mileage indexes non créés au démarrage: %s", _e)
     if os.environ.get("SEED_DEMO_DATA", "true").lower() == "true":
         await seed_mock_data(force=False)
-    await apply_rules_to_all(db)
+    # Reclassification startup TENANT-SCOPÉE.
+    # Ne jamais appeler apply_rules_to_all() avec la DB brute sans contexte.
+    from app.db import get_db, get_raw_db
+    from app.tenant_context import set_current_tenant, reset_current_tenant
+
+    _raw = get_raw_db()
+    async for _tenant in _raw.tenants.find(
+        {"status": "active"}, {"_id": 0, "id": 1}
+    ):
+        _tid = _tenant.get("id")
+        if not _tid:
+            continue
+        _token = set_current_tenant(_tid)
+        try:
+            await apply_rules_to_all(get_db())
+        finally:
+            reset_current_tenant(_token)
     await init_scheduler()
     logger.info("Startup: DB initialised, mock data seeded.")
 

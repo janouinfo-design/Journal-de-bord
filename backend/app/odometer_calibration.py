@@ -435,9 +435,175 @@ async def read_live_avl16_km(db, *, tenant_id: str, vehicle_id: str,
         return {**empty, "reason": R_NOT_SUPPORTED}
 
     cap = await db.vehicle_private_capabilities.find_one(
-        {"tracker_id": int(tracker_id)},
-        {"_id": 0, "navixy_sensor_id": 1, "private_distance_source": 1,
-         "multiplier": 1, "divider": 1}) or {}
+        {"tenant_id": tenant_id, "tracker_id": int(tracker_id)},
+        {"_id": 0, "vehicle_id": 1, "navixy_input": 1,
+         "navixy_sensor_id": 1, "private_distance_source": 1,
+         "raw_avl_id": 1, "scale_status": 1, "raw_unit": 1,
+         "normalized_unit": 1, "multiplier": 1, "divider": 1}) or {}
+
+    # P3E4 : Navixy hw_mileage natif, sans declaration AVL16 brute.
+    if (model == "FMC003"
+            and cap.get("navixy_input") == "hw_mileage"
+            and cap.get("raw_avl_id") is None
+            and cap.get("private_distance_source") in (None, "NAVIXY_HW_MILEAGE")):
+
+        import math
+        from datetime import timedelta
+        from app.navixy_client import read_raw_hw_mileage
+        from app.private_mode_provisioning import _parse_navixy_time
+        from app.odometer_capability import SCALE_VERIFIED
+
+        empty_native = {**empty, "source": "NAVIXY_HW_MILEAGE"}
+
+        if (cap.get("vehicle_id") != vehicle_id
+                or cap.get("navixy_sensor_id") is not None):
+            return {**empty_native, "reason": "RAW_PROFILE_INVALID"}
+
+        if (cap.get("scale_status") != SCALE_VERIFIED
+                or cap.get("raw_unit") != "km"
+                or cap.get("normalized_unit") != "km"):
+            return {**empty_native, "reason": "RAW_SCALE_UNVERIFIED"}
+
+        try:
+            m = cap.get("multiplier")
+            d = cap.get("divider")
+
+            if (m is None or d is None
+                    or isinstance(m, bool) or isinstance(d, bool)):
+                raise ValueError("missing conversion")
+
+            multiplier = float(m)
+            divider = float(d)
+
+            if (not math.isfinite(multiplier)
+                    or not math.isfinite(divider)
+                    or multiplier != 1.0
+                    or divider != 1.0):
+                raise ValueError("invalid native conversion")
+
+        except (TypeError, ValueError, OverflowError):
+            return {**empty_native, "reason": "RAW_SCALE_INVALID"}
+
+        now = datetime.now(timezone.utc)
+        frm = (now - timedelta(
+            seconds=AVL16_FRESH_MAX_S
+        )).strftime("%Y-%m-%dT%H:%M:%SZ")
+        to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        try:
+            observation = await read_raw_hw_mileage(
+                int(tracker_id), frm=frm, to=to
+            )
+        except Exception:
+            return {**empty_native, "reason": "RAW_UNAVAILABLE"}
+
+        if not isinstance(observation, dict):
+            return {**empty_native, "reason": "RAW_UNAVAILABLE"}
+
+        ts = observation.get("time")
+        observed_at = _parse_navixy_time(ts)
+
+        if observed_at is None or observed_at.tzinfo is None:
+            return {**empty_native, "reason": "RAW_TIMESTAMP_INVALID"}
+
+        age = (
+            now - observed_at.astimezone(timezone.utc)
+        ).total_seconds()
+
+        if age < -300 or age > AVL16_FRESH_MAX_S:
+            return {**empty_native, "reason": "RAW_STALE"}
+
+        try:
+            raw = float(observation.get("value"))
+
+            if not math.isfinite(raw) or raw < 0:
+                raise ValueError("invalid mileage")
+
+        except (TypeError, ValueError, OverflowError):
+            return {**empty_native, "reason": "RAW_VALUE_INVALID"}
+
+        return {
+            **empty_native,
+            "value_km": raw,
+            "raw_value": raw,
+            "timestamp": ts,
+            "recent": True,
+        }
+
+    # FMC003 Raw IoT : chemin strict, sans calibration ni ecriture device.
+    # Aucune valeur officielle si l'echelle n'est pas explicitement verifiee.
+    if model == "FMC003" and cap.get("navixy_input") == "hw_mileage":
+        import math
+        from datetime import timedelta
+        from app.navixy_client import read_raw_hw_mileage
+        from app.private_mode_provisioning import _parse_navixy_time
+        from app.odometer_capability import (
+            normalize_teltonika_total_odometer,
+            SCALE_VERIFIED,
+            AVL_TOTAL_ODOMETER,
+        )
+
+        if (cap.get("vehicle_id") != vehicle_id
+                or cap.get("private_distance_source") != SOURCE_TELTONIKA_TOTAL_ODOMETER
+                or cap.get("raw_avl_id") != AVL_TOTAL_ODOMETER
+                or cap.get("navixy_sensor_id") is not None):
+            return {**empty, "reason": "RAW_PROFILE_INVALID"}
+
+        if (cap.get("scale_status") != SCALE_VERIFIED
+                or cap.get("raw_unit") not in ("m", "km")
+                or cap.get("normalized_unit") != "km"):
+            return {**empty, "reason": "RAW_SCALE_UNVERIFIED"}
+
+        try:
+            multiplier = float(cap.get("multiplier") if cap.get("multiplier") is not None else 1)
+            divider = float(cap.get("divider") if cap.get("divider") is not None else 1)
+            if (not math.isfinite(multiplier) or multiplier <= 0
+                    or not math.isfinite(divider) or divider <= 0
+                    or (cap.get("multiplier") is None and cap.get("divider") is None)):
+                return {**empty, "reason": "RAW_SCALE_INVALID"}
+        except (TypeError, ValueError, OverflowError):
+            return {**empty, "reason": "RAW_SCALE_INVALID"}
+
+        now = datetime.now(timezone.utc)
+        frm = (now - timedelta(seconds=AVL16_FRESH_MAX_S)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            observation = await read_raw_hw_mileage(int(tracker_id), frm=frm, to=to)
+        except Exception:
+            logger.warning("FMC003 Raw IoT reading unavailable for tracker %s", tracker_id)
+            return {**empty, "reason": "RAW_UNAVAILABLE"}
+
+        if not observation:
+            return {**empty, "reason": "RAW_UNAVAILABLE"}
+        ts = observation.get("time")
+        observed_at = _parse_navixy_time(ts)
+        if observed_at is None:
+            return {**empty, "reason": "RAW_TIMESTAMP_INVALID"}
+        age = (now - observed_at.astimezone(timezone.utc)).total_seconds()
+        if age < -300 or age > AVL16_FRESH_MAX_S:
+            return {**empty, "reason": "RAW_STALE"}
+
+        normalized = normalize_teltonika_total_odometer(
+            observation.get("value"), cap
+        )
+        value = normalized.get("normalized_value")
+        try:
+            value = float(value)
+            raw = float(observation.get("value"))
+            if (not math.isfinite(value) or value < 0
+                    or not math.isfinite(raw) or raw < 0
+                    or normalized.get("scale_status") != SCALE_VERIFIED):
+                raise ValueError("invalid odometer")
+        except (TypeError, ValueError, OverflowError):
+            return {**empty, "reason": "RAW_VALUE_INVALID"}
+
+        return {
+            "value_km": value, "raw_value": raw,
+            "timestamp": ts,
+            "source": SOURCE_TELTONIKA_TOTAL_ODOMETER,
+            "sensor_id": None, "recent": True,
+        }
+
     sensor_id = cap.get("navixy_sensor_id")
     if not sensor_id:
         # Pas de sensor AVL16 mappé pour ce tracker -> lecture indisponible (jamais l'odo générique).

@@ -42,6 +42,7 @@ R_TRANSITION_IN_PROGRESS = "PRIVATE_MODE_TRANSITION_IN_PROGRESS"
 R_DRIVER_ACCOUNT_NOT_LINKED = "PRIVATE_MODE_DRIVER_ACCOUNT_NOT_LINKED"
 R_ACCOUNT_NOT_ENABLED = "PRIVATE_MODE_ACCOUNT_NOT_ENABLED"
 R_PROFILE_NOT_READY = "PRIVATE_MODE_PROFILE_NOT_READY"
+R_VEHICLE_MODE_NOT_MIXED = "PRIVATE_MODE_VEHICLE_MODE_NOT_MIXED"  # P3E-7: vehicle.mode != "mixte"
 
 # Codes HTTP recommandés par raison (pour les endpoints).
 HTTP_BY_REASON = {
@@ -58,6 +59,7 @@ HTTP_BY_REASON = {
     R_DRIVER_ACCOUNT_NOT_LINKED: 403,
     R_ACCOUNT_NOT_ENABLED: 403,
     R_PROFILE_NOT_READY: 409,
+    R_VEHICLE_MODE_NOT_MIXED: 409,
 }
 
 
@@ -253,8 +255,8 @@ async def can_use_private_mode(
 
     from app.odometer_capability import (
         resolve_model,
-        vehicle_private_mode_allowed,
         model_private_mode_supported,
+        model_command_supported,
         vehicle_private_profile_ready,
     )
     model = resolve_model(vehicle_doc.get("model"))
@@ -278,12 +280,30 @@ async def can_use_private_mode(
         ):
             return deny(R_PROFILE_NOT_READY, "hardware_profile")
     else:
-        # Ancienne gate pilote conservée telle quelle pendant le rollout.
-        if not vehicle_is_pilot(vehicle_doc):
-            return deny(R_VEHICLE_NOT_PILOT, "vehicle_pilot")
+        # P3E-7 : CAPACITÉ D'ACTION découplée de la validation terrain.
+        # Le droit d'envoyer `privatemode ON/OFF` repose sur la CERTIFICATION DE
+        # COMMANDE DU MODÈLE (command_supported) + droit compte chauffeur + mode
+        # véhicule "mixte". Il N'exige PLUS field_validated / profile_ready / pilot.
+        # (La validation télémétrique/km privés reste fail-closed ailleurs.)
+        #
+        # Protections conservées (vues plus haut) : feature, kill switch,
+        # tenant_allowed, véhicule présent, tracker présent, intégration Navixy.
 
-        if not vehicle_private_mode_allowed(model, capability):
-            return deny(R_NOT_SUPPORTED, "hardware")
+        # A. Droit métier porté par le compte chauffeur (actif + role driver +
+        #    private_mode_enabled=True).
+        account_ok, account_reason = await driver_account_private_mode_enabled(
+            db, tenant_id, driver_id
+        )
+        if not account_ok:
+            return deny(account_reason, "driver_account")
+
+        # B. Modèle CERTIFIÉ pour la commande Privé/Pro (FMC003 / FMC130).
+        if not model_command_supported(model):
+            return deny(R_NOT_SUPPORTED, "hardware_model")
+
+        # C. Véhicule en mode "mixte" (obligatoire, strict).
+        if str(vehicle_doc.get("mode") or "") != "mixte":
+            return deny(R_VEHICLE_MODE_NOT_MIXED, "vehicle_mode")
 
     # 6. Intégration Navixy du tenant obligatoire dans tous les cas.
     from app.integrations import get_integration_credential
@@ -291,9 +311,10 @@ async def can_use_private_mode(
     if not cred or not cred.get("credential"):
         return deny(R_INTEGRATION_UNAVAILABLE, "integration")
 
+    level = "account_model" if generalized else "ok"
     return {
         "allowed": True,
         "reason": REASON_OK,
         "http": 200,
-        "level": "account_model" if generalized else "ok",
+        "level": level,
     }
